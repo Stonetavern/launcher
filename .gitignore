@@ -1,0 +1,44 @@
+# .NET Build Artifacts
+bin/
+obj/
+*.user
+*.suo
+*.cache
+*.dgml
+
+# Publish Output (wird in CI gebaut)
+publish/
+signed/
+
+# IDE
+.vs/
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs (werden zur Laufzeit erstellt)
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Secrets (niemals committen!)
+secrets/
+*.pem
+*.pfx
+
+# WoW-Client-Dateien (Blizzard-Copyright — NIEMALS committen, Clean-Room/Legal/SignPath)
+clients/
+WoW-Client-*/
+*.MPQ
+*.mpq
+
+# Cleanup-Quarantäne + lokaler Art-Workspace
+.trash/
+incoming-art/
+
+# macOS dry-run bundle + OSS staging (regenerierbar, nicht tracken)
+platform/macos/dryrun/
+dist-oss/

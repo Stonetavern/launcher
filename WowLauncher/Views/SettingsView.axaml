@@ -1,0 +1,148 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:loc="using:WowLauncher.Localization"
+             xmlns:m="using:WowLauncher.Models"
+             xmlns:vm="using:WowLauncher.ViewModels"
+             x:Class="WowLauncher.Views.SettingsView"
+             x:DataType="vm:SettingsViewModel">
+    <Border Background="{StaticResource StoneBase}">
+        <ScrollViewer>
+            <StackPanel Margin="40,32" Spacing="20" MaxWidth="520" HorizontalAlignment="Left">
+                <TextBlock Text="{Binding Title}" FontSize="24" FontFamily="{StaticResource FontDisplay}"
+                           Foreground="{StaticResource ParchmentPrimary}"/>
+
+                <!-- Settings are shown as applied even when the config file cannot be written. This says so. -->
+                <Border IsVisible="{Binding HasSaveWarning}" Background="{StaticResource StoneSurface}"
+                        BorderBrush="{StaticResource ParchmentSecondary}" BorderThickness="1" Padding="12,10">
+                    <TextBlock Text="{Binding SaveWarning}" FontSize="12" TextWrapping="Wrap"
+                               Foreground="{StaticResource ParchmentPrimary}"/>
+                </Border>
+
+                <!-- Realm-Auswahl. Stonetavern-Presets stehen in derselben Liste wie eigene Realms —
+                     Presets sind Daten, keine Verdrahtung. Löschen geht nur bei eigenen. -->
+                <StackPanel Spacing="6">
+                    <TextBlock Text="{loc:Tr Settings_Realm}" FontSize="13"
+                               Foreground="{StaticResource ParchmentSecondary}"/>
+                    <ComboBox ItemsSource="{Binding Realms}" SelectedItem="{Binding SelectedRealm, Mode=TwoWay}"
+                              HorizontalAlignment="Stretch" AutomationProperties.Name="{loc:Tr Settings_Realm_A11y}">
+                        <ComboBox.ItemTemplate>
+                            <DataTemplate x:DataType="m:RealmEntry">
+                                <TextBlock Text="{Binding Name}"/>
+                            </DataTemplate>
+                        </ComboBox.ItemTemplate>
+                    </ComboBox>
+                    <TextBlock Text="{Binding SelectedRealmAddress}" FontSize="12"
+                               FontFamily="{StaticResource FontMono}"
+                               Foreground="{StaticResource ParchmentSecondary}"/>
+                    <Button Content="{loc:Tr Settings_RemoveRealm}" Command="{Binding RemoveSelectedRealmCommand}"
+                            IsEnabled="{Binding CanRemoveSelected}" HorizontalAlignment="Left"/>
+                </StackPanel>
+
+                <!-- Client-Zuordnung: welcher heruntergeladene Client gehört zu diesem Realm.
+                     Immer mit exakter Version + Build beschriftet — „Vanilla" allein ist seit 1.14.2
+                     zweideutig und würde Spieler in einen stummen Verbindungsversuch laufen lassen. -->
+                <StackPanel Spacing="6">
+                    <TextBlock Text="{loc:Tr Settings_Client}" FontSize="13"
+                               Foreground="{StaticResource ParchmentSecondary}"/>
+                    <ComboBox ItemsSource="{Binding ClientVersions}"
+                              SelectedItem="{Binding SelectedRealmClient, Mode=TwoWay}"
+                              HorizontalAlignment="Stretch"
+                              AutomationProperties.Name="{loc:Tr Settings_Client_A11y}">
+                        <ComboBox.ItemTemplate>
+                            <DataTemplate x:DataType="m:ClientVersion">
+                                <StackPanel Spacing="1" Margin="0,2">
+                                    <TextBlock Text="{Binding Era}" FontSize="13"/>
+                                    <TextBlock Text="{Binding PreciseLabel}" FontSize="11"
+                                               FontFamily="{StaticResource FontMono}"
+                                               Foreground="{StaticResource ParchmentSecondary}"/>
+                                </StackPanel>
+                            </DataTemplate>
+                        </ComboBox.ItemTemplate>
+                    </ComboBox>
+                    <TextBlock Text="{loc:Tr Settings_Client_Hint}" FontSize="12" TextWrapping="Wrap"
+                               Foreground="{StaticResource ParchmentFaint}"/>
+                </StackPanel>
+
+                <!-- Eigenen Realm anlegen (vom Nutzer eingegeben; keine Fremdserver-Liste ausgeliefert) -->
+                <Border Background="{StaticResource StoneBase}" BorderBrush="{StaticResource ParchmentSecondary}"
+                        BorderThickness="0,1,0,0" Padding="0,16,0,0">
+                    <StackPanel Spacing="8">
+                        <TextBlock Text="{loc:Tr Settings_AddRealm}" FontSize="13"
+                                   Foreground="{StaticResource ParchmentSecondary}"/>
+                        <TextBox Text="{Binding NewRealmName}" PlaceholderText="{loc:Tr Settings_Name_Placeholder}"
+                                 AutomationProperties.Name="{loc:Tr Settings_Name_A11y}"/>
+                        <TextBox Text="{Binding NewRealmAddress}" FontFamily="{StaticResource FontMono}"
+                                 PlaceholderText="{loc:Tr Settings_Realmlist_Placeholder}"
+                                 AutomationProperties.Name="{loc:Tr Settings_Realmlist_A11y}"/>
+                        <ComboBox ItemsSource="{Binding AddableClientVersions}"
+                                  SelectedItem="{Binding NewRealmClient, Mode=TwoWay}"
+                                  HorizontalAlignment="Stretch"
+                                  AutomationProperties.Name="{loc:Tr Settings_Client_A11y}">
+                            <ComboBox.ItemTemplate>
+                                <DataTemplate x:DataType="m:ClientVersion">
+                                    <TextBlock Text="{Binding DisplayName}"/>
+                                </DataTemplate>
+                            </ComboBox.ItemTemplate>
+                        </ComboBox>
+                        <TextBox Text="{Binding NewRealmManifestUrl}" FontFamily="{StaticResource FontMono}"
+                                 PlaceholderText="{loc:Tr Settings_Manifest_Placeholder}"
+                                 AutomationProperties.Name="{loc:Tr Settings_Manifest_A11y}"/>
+                        <Button Content="{loc:Tr Settings_Add}" Command="{Binding AddRealmCommand}"
+                                HorizontalAlignment="Left"/>
+                        <!-- Rejection line: an address that cannot be written into realmlist.wtf -->
+                        <TextBlock Text="{Binding AddRealmError}" IsVisible="{Binding HasAddRealmError}"
+                                   FontSize="12" TextWrapping="Wrap"
+                                   Foreground="{StaticResource ParchmentSecondary}"/>
+                    </StackPanel>
+                </Border>
+
+                <StackPanel Spacing="6">
+                    <TextBlock Text="{loc:Tr Settings_WowPath}" FontSize="13"
+                               Foreground="{StaticResource ParchmentSecondary}"/>
+                    <TextBox Text="{Binding WowExecutablePath}" FontFamily="{StaticResource FontMono}"
+                             AutomationProperties.Name="{loc:Tr Settings_WowPath_A11y}"/>
+                </StackPanel>
+
+                <StackPanel Spacing="6">
+                    <TextBlock Text="{loc:Tr Settings_InstallFolder}" FontSize="13"
+                               Foreground="{StaticResource ParchmentSecondary}"/>
+                    <DockPanel>
+                        <Button DockPanel.Dock="Right" Content="{loc:Tr Settings_InstallFolder_Browse}"
+                                Command="{Binding BrowseInstallFolderCommand}" Margin="8,0,0,0"
+                                AutomationProperties.Name="{loc:Tr Settings_InstallFolder_Browse_A11y}"/>
+                        <TextBox Text="{Binding PreferredInstallRoot}" FontFamily="{StaticResource FontMono}"
+                                 PlaceholderText="{loc:Tr Settings_InstallFolder_Placeholder}"
+                                 AutomationProperties.Name="{loc:Tr Settings_InstallFolder_A11y}"/>
+                    </DockPanel>
+                    <TextBlock Text="{loc:Tr Settings_InstallFolder_Hint}" FontSize="12" TextWrapping="Wrap"
+                               Foreground="{StaticResource ParchmentSecondary}"/>
+                </StackPanel>
+
+                <StackPanel Spacing="6">
+                    <CheckBox Content="{loc:Tr Settings_ProfileSync}"
+                              IsChecked="{Binding ProfileSyncEnabled}"/>
+                    <TextBlock Text="{loc:Tr Settings_ProfileSync_Hint}" FontSize="12" TextWrapping="Wrap"
+                               Margin="26,0,0,0"
+                               Foreground="{StaticResource ParchmentSecondary}"/>
+                </StackPanel>
+
+                <!-- Opt-in desktop integration (Linux only; hidden elsewhere). Installs the .desktop +
+                     lantern icon so the menu entry and the running window carry our mark. Never runs
+                     on its own — only on this button. -->
+                <StackPanel Spacing="6" IsVisible="{Binding ShowDesktopIntegration}">
+                    <TextBlock Text="{loc:Tr Settings_DesktopIntegration}" FontSize="13"
+                               Foreground="{StaticResource ParchmentSecondary}"/>
+                    <Button Content="{Binding AddToMenuLabel}" Command="{Binding AddToMenuCommand}"
+                            HorizontalAlignment="Left"
+                            AutomationProperties.Name="{loc:Tr Settings_AddToMenu_A11y}"/>
+                    <TextBlock Text="{loc:Tr Settings_DesktopIntegration_Hint}" FontSize="12" TextWrapping="Wrap"
+                               Foreground="{StaticResource ParchmentFaint}"/>
+                    <!-- Shown only when an install attempt failed; quiet, no modal. -->
+                    <TextBlock Text="{Binding DesktopIntegrationError}" IsVisible="{Binding HasDesktopIntegrationError}"
+                               FontSize="12" TextWrapping="Wrap"
+                               Foreground="{StaticResource ParchmentSecondary}"/>
+                </StackPanel>
+            </StackPanel>
+        </ScrollViewer>
+    </Border>
+</UserControl>

@@ -1,0 +1,368 @@
+<!--
+  Stonetavern Launcher — v2 skin, "Obsidian Instrument".
+
+  No left rail: tabs live in the titlebar, the stage runs full width, and the right third is a
+  telemetry column of real readings. The pulse rail draws the player count as light. The action
+  slab IS the progress bar. See design/stitch-DESIGN-v2.md.
+
+  v1 (MainWindow.axaml) is untouched — start this one with `WowLauncher.exe “ui v2”`.
+-->
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:loc="using:WowLauncher.Localization"
+        xmlns:vm="using:WowLauncher.ViewModels"
+        xmlns:m="using:WowLauncher.Models"
+        xmlns:c="using:WowLauncher.Controls"
+        x:Class="WowLauncher.Views.ShellV2Window"
+        x:DataType="vm:ShellViewModel"
+        Icon="avares://WowLauncher/Assets/stonetavern-logo.png"
+        Title="{loc:Tr App_WindowTitle}"
+        Width="1000" Height="640"
+        CanResize="False"
+        WindowStartupLocation="CenterScreen"
+        WindowDecorations="BorderOnly"
+        FontFamily="{StaticResource OFontUi}"
+        Background="{StaticResource OBasalt}">
+
+  <Border BorderBrush="{StaticResource OHair}" BorderThickness="1" ClipToBounds="True">
+    <Grid RowDefinitions="40,*,30,88">
+
+      <!-- ═══════════ TITLEBAR: lantern + wordmark + tabs ═══════════ -->
+      <Border Grid.Row="0" Background="{StaticResource OBasalt}"
+              BorderBrush="{StaticResource OHair}" BorderThickness="0,0,0,1"
+              PointerPressed="OnTitleBarPressed">
+        <Grid ColumnDefinitions="Auto,Auto,*,Auto">
+
+          <!-- The locked brand mark (BRAND_BIBLE §8): the hanging lantern.
+               Its flame is the only colour in the mark — and the only thing that moves. -->
+          <Border Grid.Column="0" BorderBrush="{StaticResource OHair}" BorderThickness="0,0,1,0"
+                  Padding="18,0">
+            <StackPanel Orientation="Horizontal" Spacing="9" VerticalAlignment="Center">
+              <Canvas Width="17" Height="21">
+                <Canvas.RenderTransform>
+                  <ScaleTransform ScaleX="0.0708" ScaleY="0.0719"/>
+                </Canvas.RenderTransform>
+                <Path Fill="{StaticResource OWarm}"
+                      Data="F0 M96 100 V72 L120 62 L144 72 V100 L170 116 L156 122 L148 232 L162 256 L162 266 L78 266 L78 256 L92 232 L84 122 L70 116 Z
+                            M108 96 V80 L120 72 L132 80 V96 Z
+                            M101 146 L139 146 L136 212 L104 212 Z"/>
+                <Path Classes="oflame" RenderTransformOrigin="50%,80%"
+                      Data="M120 162 C130 175 129 192 120 200 C111 192 113 179 117 171
+                            C114 174 112 183 114 190 C106 179 110 167 120 162 Z"/>
+              </Canvas>
+              <TextBlock Text="Stonetavern" FontFamily="{StaticResource OFontMark}"
+                         FontSize="15" LetterSpacing="3.3"
+                         Foreground="{StaticResource OWarm}" VerticalAlignment="Center"/>
+            </StackPanel>
+          </Border>
+
+          <!-- Navigation: three text tabs. No icons, no boxes. -->
+          <StackPanel Grid.Column="1" Orientation="Horizontal">
+            <Button Classes="otab" Classes.active="{Binding IsPlay}"
+                    Command="{Binding GoPlayCommand}" Content="{loc:Tr Nav_Play}"
+                    AutomationProperties.Name="{loc:Tr Nav_PlayA11y}"/>
+            <Button Classes="otab" Classes.active="{Binding IsPatchNotes}"
+                    Command="{Binding GoPatchNotesCommand}" Content="{loc:Tr Nav_Notes}"
+                    AutomationProperties.Name="{loc:Tr Nav_NotesA11y}"/>
+            <Button Classes="otab" Classes.active="{Binding IsSettings}"
+                    Command="{Binding GoSettingsCommand}" Content="{loc:Tr Nav_Options}"
+                    AutomationProperties.Name="{loc:Tr Nav_OptionsA11y}"/>
+          </StackPanel>
+
+          <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Stretch">
+            <TextBlock Text="{Binding VersionText}" Classes="okey" VerticalAlignment="Center"
+                       Margin="0,0,10,0"/>
+            <Button Classes="ochrome" Content="—" Click="OnMinimizeClick"
+                    AutomationProperties.Name="{loc:Tr Titlebar_Minimize}"/>
+            <Button Classes="ochrome oclose" Content="✕" Click="OnCloseClick"
+                    AutomationProperties.Name="{loc:Tr Titlebar_Close}"/>
+          </StackPanel>
+        </Grid>
+      </Border>
+
+      <!-- ═══════════ BODY ═══════════ -->
+      <Grid Grid.Row="1" ColumnDefinitions="*,320">
+
+        <!-- ─────── PLAY: hearth stage + telemetry ─────── -->
+        <Panel Grid.Column="0" IsVisible="{Binding IsPlay}" ClipToBounds="True">
+          <c:EmberField Lit="{Binding Play.RealmOnline}"/>
+
+          <StackPanel VerticalAlignment="Bottom" HorizontalAlignment="Left" Margin="28,0,28,26">
+            <StackPanel Orientation="Horizontal" Spacing="9" Margin="0,0,0,14">
+              <!-- FIX B2 (v1.0.1): der v2-Statuspunkt pulst jetzt wie in v1 — beim v2-Reskin
+                   war er ein statischer Border. Ellipse.pulse ist global (Styles.axaml, in
+                   App.axaml inkludiert), die Animation ist farbneutral → Fill trägt den
+                   v2-Statuston (OCyan = „online", ORed = „offline"), gleiche ruhige Charakteristik. -->
+              <Grid Width="20" Height="20" VerticalAlignment="Center">
+                <Ellipse Width="20" Height="20" Classes="pulseGlow"
+                         Fill="{StaticResource OCyan}" IsVisible="{Binding Play.RealmOnline}"/>
+                <Ellipse Width="8" Height="8" Classes="pulse"
+                         Fill="{StaticResource OCyan}" IsVisible="{Binding Play.RealmOnline}"/>
+                <!-- offline: still, no breath — a dead realm does not pulse (honest, matches v1) -->
+                <Ellipse Width="8" Height="8"
+                         Fill="{StaticResource ORed}" IsVisible="{Binding Play.RealmOffline}"/>
+              </Grid>
+              <TextBlock Text="{Binding Telemetry.RealmStatusUpper}" FontFamily="{StaticResource OFontMono}"
+                         FontSize="10" LetterSpacing="1.8" VerticalAlignment="Center"
+                         Foreground="{StaticResource OCyan}" IsVisible="{Binding Play.RealmOnline}"/>
+              <TextBlock Text="{Binding Telemetry.RealmStatusUpper}" FontFamily="{StaticResource OFontMono}"
+                         FontSize="10" LetterSpacing="1.8" VerticalAlignment="Center"
+                         Foreground="{StaticResource ORed}" IsVisible="{Binding Play.RealmOffline}"/>
+              <TextBlock Text="{Binding Telemetry.RealmStatusUpper}" FontFamily="{StaticResource OFontMono}"
+                         FontSize="10" LetterSpacing="1.8" VerticalAlignment="Center"
+                         Foreground="{StaticResource OMute}" IsVisible="{Binding Play.RealmChecking}"/>
+            </StackPanel>
+
+            <TextBlock Text="{Binding Telemetry.RealmName}" FontFamily="{StaticResource OFontDisplay}"
+                       FontSize="66" FontWeight="ExtraBold" LetterSpacing="-2.6" LineHeight="60"
+                       Foreground="{StaticResource OWarm}"/>
+
+            <TextBlock Text="{Binding Telemetry.MetaLine}" FontFamily="{StaticResource OFontMono}"
+                       FontSize="11" Margin="0,16,0,0" Foreground="{StaticResource OMute}"/>
+          </StackPanel>
+        </Panel>
+
+        <!-- ─────── NOTES ─────── -->
+        <ScrollViewer Grid.Column="0" Grid.ColumnSpan="2" IsVisible="{Binding IsPatchNotes}"
+                      Background="{StaticResource OBasalt}" Padding="34,30">
+          <StackPanel>
+            <TextBlock Text="{loc:Tr V2_Notes_Title}" FontFamily="{StaticResource OFontDisplay}" FontSize="34"
+                       FontWeight="ExtraBold" LetterSpacing="-1.2" Foreground="{StaticResource OWarm}"/>
+            <TextBlock Text="{loc:Tr V2_Notes_Sub}" Classes="olabel" Margin="0,6,0,22"/>
+
+            <ItemsControl ItemsSource="{Binding PatchNotes.Patches}">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="m:NewsItem">
+                  <Border BorderBrush="{StaticResource OHair}" BorderThickness="0,1,0,0" Padding="0,13">
+                    <Grid ColumnDefinitions="110,*">
+                      <StackPanel Grid.Column="0" Spacing="3">
+                        <TextBlock Text="{Binding DateShort}" Classes="okey"/>
+                        <TextBlock Text="{Binding CategoryTag}" FontFamily="{StaticResource OFontMono}"
+                                   FontSize="9" LetterSpacing="1.8"
+                                   Foreground="{StaticResource OEmber}"/>
+                      </StackPanel>
+                      <StackPanel Grid.Column="1" Spacing="4">
+                        <TextBlock Text="{Binding Title}" FontSize="14" FontWeight="SemiBold"
+                                   Foreground="{StaticResource OWarm}" TextWrapping="Wrap"/>
+                        <TextBlock Text="{Binding Summary}" FontSize="12" LineHeight="18"
+                                   Foreground="{StaticResource OMute}" TextWrapping="Wrap"/>
+                      </StackPanel>
+                    </Grid>
+                  </Border>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </StackPanel>
+        </ScrollViewer>
+
+        <!-- ─────── SETTINGS ─────── -->
+        <ScrollViewer Grid.Column="0" Grid.ColumnSpan="2" IsVisible="{Binding IsSettings}"
+                      Background="{StaticResource OBasalt}" Padding="34,30">
+          <StackPanel>
+            <TextBlock Text="{loc:Tr V2_Options_Title}" FontFamily="{StaticResource OFontDisplay}" FontSize="34"
+                       FontWeight="ExtraBold" LetterSpacing="-1.2" Foreground="{StaticResource OWarm}"/>
+            <TextBlock Text="{loc:Tr V2_Options_Hint}" Classes="olabel" Margin="0,6,0,24"/>
+
+            <Grid ColumnDefinitions="*,34,*">
+              <StackPanel Grid.Column="0" Spacing="20">
+                <StackPanel Spacing="8">
+                  <TextBlock Text="{loc:Tr V2_Realmlist}" Classes="olabel"/>
+                  <Border Classes="ofield">
+                    <TextBlock Text="{Binding Play.RealmAddress}" FontFamily="{StaticResource OFontMono}"
+                               FontSize="12" Foreground="{StaticResource OWarm}"/>
+                  </Border>
+                </StackPanel>
+
+              </StackPanel>
+
+              <StackPanel Grid.Column="2" Spacing="20">
+                <StackPanel Spacing="8">
+                  <TextBlock Text="{loc:Tr V2_ClientDir}" Classes="olabel"/>
+                  <Border Classes="ofield">
+                    <TextBlock Text="{Binding Settings.WowExecutablePath}" FontFamily="{StaticResource OFontMono}"
+                               FontSize="12" Foreground="{StaticResource OWarm}"
+                               TextTrimming="CharacterEllipsis"/>
+                  </Border>
+                </StackPanel>
+
+                <StackPanel Spacing="9">
+                  <TextBlock Text="{loc:Tr V2_ClientIntegrity}" Classes="olabel"/>
+                  <Grid ColumnDefinitions="*,Auto">
+                    <TextBlock Text="{loc:Tr V2_Build}" Classes="okey"/>
+                    <TextBlock Grid.Column="1" Text="5875" Classes="oval"/>
+                  </Grid>
+                  <Grid ColumnDefinitions="*,Auto">
+                    <TextBlock Text="{loc:Tr V2_Sha}" Classes="okey"/>
+                    <TextBlock Grid.Column="1" Text="{Binding Telemetry.ClientHash}" Classes="oval"/>
+                  </Grid>
+                  <Grid ColumnDefinitions="*,Auto">
+                    <TextBlock Text="{loc:Tr V2_ServerTime}" Classes="okey"/>
+                    <TextBlock Grid.Column="1" Text="{Binding Telemetry.ServerTime}" Classes="oval live"/>
+                  </Grid>
+                </StackPanel>
+              </StackPanel>
+            </Grid>
+          </StackPanel>
+        </ScrollViewer>
+
+        <!-- ─────── TELEMETRY COLUMN (play only) ─────── -->
+        <Border Grid.Column="1" IsVisible="{Binding IsPlay}"
+                Background="{StaticResource OIron}"
+                BorderBrush="{StaticResource OHair}" BorderThickness="1,0,0,0">
+          <StackPanel>
+
+            <!-- Realm -->
+            <Border BorderBrush="{StaticResource OHair}" BorderThickness="0,0,0,1" Padding="18,13">
+              <StackPanel Spacing="1">
+                <TextBlock Text="{loc:Tr V2_Realm}" Classes="olabel" Margin="0,0,0,9"/>
+                <Grid ColumnDefinitions="*,Auto">
+                  <TextBlock Text="{loc:Tr V2_Status}" Classes="okey"/>
+                  <TextBlock Grid.Column="1" Text="{Binding Telemetry.RealmStatusUpper}" Classes="oval live"
+                             IsVisible="{Binding Play.RealmOnline}"/>
+                  <TextBlock Grid.Column="1" Text="{Binding Telemetry.RealmStatusUpper}" Classes="oval bad"
+                             IsVisible="{Binding Play.RealmOffline}"/>
+                  <TextBlock Grid.Column="1" Text="{Binding Telemetry.RealmStatusUpper}" Classes="oval"
+                             IsVisible="{Binding Play.RealmChecking}"/>
+                </Grid>
+                <Grid ColumnDefinitions="*,Auto">
+                  <TextBlock Text="{loc:Tr V2_Latency}" Classes="okey"/>
+                  <TextBlock Grid.Column="1" Text="{Binding Telemetry.Latency}" Classes="oval live"/>
+                </Grid>
+                <Grid ColumnDefinitions="*,Auto">
+                  <TextBlock Text="{loc:Tr V2_Uptime}" Classes="okey"/>
+                  <TextBlock Grid.Column="1" Text="{Binding Telemetry.Uptime}" Classes="oval"/>
+                </Grid>
+                <Grid ColumnDefinitions="*,Auto">
+                  <TextBlock Text="{loc:Tr V2_ServerTime}" Classes="okey"/>
+                  <TextBlock Grid.Column="1" Text="{Binding Telemetry.ServerTime}" Classes="oval"/>
+                </Grid>
+                <Grid ColumnDefinitions="*,Auto">
+                  <TextBlock Text="{loc:Tr V2_NextReset}" Classes="okey"/>
+                  <TextBlock Grid.Column="1" Text="{Binding Telemetry.NextReset}" Classes="oval"/>
+                </Grid>
+              </StackPanel>
+            </Border>
+
+            <!-- Phase progress -->
+            <Border BorderBrush="{StaticResource OHair}" BorderThickness="0,0,0,1" Padding="18,13"
+                    IsVisible="{Binding Telemetry.HasPhase}">
+              <StackPanel>
+                <TextBlock Text="PHASE I → MOLTEN CORE" Classes="olabel" Margin="0,0,0,9"/>
+                <ProgressBar Value="{Binding Telemetry.PhaseDone}" Maximum="{Binding Telemetry.PhaseGoal}"
+                             Height="6" CornerRadius="0"
+                             Background="{StaticResource OSteel}" Foreground="{StaticResource OCyan}"/>
+                <Grid ColumnDefinitions="*,Auto" Margin="0,8,0,0">
+                  <TextBlock Text="{loc:Tr V2_AccountsAt60}" Classes="olabel"/>
+                  <TextBlock Grid.Column="1" Text="{Binding Telemetry.PhaseText}"
+                             FontFamily="{StaticResource OFontMono}" FontSize="10"
+                             Foreground="{StaticResource OCyan}"/>
+                </Grid>
+              </StackPanel>
+            </Border>
+
+            <!-- Faction balance -->
+            <Border BorderBrush="{StaticResource OHair}" BorderThickness="0,0,0,1" Padding="18,13"
+                    IsVisible="{Binding Telemetry.HasFactions}">
+              <StackPanel>
+                <TextBlock Text="{loc:Tr V2_Factions}" Classes="olabel" Margin="0,0,0,9"/>
+                <Grid ColumnDefinitions="54*,46*" Height="6">
+                  <Border Background="{StaticResource OCyan}" Margin="0,0,1,0"/>
+                  <Border Grid.Column="1" Background="{StaticResource OCyanDim}" Margin="1,0,0,0"/>
+                </Grid>
+                <Grid ColumnDefinitions="*,Auto" Margin="0,8,0,0">
+                  <TextBlock Text="{Binding Telemetry.AllianceText}" Classes="olabel"/>
+                  <TextBlock Grid.Column="1" Text="{Binding Telemetry.HordeText}" Classes="olabel"/>
+                </Grid>
+              </StackPanel>
+            </Border>
+
+            <!-- Last character -->
+            <Border BorderBrush="{StaticResource OHair}" BorderThickness="0,0,0,1" Padding="18,13"
+                    IsVisible="{Binding Telemetry.HasCharacter}">
+              <StackPanel>
+                <TextBlock Text="{loc:Tr V2_LastPlayed}" Classes="olabel" Margin="0,0,0,9"/>
+                <Grid ColumnDefinitions="*,Auto">
+                  <TextBlock Text="{Binding Telemetry.CharacterName}"
+                             FontFamily="{StaticResource OFontDisplay}" FontSize="19" FontWeight="SemiBold"
+                             Foreground="{StaticResource OWarm}"/>
+                  <TextBlock Grid.Column="1" Text="{Binding Telemetry.CharacterClass}"
+                             Classes="oval live" VerticalAlignment="Bottom"/>
+                </Grid>
+                <TextBlock Text="{Binding Telemetry.CharacterZone}" Classes="olabel" Margin="0,7,0,0"/>
+              </StackPanel>
+            </Border>
+          </StackPanel>
+        </Border>
+      </Grid>
+
+      <!-- ═══════════ THE PULSE ═══════════
+           FIX 3 (v1.0.1): Die PulseRail zeichnete die Live-Spielerzahl als Licht (ein Tick je
+           Online-Spieler — die Momentanzahl war so ablesbar). Owner-Direktive: die Live-Zahl muss
+           weg (kleine Zahl schreckt ab, konsistent mit der Website /play). Ersetzt durch einen
+           ehrlichen, animierten Status-Streifen: pulsender Punkt (Ellipse.pulse, farbneutrale
+           Animation → Fill trägt den Status) + „REALM ONLINE"/Status-Label, kein Zähler. -->
+      <Border Grid.Row="2" Background="{StaticResource OBasalt}"
+              BorderBrush="{StaticResource OHair}" BorderThickness="0,1,0,0">
+        <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center" Margin="18,0">
+          <Ellipse Width="7" Height="7" VerticalAlignment="Center" Classes="pulse"
+                   Fill="{StaticResource OCyan}" IsVisible="{Binding Play.RealmOnline}"/>
+          <Ellipse Width="7" Height="7" VerticalAlignment="Center"
+                   Fill="{StaticResource ORed}" IsVisible="{Binding Play.RealmOffline}"/>
+          <Ellipse Width="7" Height="7" VerticalAlignment="Center" Classes="pulse"
+                   Fill="{StaticResource OHair}" IsVisible="{Binding Play.RealmChecking}"/>
+          <TextBlock Text="{Binding Telemetry.PulseText}" Classes="okey" FontSize="10"
+                     LetterSpacing="1.2" VerticalAlignment="Center"/>
+        </StackPanel>
+      </Border>
+
+      <!-- ═══════════ ACTION BAR — the slab IS the progress bar ═══════════ -->
+      <Border Grid.Row="3" Background="{StaticResource OIron}"
+              BorderBrush="{StaticResource OHair}" BorderThickness="0,1,0,0">
+        <Grid ColumnDefinitions="*,Auto">
+
+          <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="20,0" Spacing="7">
+            <TextBlock Text="{Binding Play.ClientVersionText}" Classes="oval"
+                       HorizontalAlignment="Left" Foreground="{StaticResource OWarm}"/>
+            <TextBlock Text="{Binding Play.StatusLine}" FontFamily="{StaticResource OFontMono}"
+                       FontSize="10" LetterSpacing="1"
+                       Foreground="{StaticResource OMute}"/>
+          </StackPanel>
+
+          <!-- Ready / update / no client -->
+          <Button Grid.Column="1" Classes="oslab"
+                  IsVisible="{Binding !Play.ShowProgress}"
+                  IsEnabled="{Binding Play.ActionEnabled}"
+                  Command="{Binding Play.PlayCommand}"
+                  Content="{Binding Play.ActionPrimaryText}"
+                  AutomationProperties.Name="{Binding Play.ActionPrimaryText}"/>
+
+          <!-- Downloading: the ember fill drains inside the slab itself.
+               Two stacked labels, the top one clipped to the fill — legible at 2 % and at 98 %. -->
+          <Panel Grid.Column="1" Width="300" IsVisible="{Binding Play.ShowProgress}">
+            <Border Background="{StaticResource OSteel}"/>
+            <Border Background="{StaticResource OEmber}" HorizontalAlignment="Left"
+                    Width="{Binding Play.FillWidth}"/>
+
+            <StackPanel VerticalAlignment="Center" Margin="18,0" Spacing="5">
+              <TextBlock Text="{Binding Play.DownloadDetail}" FontFamily="{StaticResource OFontMono}"
+                         FontSize="11" Foreground="{StaticResource OWarm}"/>
+              <TextBlock Text="{Binding Play.DownloadPercentText}" FontFamily="{StaticResource OFontMono}"
+                         FontSize="10" Foreground="{StaticResource OMute}"/>
+            </StackPanel>
+
+            <Panel Width="{Binding Play.FillWidth}" HorizontalAlignment="Left" ClipToBounds="True">
+              <StackPanel Width="300" HorizontalAlignment="Left" VerticalAlignment="Center"
+                          Margin="18,0" Spacing="5">
+                <TextBlock Text="{Binding Play.DownloadDetail}" FontFamily="{StaticResource OFontMono}"
+                           FontSize="11" Foreground="{StaticResource OEmberInk}"/>
+                <TextBlock Text="{Binding Play.DownloadPercentText}" FontFamily="{StaticResource OFontMono}"
+                           FontSize="10" Foreground="{StaticResource OEmberInk}" Opacity="0.75"/>
+              </StackPanel>
+            </Panel>
+          </Panel>
+        </Grid>
+      </Border>
+
+    </Grid>
+  </Border>
+</Window>

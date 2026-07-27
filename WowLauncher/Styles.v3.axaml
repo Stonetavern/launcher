@@ -1,0 +1,683 @@
+<!--
+  Stonetavern Launcher — v3 skin ("Battle.net" layout, warm stone identity).
+
+  Scoping, stated exactly rather than generously: most selectors carry a v3-prefixed class, and the
+  ambient ones additionally require the "Border.live" ancestor that only this shell sets. The
+  exceptions, listed so nobody has to grep for them, are the classes named without a v3 prefix:
+  kenburns, xfade, hearth, presence(.online/.away/.busy/.ingame/.offline). They are unprefixed for
+  readability and are worn by no control in v1 or v2 today, but nothing enforces that. Give a v1/v2
+  control one of those class names and it will pick these styles up; treat the names as reserved.
+
+  Colours are StaticResource tokens from Styles.axaml (Stone / Parchment / Ember / Status) with two
+  literals that a brush token cannot express: the patch-card fill (#EB161210, a token colour at a
+  fixed alpha) and the hearth gradient stops in the markup. No new chroma, no glow: the same carved
+  candlelight language as v1/v2, just arranged like Battle.net.
+-->
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:m="using:WowLauncher.Models">
+
+    <!-- ═══════════════════════════════════════════════════════════════════════════
+         MOTION — "candlelight".
+
+         Endless (runs as long as you look at it) — ALL of these sit under "Border.live":
+           1. the stage breathes    (Border.live TransitioningContentControl.kenburns, 34s transition)
+           2. the hearth breathes   (Border.live Border.hearth, 4s)
+           3. PLAY breathes         (Border.live Button.action.breathe, 3.6s)
+           4. the lantern flickers  (Border.live Image.v3flicker, 4s)
+           5. the realm heartbeat   (Border.live Ellipse.v3pulse + .v3pulseGlow, 1.8s)
+
+         Finite (plays once, then the frame is still):
+           6. section cross-fade    (Panel/Grid.xfade, 0.18s + the two realm transitions in the markup:
+                                     the key-art CrossFade and the realm-name CrossFade+vertical rise)
+           7. friend row arrival    (Grid.v3enterrow, 0.22s)
+           8. progress glides       (ProgressBar.v3progress, 0.4s — deliberate, see there)
+           9. friends sidebar unfurl (Border.v3friendspanel, 0.25s — Width/Opacity/18px settle)
+
+         The gate: ShellV3Window.axaml.cs drops the "live" class from the shell Border whenever the
+         window is minimised or hidden, which unmatches 1-5 in one move. Items 4 and 5 exist here as
+         v3-owned copies of Image.flicker / Ellipse.pulse / Ellipse.pulseGlow in Styles.axaml: those
+         are ungated because v1 and v2 use them and neither has a gate, and Styles.axaml is shared
+         and must not be changed for v3. Copying the animation is the price of not touching v1/v2.
+         If you add another endless animation to this skin, it goes under "Border.live" or it is a
+         defect: a launcher that keeps a core warm behind the game is the one thing this must not do.
+
+         Durations are 0.12-0.24s for reactions and 1.8-34s for ambience; no bounce, no overshoot,
+         no spring, no particle, no parallax. Only Opacity and RenderTransform move — both have
+         registered animators; keyframe-animating RenderTransform is the crash documented in
+         Styles.axaml, so the Ken Burns is a TRANSITION driven by a two-tick-per-minute timer.
+         ═══════════════════════════════════════════════════════════════════════════ -->
+
+    <!-- 1. The stage breathes. A 34s ping-pong between rest and a 6% push-in with a slight drift:
+            roughly 0.2% of the frame per second, below the threshold where the eye reads "animation"
+            and above the one where it reads "photograph". Composited transform, no layout pass. -->
+    <Style Selector="TransitioningContentControl.kenburns">
+        <Setter Property="RenderTransform" Value="scale(1.0) translate(0px,0px)"/>
+    </Style>
+    <!-- The transition itself is gated, not just the timer that flips the class. Stopping the timer
+         only stops the NEXT leg: a 34s transform started a second before you minimise would keep
+         compositing for 34 more seconds behind a window nobody sees. Dropping the Transitions setter
+         with the "live" class tears the running transition down instead. -->
+    <Style Selector="Border.live TransitioningContentControl.kenburns">
+        <Setter Property="Transitions">
+            <Transitions>
+                <TransformOperationsTransition Property="RenderTransform"
+                                               Duration="0:0:34" Easing="SineEaseInOut"/>
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="TransitioningContentControl.kenburns.far">
+        <Setter Property="RenderTransform" Value="scale(1.06) translate(-9px,-5px)"/>
+    </Style>
+
+    <!-- 2. The hearth breathes, on the lantern's own cue shape (Image.flicker in Styles.axaml):
+            same 4s period, same irregular beats. One flame, two places it shows. -->
+    <Style Selector="Border.live Border.hearth">
+        <Style.Animations>
+            <Animation Duration="0:0:4.0" IterationCount="INFINITE" Easing="SineEaseInOut">
+                <KeyFrame Cue="0%"><Setter Property="Opacity" Value="1.0"/></KeyFrame>
+                <KeyFrame Cue="18%"><Setter Property="Opacity" Value="0.62"/></KeyFrame>
+                <KeyFrame Cue="33%"><Setter Property="Opacity" Value="0.94"/></KeyFrame>
+                <KeyFrame Cue="55%"><Setter Property="Opacity" Value="0.55"/></KeyFrame>
+                <KeyFrame Cue="72%"><Setter Property="Opacity" Value="0.86"/></KeyFrame>
+                <KeyFrame Cue="100%"><Setter Property="Opacity" Value="1.0"/></KeyFrame>
+            </Animation>
+        </Style.Animations>
+    </Style>
+
+    <!-- 4. The lantern flickers. Same cue shape and same 4s period as Image.flicker in Styles.axaml;
+            this is a v3-owned copy purely so the gate can reach it (Styles.axaml is shared with
+            v1/v2 and stays untouched). Worn by the titlebar mark and the sign-in card lantern. -->
+    <Style Selector="Border.live Image.v3flicker">
+        <Style.Animations>
+            <Animation Duration="0:0:4.0" IterationCount="INFINITE" Easing="SineEaseInOut">
+                <KeyFrame Cue="0%"><Setter Property="Opacity" Value="1.0"/></KeyFrame>
+                <KeyFrame Cue="18%"><Setter Property="Opacity" Value="0.82"/></KeyFrame>
+                <KeyFrame Cue="33%"><Setter Property="Opacity" Value="0.97"/></KeyFrame>
+                <KeyFrame Cue="55%"><Setter Property="Opacity" Value="0.78"/></KeyFrame>
+                <KeyFrame Cue="72%"><Setter Property="Opacity" Value="0.93"/></KeyFrame>
+                <KeyFrame Cue="100%"><Setter Property="Opacity" Value="1.0"/></KeyFrame>
+            </Animation>
+        </Style.Animations>
+    </Style>
+
+    <!-- 5. The realm heartbeat: the status dot and its aura, v3-owned copies of Ellipse.pulse /
+            Ellipse.pulseGlow for the same reason as above. The blur is a static setter (it costs
+            nothing while the frame does not change) and only the Opacity keyframes are gated, so a
+            hidden window paints no frames at all while the dot keeps its resting look on return. -->
+    <Style Selector="Ellipse.v3pulseGlow">
+        <Setter Property="Effect"><BlurEffect Radius="9"/></Setter>
+        <Setter Property="Opacity" Value="0.50"/>
+    </Style>
+    <Style Selector="Border.live Ellipse.v3pulse">
+        <Style.Animations>
+            <Animation Duration="0:0:1.8" IterationCount="INFINITE" Easing="SineEaseInOut">
+                <KeyFrame Cue="0%"><Setter Property="Opacity" Value="1.0"/></KeyFrame>
+                <KeyFrame Cue="50%"><Setter Property="Opacity" Value="0.18"/></KeyFrame>
+                <KeyFrame Cue="100%"><Setter Property="Opacity" Value="1.0"/></KeyFrame>
+            </Animation>
+        </Style.Animations>
+    </Style>
+    <Style Selector="Border.live Ellipse.v3pulseGlow">
+        <Style.Animations>
+            <Animation Duration="0:0:1.8" IterationCount="INFINITE" Easing="SineEaseInOut">
+                <KeyFrame Cue="0%"><Setter Property="Opacity" Value="0.50"/></KeyFrame>
+                <KeyFrame Cue="50%"><Setter Property="Opacity" Value="0.0"/></KeyFrame>
+                <KeyFrame Cue="100%"><Setter Property="Opacity" Value="0.50"/></KeyFrame>
+            </Animation>
+        </Style.Animations>
+    </Style>
+
+    <!-- 6. Nothing jumps: the incoming section rises out of the stone instead of being stamped onto
+            it. Opacity only — the outgoing section is already gone by then (IsVisible), so there is
+            no double-exposure and no hit-test overlap. -->
+    <Style Selector="Panel.xfade, Grid.xfade">
+        <Setter Property="Opacity" Value="0"/>
+        <Setter Property="Transitions">
+            <Transitions>
+                <DoubleTransition Property="Opacity" Duration="0:0:0.18" Easing="CubicEaseOut"/>
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="Panel.xfade.shown, Grid.xfade.shown">
+        <Setter Property="Opacity" Value="1"/>
+    </Style>
+
+    <!-- 3. PLAY breathes. The ember fill itself swells and ebbs (0.90-1.0 over 3.6s) — brightness,
+            not a halo: the brand forbids a glow, and a solid slab that dims a touch reads as an
+            ember far better than a blur would. Runs only while the button is actionable. -->
+    <Style Selector="Border.live Button.action.breathe">
+        <Style.Animations>
+            <Animation Duration="0:0:3.6" IterationCount="INFINITE" Easing="SineEaseInOut">
+                <KeyFrame Cue="0%"><Setter Property="Opacity" Value="1.0"/></KeyFrame>
+                <KeyFrame Cue="50%"><Setter Property="Opacity" Value="0.90"/></KeyFrame>
+                <KeyFrame Cue="100%"><Setter Property="Opacity" Value="1.0"/></KeyFrame>
+            </Animation>
+        </Style.Animations>
+    </Style>
+
+    <!-- 8. Progress glides. The download reports every few hundred KB, so the raw value steps.
+            0.4s linear catches up smoothly without ever running ahead of the truth. -->
+    <Style Selector="ProgressBar.v3progress">
+        <Setter Property="Transitions">
+            <Transitions>
+                <DoubleTransition Property="Value" Duration="0:0:0.4" Easing="LinearEasing"/>
+            </Transitions>
+        </Setter>
+    </Style>
+
+    <!-- 7. Friend row arrival: a short lift out of the list, played once when the row is realised.
+         It sits on the row's INNER grid, not on the Button: the button carries the .dim opacity for
+         offline accounts, and an animation with FillMode="Forward" would pin that opacity to 1 and
+         silently kill the dimming. Nesting keeps the two multiplicative. -->
+    <Style Selector="Grid.v3enterrow">
+        <Style.Animations>
+            <Animation Duration="0:0:0.22" FillMode="Forward" Easing="CubicEaseOut">
+                <KeyFrame Cue="0%">
+                    <Setter Property="Opacity" Value="0"/>
+                    <Setter Property="Margin" Value="0,7,0,-7"/>
+                </KeyFrame>
+                <KeyFrame Cue="100%">
+                    <Setter Property="Opacity" Value="1"/>
+                    <Setter Property="Margin" Value="0,0,0,0"/>
+                </KeyFrame>
+            </Animation>
+        </Style.Animations>
+    </Style>
+
+    <!-- 9. Friends sidebar unfurl: a finite, user-triggered reveal (Width 0<->264 + Opacity + an 18px
+            settle from the right), NOT an ambient animation - it plays once per toggle and cannot run
+            behind a hidden window, so it sits outside the Border.live gate exactly like the section
+            xfade (6) and the friend-row arrival (7) above. Width is animated rather than IsVisible
+            toggled so the panel glides instead of snapping; the inner Panel is pinned to 264 (in the
+            markup) so this only reveals a surface that was already laid out and never reflows text
+            mid-open. 0.25s CubicEaseOut - candlelight easing, no bounce, no overshoot. -->
+    <Style Selector="Border.v3friendspanel">
+        <Setter Property="Width" Value="0"/>
+        <Setter Property="Opacity" Value="0"/>
+        <Setter Property="RenderTransform" Value="translate(18px,0)"/>
+        <Setter Property="Transitions">
+            <Transitions>
+                <DoubleTransition Property="Width" Duration="0:0:0.25" Easing="CubicEaseOut"/>
+                <DoubleTransition Property="Opacity" Duration="0:0:0.25" Easing="CubicEaseOut"/>
+                <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.25" Easing="CubicEaseOut"/>
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="Border.v3friendspanel.open">
+        <Setter Property="Width" Value="264"/>
+        <Setter Property="Opacity" Value="1"/>
+        <Setter Property="RenderTransform" Value="translate(0px,0)"/>
+    </Style>
+
+    <!-- ═══ TopNav tab (Row0): active = ember underline, like Button.otab in v2 ═══ -->
+    <Style Selector="Button.v3tab">
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="Foreground" Value="{StaticResource ParchmentSecondary}"/>
+        <Setter Property="FontFamily" Value="{StaticResource FontDisplay}"/>
+        <Setter Property="FontSize" Value="15"/>
+        <Setter Property="FontWeight" Value="Normal"/>
+        <Setter Property="CornerRadius" Value="0"/>
+        <Setter Property="Padding" Value="16,0"/>
+        <Setter Property="Height" Value="48"/>
+        <Setter Property="VerticalContentAlignment" Value="Center"/>
+        <Setter Property="BorderThickness" Value="0,0,0,2"/>
+        <Setter Property="BorderBrush" Value="Transparent"/>
+        <Setter Property="Transitions">
+            <Transitions>
+                <BrushTransition Property="BorderBrush" Duration="0:0:0.12"/>
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="Button.v3tab:pointerover /template/ ContentPresenter">
+        <Setter Property="Background" Value="Transparent"/>
+    </Style>
+    <Style Selector="Button.v3tab:pointerover">
+        <Setter Property="Foreground" Value="{StaticResource ParchmentPrimary}"/>
+    </Style>
+    <Style Selector="Button.v3tab:pressed">
+        <Setter Property="RenderTransform" Value="none"/>
+    </Style>
+    <Style Selector="Button.v3tab.active">
+        <Setter Property="Foreground" Value="{StaticResource ParchmentPrimary}"/>
+        <Setter Property="BorderBrush" Value="{StaticResource EmberBase}"/>
+    </Style>
+
+    <!-- ═══ Account button (Row0, right): quiet stone pill ═══ -->
+    <Style Selector="Button.v3account">
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="Foreground" Value="{StaticResource ParchmentSecondary}"/>
+        <Setter Property="FontWeight" Value="Normal"/>
+        <Setter Property="FontSize" Value="13"/>
+        <Setter Property="CornerRadius" Value="{StaticResource RadiusMd}"/>
+        <Setter Property="Padding" Value="12,7"/>
+    </Style>
+    <Style Selector="Button.v3account:pointerover /template/ ContentPresenter">
+        <Setter Property="Background" Value="{StaticResource StoneHover}"/>
+    </Style>
+    <Style Selector="Button.v3account:pointerover">
+        <Setter Property="Foreground" Value="{StaticResource ParchmentPrimary}"/>
+    </Style>
+
+    <!-- ═══ Realm rail (left, 72px): active = ember vertical edge 3px + stone recess ═══ -->
+    <Style Selector="ListBox.v3rail">
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="BorderThickness" Value="0"/>
+        <Setter Property="Padding" Value="0"/>
+    </Style>
+    <Style Selector="ListBox.v3rail ListBoxItem">
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="Foreground" Value="{StaticResource ParchmentSecondary}"/>
+        <Setter Property="BorderThickness" Value="3,0,0,0"/>
+        <Setter Property="BorderBrush" Value="Transparent"/>
+        <Setter Property="CornerRadius" Value="0"/>
+        <Setter Property="Padding" Value="0"/>
+        <Setter Property="Margin" Value="0,2"/>
+        <Setter Property="Height" Value="62"/>
+        <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+        <Setter Property="VerticalContentAlignment" Value="Stretch"/>
+        <Setter Property="Cursor" Value="Hand"/>
+        <Setter Property="Transitions">
+            <Transitions>
+                <BrushTransition Property="BorderBrush" Duration="0:0:0.12"/>
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="ListBox.v3rail ListBoxItem:pointerover /template/ ContentPresenter">
+        <Setter Property="Background" Value="{StaticResource StoneHover}"/>
+    </Style>
+    <Style Selector="ListBox.v3rail ListBoxItem:selected /template/ ContentPresenter">
+        <Setter Property="Background" Value="{StaticResource StoneHover}"/>
+    </Style>
+    <Style Selector="ListBox.v3rail ListBoxItem:selected">
+        <Setter Property="BorderBrush" Value="{StaticResource EmberBase}"/>
+        <Setter Property="Foreground" Value="{StaticResource ParchmentPrimary}"/>
+    </Style>
+
+    <!-- Rail "+" add-realm glyph (custom, brand-safe, inert for now) -->
+    <Style Selector="Button.v3railadd">
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="Foreground" Value="{StaticResource ParchmentFaint}"/>
+        <Setter Property="FontSize" Value="24"/>
+        <Setter Property="FontWeight" Value="Normal"/>
+        <Setter Property="CornerRadius" Value="0"/>
+        <Setter Property="Height" Value="52"/>
+        <Setter Property="HorizontalAlignment" Value="Stretch"/>
+        <Setter Property="HorizontalContentAlignment" Value="Center"/>
+    </Style>
+    <Style Selector="Button.v3railadd:pointerover /template/ ContentPresenter">
+        <Setter Property="Background" Value="{StaticResource StoneHover}"/>
+    </Style>
+    <Style Selector="Button.v3railadd:pointerover">
+        <Setter Property="Foreground" Value="{StaticResource EmberBase}"/>
+    </Style>
+    <Style Selector="Button.v3railadd:pressed">
+        <Setter Property="RenderTransform" Value="none"/>
+    </Style>
+
+    <!-- ═══ Friends sidebar collapse/expand handle ═══ -->
+    <Style Selector="Button.v3sidetoggle">
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="Foreground" Value="{StaticResource ParchmentFaint}"/>
+        <Setter Property="FontSize" Value="13"/>
+        <Setter Property="CornerRadius" Value="0"/>
+        <Setter Property="Padding" Value="6,10"/>
+        <Setter Property="VerticalAlignment" Value="Stretch"/>
+    </Style>
+    <Style Selector="Button.v3sidetoggle:pointerover /template/ ContentPresenter">
+        <Setter Property="Background" Value="{StaticResource StoneHover}"/>
+    </Style>
+    <Style Selector="Button.v3sidetoggle:pointerover">
+        <Setter Property="Foreground" Value="{StaticResource ParchmentPrimary}"/>
+    </Style>
+    <Style Selector="Button.v3sidetoggle:pressed">
+        <Setter Property="RenderTransform" Value="none"/>
+    </Style>
+
+    <!-- ═══ Friend row: full-width hover, no ember (ember stays the primary action) ═══ -->
+    <Style Selector="Button.v3friend">
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="Foreground" Value="{StaticResource ParchmentPrimary}"/>
+        <Setter Property="CornerRadius" Value="{StaticResource RadiusMd}"/>
+        <Setter Property="Padding" Value="8,7"/>
+        <Setter Property="FontWeight" Value="Normal"/>
+        <Setter Property="HorizontalAlignment" Value="Stretch"/>
+        <Setter Property="HorizontalContentAlignment" Value="Left"/>
+        <Setter Property="Cursor" Value="Hand"/>
+    </Style>
+    <Style Selector="Button.v3friend:pointerover /template/ ContentPresenter">
+        <Setter Property="Background" Value="{StaticResource StoneHover}"/>
+    </Style>
+    <Style Selector="Button.v3friend:pointerover">
+        <Setter Property="Foreground" Value="{StaticResource ParchmentPrimary}"/>
+    </Style>
+    <Style Selector="Button.v3friend:pressed">
+        <Setter Property="RenderTransform" Value="none"/>
+    </Style>
+
+    <!-- Round avatar disc + its centered initial -->
+    <Style Selector="Ellipse.v3avatar">
+        <Setter Property="Width" Value="34"/>
+        <Setter Property="Height" Value="34"/>
+        <Setter Property="Fill" Value="{StaticResource StoneHover}"/>
+        <Setter Property="Stroke" Value="{StaticResource StoneBorder}"/>
+        <Setter Property="StrokeThickness" Value="1"/>
+    </Style>
+    <Style Selector="TextBlock.v3avatarInitial">
+        <Setter Property="FontFamily" Value="{StaticResource FontDisplay}"/>
+        <Setter Property="FontSize" Value="16"/>
+        <Setter Property="Foreground" Value="{StaticResource ParchmentSecondary}"/>
+        <Setter Property="HorizontalAlignment" Value="Center"/>
+        <Setter Property="VerticalAlignment" Value="Center"/>
+    </Style>
+
+    <!-- ═══ Presence dot: colour from status token, chosen by conditional class ═══
+         Base ellipse is 10x10; the row sets exactly one of the class flags below. -->
+    <Style Selector="Ellipse.presence">
+        <Setter Property="Fill" Value="{StaticResource ParchmentFaint}"/>
+    </Style>
+    <Style Selector="Ellipse.presence.online">
+        <!-- Owner 2026-07-23: "online but not in a world" = signed into the launcher, NOT playing.
+             That idle-in-launcher state is the ember/orange one; actively playing (ingame) is green. -->
+        <Setter Property="Fill" Value="{StaticResource EmberBase}"/>
+    </Style>
+    <Style Selector="Ellipse.presence.away">
+        <Setter Property="Fill" Value="{StaticResource StatusWarn}"/>
+    </Style>
+    <Style Selector="Ellipse.presence.busy">
+        <Setter Property="Fill" Value="{StaticResource StatusDown}"/>
+    </Style>
+    <Style Selector="Ellipse.presence.ingame">
+        <!-- Owner 2026-07-23: in-game friends read GREEN like the "online" convention
+             (Discord/Battle.net). The "Playing <Realm>" activity line still distinguishes
+             in-game from idle-online; the dot no longer needs the ember split. -->
+        <Setter Property="Fill" Value="{StaticResource StatusOk}"/>
+    </Style>
+    <Style Selector="Ellipse.presence.offline">
+        <Setter Property="Fill" Value="{StaticResource ParchmentFaint}"/>
+    </Style>
+
+    <!-- Offline rows read dimmer (the account is still legible, the activity fades) -->
+    <Style Selector="Button.v3friend.dim">
+        <Setter Property="Opacity" Value="0.55"/>
+    </Style>
+
+    <!-- ═══ Add-account field ═══ -->
+    <Style Selector="TextBox.v3add">
+        <Setter Property="Background" Value="{StaticResource StoneBase}"/>
+        <Setter Property="Foreground" Value="{StaticResource ParchmentPrimary}"/>
+        <Setter Property="BorderBrush" Value="{StaticResource BorderHairline}"/>
+        <Setter Property="BorderThickness" Value="1"/>
+        <Setter Property="CornerRadius" Value="{StaticResource RadiusMd}"/>
+        <Setter Property="FontSize" Value="12"/>
+        <Setter Property="Padding" Value="8,6"/>
+    </Style>
+    <Style Selector="TextBox.v3add:focus /template/ Border#PART_BorderElement">
+        <Setter Property="BorderBrush" Value="{StaticResource EmberDim}"/>
+    </Style>
+
+    <!-- Small ember "+" add button -->
+    <Style Selector="Button.v3addbtn">
+        <Setter Property="Background" Value="{StaticResource EmberDim}"/>
+        <Setter Property="Foreground" Value="{StaticResource ParchmentPrimary}"/>
+        <Setter Property="FontSize" Value="16"/>
+        <Setter Property="MinWidth" Value="34"/>
+        <Setter Property="Padding" Value="0"/>
+        <Setter Property="HorizontalContentAlignment" Value="Center"/>
+        <Setter Property="VerticalContentAlignment" Value="Center"/>
+    </Style>
+
+    <!-- ═══ Sign-in card (sidebar, signed out) ═══ -->
+    <!-- Full-width stone field, ember focus ring — same vocabulary as the add-account field. -->
+    <Style Selector="TextBox.v3login">
+        <Setter Property="Background" Value="{StaticResource StoneBase}"/>
+        <Setter Property="Foreground" Value="{StaticResource ParchmentPrimary}"/>
+        <Setter Property="BorderBrush" Value="{StaticResource BorderHairline}"/>
+        <Setter Property="BorderThickness" Value="1"/>
+        <Setter Property="CornerRadius" Value="{StaticResource RadiusMd}"/>
+        <Setter Property="FontSize" Value="13"/>
+        <Setter Property="Padding" Value="10,9"/>
+    </Style>
+    <Style Selector="TextBox.v3login:focus /template/ Border#PART_BorderElement">
+        <Setter Property="BorderBrush" Value="{StaticResource EmberDim}"/>
+    </Style>
+
+    <!-- Primary ember sign-in button (the one strong action in the card) -->
+    <Style Selector="Button.v3signin">
+        <Setter Property="Background" Value="{StaticResource EmberBase}"/>
+        <Setter Property="Foreground" Value="{StaticResource ParchmentPrimary}"/>
+        <Setter Property="FontSize" Value="14"/>
+        <Setter Property="CornerRadius" Value="{StaticResource RadiusMd}"/>
+        <Setter Property="Height" Value="40"/>
+        <Setter Property="HorizontalContentAlignment" Value="Center"/>
+        <Setter Property="VerticalContentAlignment" Value="Center"/>
+        <Setter Property="Cursor" Value="Hand"/>
+    </Style>
+    <Style Selector="Button.v3signin:pointerover /template/ ContentPresenter">
+        <Setter Property="Background" Value="{StaticResource EmberBright}"/>
+    </Style>
+    <Style Selector="Button.v3signin:disabled /template/ ContentPresenter">
+        <Setter Property="Background" Value="{StaticResource EmberDim}"/>
+    </Style>
+    <Style Selector="Button.v3signin:pressed">
+        <Setter Property="RenderTransform" Value="none"/>
+    </Style>
+
+    <!-- Quiet sign-out link in the friends header -->
+    <Style Selector="Button.v3signout">
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="Foreground" Value="{StaticResource ParchmentFaint}"/>
+        <Setter Property="FontSize" Value="11"/>
+        <Setter Property="CornerRadius" Value="{StaticResource RadiusMd}"/>
+        <Setter Property="Padding" Value="7,4"/>
+        <Setter Property="Cursor" Value="Hand"/>
+    </Style>
+    <Style Selector="Button.v3signout:pointerover /template/ ContentPresenter">
+        <Setter Property="Background" Value="{StaticResource StoneHover}"/>
+    </Style>
+    <Style Selector="Button.v3signout:pointerover">
+        <Setter Property="Foreground" Value="{StaticResource ParchmentSecondary}"/>
+    </Style>
+    <Style Selector="Button.v3signout:pressed">
+        <Setter Property="RenderTransform" Value="none"/>
+    </Style>
+
+    <!-- Add-account rejection line (unknown account / already added) -->
+    <Style Selector="TextBlock.v3adderror">
+        <Setter Property="FontSize" Value="11"/>
+        <Setter Property="Foreground" Value="{StaticResource StatusDown}"/>
+        <Setter Property="TextWrapping" Value="Wrap"/>
+        <Setter Property="Margin" Value="2,4,0,0"/>
+    </Style>
+
+    <!-- ═══ Compact patch-notes card (hero footer feed) ═══ -->
+    <Style Selector="Button.v3patchcard">
+        <Setter Property="Background" Value="#EB161210"/>
+        <Setter Property="Foreground" Value="{StaticResource ParchmentPrimary}"/>
+        <Setter Property="BorderBrush" Value="{StaticResource BorderHairline}"/>
+        <Setter Property="BorderThickness" Value="1"/>
+        <Setter Property="CornerRadius" Value="{StaticResource RadiusMd}"/>
+        <Setter Property="Padding" Value="14,11"/>
+        <Setter Property="FontWeight" Value="Normal"/>
+        <Setter Property="Width" Value="228"/>
+        <Setter Property="HorizontalContentAlignment" Value="Left"/>
+        <Setter Property="Cursor" Value="Hand"/>
+    </Style>
+    <Style Selector="Button.v3patchcard:pointerover /template/ ContentPresenter">
+        <Setter Property="Background" Value="{StaticResource StoneHover}"/>
+    </Style>
+    <Style Selector="Button.v3patchcard:pressed">
+        <Setter Property="RenderTransform" Value="none"/>
+    </Style>
+
+    <!-- ═══════════════════════════════════════════════════════════════════════════════════════
+         ARMORY — a ledger page, not a dashboard.
+
+         Standpoint (frontend-design / CORE §3, decided before any markup was written): the armory
+         is the tavern guest book. Ruled lines instead of cards, hairline rules instead of shadows,
+         numbers set in the mono face so columns align down the page, and ONE ember accent reserved
+         for the single number that carries meaning (the score). The only colour that varies is the
+         class accent on the character edge and name - it is the one piece of identity a player
+         recognises at a glance. Nothing here glows, floats or animates: the play surface is the
+         loud room, this is the quiet one.
+         ═══════════════════════════════════════════════════════════════════════════════════════ -->
+
+    <!-- Character list rows: a class-coloured left edge is the whole selection language -->
+    <Style Selector="ListBox.v3chars">
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="Padding" Value="0"/>
+        <Setter Property="BorderThickness" Value="0"/>
+    </Style>
+    <Style Selector="ListBox.v3chars ListBoxItem">
+        <Setter Property="Padding" Value="0"/>
+        <Setter Property="Margin" Value="0,0,0,1"/>
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="CornerRadius" Value="{StaticResource RadiusSm}"/>
+        <Setter Property="Cursor" Value="Hand"/>
+    </Style>
+    <Style Selector="ListBox.v3chars ListBoxItem:pointerover /template/ ContentPresenter">
+        <Setter Property="Background" Value="{StaticResource StoneHover}"/>
+    </Style>
+    <Style Selector="ListBox.v3chars ListBoxItem:selected /template/ ContentPresenter">
+        <Setter Property="Background" Value="{StaticResource StoneHover}"/>
+    </Style>
+
+    <!-- Section caption ("CHARACTERS", "ARMORY SCORE", "RAID LOCKOUTS") -->
+    <Style Selector="TextBlock.v3caption">
+        <Setter Property="FontSize" Value="10"/>
+        <Setter Property="FontWeight" Value="SemiBold"/>
+        <Setter Property="Foreground" Value="{StaticResource ParchmentFaint}"/>
+    </Style>
+
+    <!-- Ledger line: label left in parchment, value right in mono. The pair reads as one row. -->
+    <Style Selector="TextBlock.v3ledgerlabel">
+        <Setter Property="FontSize" Value="12"/>
+        <Setter Property="Foreground" Value="{StaticResource ParchmentSecondary}"/>
+        <Setter Property="VerticalAlignment" Value="Center"/>
+    </Style>
+    <Style Selector="TextBlock.v3ledgervalue">
+        <Setter Property="FontSize" Value="12"/>
+        <Setter Property="FontFamily" Value="{StaticResource FontMono}"/>
+        <Setter Property="Foreground" Value="{StaticResource ParchmentPrimary}"/>
+        <Setter Property="VerticalAlignment" Value="Center"/>
+        <Setter Property="TextAlignment" Value="Right"/>
+    </Style>
+
+    <!-- The one ember number on the page -->
+    <Style Selector="TextBlock.v3score">
+        <Setter Property="FontFamily" Value="{StaticResource FontDisplay}"/>
+        <Setter Property="FontSize" Value="46"/>
+        <Setter Property="Foreground" Value="{StaticResource EmberBright}"/>
+        <Setter Property="LineHeight" Value="50"/>
+    </Style>
+
+    <!-- Hairline rule between ledger blocks -->
+    <Style Selector="Border.v3rule">
+        <Setter Property="Height" Value="1"/>
+        <Setter Property="Background" Value="{StaticResource BorderHairline}"/>
+        <Setter Property="Margin" Value="0,16"/>
+    </Style>
+
+    <!-- ═══ Gesperrt waehrend eines Downloads ═══
+         Rail und Era-Picker binden IsEnabled an Play.CanSwitchContext, sahen aber voll bedienbar aus:
+         der Klick passierte nichts und der Spieler klickte weiter. Deaktiviert muss deaktiviert
+         AUSSEHEN. Gedaempft statt ausgeblendet, damit die Auswahl lesbar bleibt und das Fenster nicht
+         waehrend des Downloads halb verschwindet. -->
+    <Style Selector="ListBox.v3rail:disabled">
+        <Setter Property="Opacity" Value="0.38"/>
+    </Style>
+    <Style Selector="ListBox.v3rail:disabled ListBoxItem">
+        <Setter Property="Cursor" Value="Arrow"/>
+    </Style>
+    <!-- Each row disables itself off its own ClientChoice.IsAvailable - the SAME flag the badge and
+         the view-model click-guard read, one source, no risk of the three drifting apart. -->
+    <Style Selector="ListBox.expansions ListBoxItem" x:DataType="m:ClientChoice">
+        <Setter Property="IsEnabled" Value="{Binding IsAvailable}"/>
+    </Style>
+    <Style Selector="ListBox.expansions:disabled">
+        <Setter Property="Opacity" Value="0.38"/>
+    </Style>
+    <Style Selector="ListBox.expansions:disabled ListBoxItem">
+        <Setter Property="Cursor" Value="Arrow"/>
+    </Style>
+
+    <!-- ═══ Hero client toggle: only rendered when a realm offers more than one client
+         (RealmEntry.HasMultipleClients). A small, quiet row - NOT the old four-tile picker the
+         owner retired 2026-07-21. Same ember-underline selection language as Button.v3tab, scaled
+         down: this is a supporting control next to the badge, not a second hero. ═══ -->
+    <Style Selector="ListBox.v3clienttoggle">
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="BorderThickness" Value="0"/>
+        <Setter Property="Padding" Value="0"/>
+    </Style>
+    <Style Selector="ListBox.v3clienttoggle ListBoxItem">
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="Foreground" Value="{StaticResource ParchmentFaint}"/>
+        <Setter Property="FontFamily" Value="{StaticResource FontMono}"/>
+        <Setter Property="FontSize" Value="11"/>
+        <Setter Property="Padding" Value="0,0,0,3"/>
+        <Setter Property="Margin" Value="0,0,14,0"/>
+        <Setter Property="BorderThickness" Value="0,0,0,2"/>
+        <Setter Property="BorderBrush" Value="Transparent"/>
+        <Setter Property="CornerRadius" Value="0"/>
+        <Setter Property="Cursor" Value="Hand"/>
+        <Setter Property="Transitions">
+            <Transitions>
+                <BrushTransition Property="BorderBrush" Duration="0:0:0.12"/>
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="ListBox.v3clienttoggle ListBoxItem:pointerover /template/ ContentPresenter">
+        <Setter Property="Background" Value="Transparent"/>
+    </Style>
+    <Style Selector="ListBox.v3clienttoggle ListBoxItem:pointerover">
+        <Setter Property="Foreground" Value="{StaticResource ParchmentSecondary}"/>
+    </Style>
+    <Style Selector="ListBox.v3clienttoggle ListBoxItem:selected /template/ ContentPresenter">
+        <Setter Property="Background" Value="Transparent"/>
+    </Style>
+    <Style Selector="ListBox.v3clienttoggle ListBoxItem:selected">
+        <Setter Property="Foreground" Value="{StaticResource ParchmentPrimary}"/>
+        <Setter Property="BorderBrush" Value="{StaticResource EmberBase}"/>
+    </Style>
+
+    <!-- ═══ Add-realm overlay (the "+" rail button): a carved card over a dim scrim, same
+         xfade cross-fade the hero sections use, no second window. ═══ -->
+    <Style Selector="Border.v3overlayscrim">
+        <Setter Property="Background" Value="#D90A0705"/>
+    </Style>
+    <Style Selector="TextBox.v3overlayfield">
+        <Setter Property="Background" Value="{StaticResource StoneBase}"/>
+        <Setter Property="Foreground" Value="{StaticResource ParchmentPrimary}"/>
+        <Setter Property="BorderBrush" Value="{StaticResource BorderHairline}"/>
+        <Setter Property="BorderThickness" Value="1"/>
+        <Setter Property="CornerRadius" Value="{StaticResource RadiusMd}"/>
+        <Setter Property="FontSize" Value="13"/>
+        <Setter Property="Padding" Value="10,9"/>
+    </Style>
+    <Style Selector="TextBox.v3overlayfield:focus /template/ Border#PART_BorderElement">
+        <Setter Property="BorderBrush" Value="{StaticResource EmberDim}"/>
+    </Style>
+    <Style Selector="ComboBox.v3overlayfield">
+        <Setter Property="Background" Value="{StaticResource StoneBase}"/>
+        <Setter Property="Foreground" Value="{StaticResource ParchmentPrimary}"/>
+        <Setter Property="BorderBrush" Value="{StaticResource BorderHairline}"/>
+        <Setter Property="BorderThickness" Value="1"/>
+        <Setter Property="CornerRadius" Value="{StaticResource RadiusMd}"/>
+        <Setter Property="FontSize" Value="13"/>
+        <Setter Property="Padding" Value="10,9"/>
+        <Setter Property="HorizontalAlignment" Value="Stretch"/>
+    </Style>
+
+    <!-- ═══ COMING SOON rows (Burning Crusade / Wrath) ═══
+         Each row's own IsEnabled is bound to its ClientChoice.IsAvailable (see ShellV3Window.axaml),
+         so Avalonia's :disabled pseudo-class already keeps a not-yet-shippable build out of mouse AND
+         keyboard selection - no separate click guard needed on the view side. This just makes that
+         state look like a lock instead of a normal tile: dimmed, arrow cursor, same language as the
+         whole-picker :disabled state above. -->
+    <Style Selector="ListBox.expansions ListBoxItem:disabled">
+        <Setter Property="Opacity" Value="0.38"/>
+        <Setter Property="Cursor" Value="Arrow"/>
+    </Style>
+
+</Styles>

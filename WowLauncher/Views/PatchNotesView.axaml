@@ -1,0 +1,44 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:WowLauncher.ViewModels"
+             xmlns:m="using:WowLauncher.Models"
+             x:Class="WowLauncher.Views.PatchNotesView"
+             x:DataType="vm:PatchNotesViewModel">
+    <Border Background="{StaticResource StoneBase}">
+        <Grid Margin="40,32" RowDefinitions="Auto,*">
+            <TextBlock Grid.Row="0" Text="{Binding Title}" FontSize="26" FontFamily="{StaticResource FontDisplay}"
+                       Foreground="{StaticResource ParchmentPrimary}" Margin="0,0,0,16"/>
+
+            <TextBlock Grid.Row="1" Text="{Binding Placeholder}" FontSize="14"
+                       Foreground="{StaticResource ParchmentSecondary}"
+                       IsVisible="{Binding IsEmpty}"/>
+
+            <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" IsVisible="{Binding !IsEmpty}">
+                <ItemsControl ItemsSource="{Binding Patches}" MaxWidth="720" HorizontalAlignment="Left">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="m:NewsItem">
+                            <Button Classes="newscard" Command="{Binding $parent[ItemsControl].((vm:PatchNotesViewModel)DataContext).OpenPatchCommand}"
+                                    CommandParameter="{Binding}" Padding="2,16">
+                                <StackPanel Spacing="6">
+                                    <StackPanel Orientation="Horizontal" Spacing="10">
+                                        <TextBlock Text="{Binding DateShort}" FontSize="12"
+                                                   FontFamily="{StaticResource FontMono}"
+                                                   Foreground="{StaticResource ParchmentFaint}"/>
+                                        <Border Classes="newstag">
+                                            <TextBlock Text="{Binding CategoryTag}" FontSize="9" Classes="tracked"/>
+                                        </Border>
+                                    </StackPanel>
+                                    <TextBlock Text="{Binding Title}" FontSize="17"
+                                               FontFamily="{StaticResource FontDisplay}"
+                                               Foreground="{StaticResource ParchmentPrimary}" TextWrapping="Wrap"/>
+                                    <TextBlock Text="{Binding Summary}" FontSize="13" TextWrapping="Wrap"
+                                               Foreground="{StaticResource ParchmentSecondary}"/>
+                                </StackPanel>
+                            </Button>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </ScrollViewer>
+        </Grid>
+    </Border>
+</UserControl>

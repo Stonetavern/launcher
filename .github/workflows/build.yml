@@ -1,0 +1,99 @@
+# Build and test on all three platforms.
+#
+# Runners: GitHub-hosted standard runners. Verified 2026-07-26 against
+# docs.github.com — standard runners (ubuntu-latest, windows-latest,
+# macos-latest) are free and unlimited for PUBLIC repositories.
+#
+# Why hosted and not self-hosted, in a project that otherwise runs its own
+# hardware: this repository is public, so anyone can open a pull request.
+# On self-hosted runners that means a stranger's code executes on the
+# operator's own machines, inside the operator's network. On hosted runners
+# it runs on a throwaway VM that GitHub deletes afterwards.
+#
+# 🔴 Deployment is different and must stay self-hosted: a hosted runner
+#    cannot reach the internal network, and opening that path would undo the
+#    isolation it is meant to protect.
+name: build
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            rid: linux-x64
+            name: linux-x64
+          - os: windows-latest
+            rid: win-x64
+            name: win-x64
+          - os: macos-latest
+            rid: osx-arm64
+            name: osx-arm64
+
+    runs-on: ${{ matrix.os }}
+    name: ${{ matrix.name }}
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with: { persist-credentials: false }
+
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with: { dotnet-version: '10.0.x' }
+
+      - name: Restore
+        run: |
+          dotnet restore WowLauncher/WowLauncher.csproj
+          dotnet restore WowLauncher.Tests/WowLauncher.Tests.csproj
+
+      # Projekt explizit nennen: das Repo hat keine .sln im Wurzelverzeichnis,
+      # und `dotnet test` ohne Argument sucht genau dort (MSB1003).
+      - name: Test
+        run: dotnet test WowLauncher.Tests/WowLauncher.Tests.csproj --logger "console;verbosity=normal"
+
+      - name: Publish
+        shell: bash
+        run: |
+          dotnet publish WowLauncher/WowLauncher.csproj \
+            -c Release -r ${{ matrix.rid }} \
+            --self-contained true \
+            -p:PublishSingleFile=true \
+            -p:EnableCompressionInSingleFile=true \
+            -p:DebugType=embedded \
+            -o ./publish
+
+      # The checksum is produced HERE, in the build that made the binary.
+      # A checksum computed later only proves the file survived transport,
+      # not that it came from this source.
+      - name: Checksum
+        shell: bash
+        run: |
+          cd ./publish
+          # `sha256sum *` bricht ab, sobald ein Unterverzeichnis im Ordner
+          # liegt ("Is a directory"). Deshalb explizit nur Dateien, und
+          # stabil sortiert, damit die Liste zwischen Laeufen vergleichbar ist.
+          if command -v sha256sum >/dev/null; then
+            find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
+          else
+            find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 shasum -a 256 > SHA256SUMS
+          fi
+          cat SHA256SUMS
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: launcher-${{ matrix.name }}
+          path: ./publish
+          retention-days: 30

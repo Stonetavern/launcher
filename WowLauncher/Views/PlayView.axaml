@@ -1,0 +1,185 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:loc="using:WowLauncher.Localization"
+             xmlns:vm="using:WowLauncher.ViewModels"
+             xmlns:m="using:WowLauncher.Models"
+             xmlns:imaging="using:Avalonia.Media.Imaging"
+             x:Class="WowLauncher.Views.PlayView"
+             x:DataType="vm:PlayViewModel">
+
+    <!-- HeroStage (mitte) + News-Schiene (rechts) — DESIGN-UI-ENTERPRISE §2 -->
+    <Grid ColumnDefinitions="*,236">
+
+        <!-- ═══ HeroStage (mit per-Ära-Hintergrund) ═══ -->
+        <Grid Grid.Column="0" Background="{StaticResource StoneBase}">
+
+            <!-- Hintergrund-Layer: per-Expansion, 240ms Cross-Fade beim Wechsel.
+                 UniformToFill + HighQuality → randlos + scharf bis 4K, mittig beschnitten. -->
+            <TransitioningContentControl Content="{Binding Background}">
+                <TransitioningContentControl.PageTransition>
+                    <CrossFade Duration="0:0:0.24"/>
+                </TransitioningContentControl.PageTransition>
+                <TransitioningContentControl.ContentTemplate>
+                    <DataTemplate x:DataType="imaging:Bitmap">
+                        <Image Source="{Binding}" Stretch="UniformToFill"
+                               RenderOptions.BitmapInterpolationMode="HighQuality"
+                               HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    </DataTemplate>
+                </TransitioningContentControl.ContentTemplate>
+            </TransitioningContentControl>
+
+            <!-- Leichter Stein-Wash, damit die Art atmet (flach, KEIN Gradient). Lesbarkeit kommt
+                 aus definierten Slabs/Recess (Hermes: „Kontrast durch Dichte"), nicht aus dem Wash. -->
+            <Border Background="#59100D0A"/>
+
+            <!-- Content auf MaxWidth gedeckelt + zentriert (responsive, FHD→4K→Ultrawide). -->
+            <Grid Margin="32,24" MaxWidth="780" HorizontalAlignment="Stretch"
+                  RowDefinitions="Auto,*,Auto">
+
+                <!-- Expansion-Picker (segmentiert) -->
+                <ListBox Grid.Row="0" Classes="expansions reveal1" HorizontalAlignment="Center"
+                         ItemsSource="{Binding Expansions}"
+                         SelectedItem="{Binding SelectedExpansion, Mode=TwoWay}"
+                         AutomationProperties.Name="{loc:Tr Play_Expansion_A11y}">
+                    <ListBox.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <StackPanel Orientation="Horizontal" Spacing="0"/>
+                        </ItemsPanelTemplate>
+                    </ListBox.ItemsPanel>
+                    <ListBox.ItemTemplate>
+                        <DataTemplate x:DataType="m:Expansion">
+                            <StackPanel Spacing="1" MinWidth="118">
+                                <TextBlock Text="{Binding DisplayName}" FontSize="13"
+                                           FontFamily="{StaticResource FontDisplay}"
+                                           HorizontalAlignment="Center"/>
+                                <TextBlock Text="{Binding ShortLabel}" FontSize="10"
+                                           FontFamily="{StaticResource FontMono}"
+                                           Opacity="0.7" HorizontalAlignment="Center"/>
+                            </StackPanel>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+
+                <!-- Realm-Status = die Kerze hinterm Schlüsselloch (Hermes): in eine gemeißelte
+                     Stein-Vertiefung eingelassen, Fokuspunkt der Bühne, extremer Typo-Kontrast. -->
+                <Border Grid.Row="1" Classes="recess reveal2" VerticalAlignment="Center" HorizontalAlignment="Center">
+                    <Border Classes="recessLip" Margin="-1">
+                        <StackPanel Spacing="10" Margin="6">
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Spacing="13">
+                                <!-- FIX 1 (v1.0.1): Status-Punkt mit atmender Kerzenlicht-Aura. Der Glow
+                                     (pulseGlow, größer + blur) liegt im Grid HINTER dem Punkt (pulse) und
+                                     atmet im selben Takt → live sichtbar „lebendig", ohne Layout-Einfluss.
+                                     Nur online/checking bekommen die Aura; offline bleibt ruhig (rot, statisch). -->
+                                <Grid Width="30" Height="30" VerticalAlignment="Center">
+                                    <Ellipse Width="30" Height="30" Classes="pulseGlow"
+                                             Fill="{StaticResource StatusOk}" IsVisible="{Binding RealmOnline}"/>
+                                    <Ellipse Width="13" Height="13" Classes="pulse"
+                                             Fill="{StaticResource StatusOk}" IsVisible="{Binding RealmOnline}"/>
+                                    <Ellipse Width="13" Height="13"
+                                             Fill="{StaticResource StatusDown}" IsVisible="{Binding RealmOffline}"/>
+                                    <Ellipse Width="30" Height="30" Classes="pulseGlow"
+                                             Fill="{StaticResource ParchmentFaint}" IsVisible="{Binding RealmChecking}"/>
+                                    <Ellipse Width="13" Height="13" Classes="pulse"
+                                             Fill="{StaticResource ParchmentFaint}" IsVisible="{Binding RealmChecking}"/>
+                                </Grid>
+                                <TextBlock Text="{Binding RealmStatusText}" FontSize="32"
+                                           FontFamily="{StaticResource FontDisplay}"
+                                           Foreground="{StaticResource ParchmentPrimary}" VerticalAlignment="Center"/>
+                            </StackPanel>
+                            <!-- FIX 3 (v1.0.1): Live-Spielerzahl entfernt (Owner-Direktive, konsistent mit
+                                 der Website /play — kleine Momentanzahl schreckt ab). Nur der ehrliche
+                                 Up/Down-Status bleibt ("Realm online"/"Realm offline"), der Punkt pulst. -->
+                        </StackPanel>
+                    </Border>
+                </Border>
+
+                <!-- Sprache + Realmlist + Wartungs-Aktionen — auf montierter Stein-Plakette (Slab) -->
+                <Border Grid.Row="2" Classes="slab reveal3" VerticalAlignment="Bottom">
+                <Grid ColumnDefinitions="Auto,*,Auto" RowDefinitions="Auto,Auto,Auto">
+                    <TextBlock Grid.Row="0" Grid.Column="0" Text="{loc:Tr Play_Language}" VerticalAlignment="Center"
+                               Margin="0,0,14,0" FontSize="13" Foreground="{StaticResource ParchmentSecondary}"/>
+                    <ComboBox Grid.Row="0" Grid.Column="1" HorizontalAlignment="Left" MinWidth="180"
+                              ItemsSource="{Binding AvailableLocales}"
+                              SelectedItem="{Binding SelectedLocale}"
+                              AutomationProperties.Name="{loc:Tr Play_Language_A11y}"/>
+
+                    <!-- Reparieren + Nach Updates suchen -->
+                    <StackPanel Grid.Row="0" Grid.Column="2" Orientation="Horizontal" Spacing="8"
+                                VerticalAlignment="Center">
+                        <Button Classes="ghost" Content="{loc:Tr Play_Repair}" Command="{Binding RepairCommand}"
+                                AutomationProperties.Name="{loc:Tr Play_Repair_A11y}"/>
+                        <Button Classes="ghost" Content="{loc:Tr Play_CheckUpdates}"
+                                Command="{Binding CheckForUpdatesCommand}"
+                                AutomationProperties.Name="{loc:Tr Play_CheckUpdates_A11y}"/>
+                    </StackPanel>
+
+                    <TextBlock Grid.Row="1" Grid.Column="0" Text="{loc:Tr Play_Realmlist}" VerticalAlignment="Center"
+                               Margin="0,12,14,0" FontSize="13" Foreground="{StaticResource ParchmentSecondary}"/>
+                    <TextBlock Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2" Text="{Binding RealmAddress}"
+                               Margin="0,12,0,0" VerticalAlignment="Center" FontSize="13"
+                               FontFamily="{StaticResource FontMono}"
+                               Foreground="{StaticResource ParchmentFaint}"/>
+
+                    <!-- WP4: unaufdringlicher Launcher-Update-Hinweis (Linux Check+Notify, kein Auto-Apply).
+                         Leer/unsichtbar auf Windows und wenn kein neuer Build vorliegt → keine UI-Änderung. -->
+                    <TextBlock Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="3"
+                               Text="{Binding LauncherUpdateHint}"
+                               IsVisible="{Binding HasLauncherUpdateHint}"
+                               Margin="0,12,0,0" VerticalAlignment="Center" FontSize="12"
+                               TextWrapping="Wrap"
+                               Foreground="{StaticResource ParchmentSecondary}"
+                               AutomationProperties.Name="{loc:Tr Play_LauncherUpdate_A11y}"/>
+                </Grid>
+                </Border>
+            </Grid>
+
+            <!-- Expansion-Emblem in der reservierten oberen rechten Ecke (brand-safe, kein Blizzard-Logo;
+                 null = noch keine Art → Ecke bleibt leer). Sanfter Reveal mit der Bühne. -->
+            <Image Source="{Binding Logo}"
+                   HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,18,28,0"
+                   MaxHeight="72" MaxWidth="210" Stretch="Uniform"
+                   RenderOptions.BitmapInterpolationMode="HighQuality"
+                   Classes="reveal2"/>
+        </Grid>
+
+        <!-- ═══ News-Schiene ═══ -->
+        <Border Grid.Column="1" Background="{StaticResource StoneSurface}"
+                BorderBrush="{StaticResource BorderHairline}" BorderThickness="1,0,0,0">
+            <Grid RowDefinitions="Auto,*,Auto" Margin="18,24">
+                <TextBlock Grid.Row="0" Text="{loc:Tr Play_News}" FontSize="12" FontWeight="SemiBold"
+                           Foreground="{StaticResource ParchmentSecondary}"
+                           Classes="tracked" Margin="0,0,0,14"/>
+
+                <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+                    <ItemsControl ItemsSource="{Binding News}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="m:NewsItem">
+                                <Button Classes="newscard" Command="{Binding $parent[ItemsControl].((vm:PlayViewModel)DataContext).OpenNewsCommand}"
+                                        CommandParameter="{Binding}">
+                                    <StackPanel Spacing="5">
+                                        <StackPanel Orientation="Horizontal" Spacing="8">
+                                            <TextBlock Text="{Binding DateShort}" FontSize="11"
+                                                       FontFamily="{StaticResource FontMono}"
+                                                       Foreground="{StaticResource ParchmentFaint}"/>
+                                            <Border Classes="newstag">
+                                                <TextBlock Text="{Binding CategoryTag}" FontSize="9"
+                                                           Classes="tracked"/>
+                                            </Border>
+                                        </StackPanel>
+                                        <TextBlock Text="{Binding Title}" FontSize="14" TextWrapping="Wrap"
+                                                   Foreground="{StaticResource ParchmentPrimary}"/>
+                                        <TextBlock Text="{Binding Summary}" FontSize="12" TextWrapping="Wrap"
+                                                   Foreground="{StaticResource ParchmentSecondary}"/>
+                                    </StackPanel>
+                                </Button>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </ScrollViewer>
+
+                <Button Grid.Row="2" Content="{loc:Tr Play_AllNotes}" Classes="ghost" HorizontalAlignment="Stretch"
+                        Margin="0,14,0,0"/>
+            </Grid>
+        </Border>
+    </Grid>
+</UserControl>

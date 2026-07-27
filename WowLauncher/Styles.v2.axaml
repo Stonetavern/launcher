@@ -1,0 +1,180 @@
+<!--
+  Obsidian Instrument — the v2 skin.
+
+  Palette chosen by Google Stitch from a brief that withheld the colours on purpose
+  (see design/stitch-DESIGN-v2.md). Its one rule, which everything else follows:
+
+      Ember  = things a human can press.
+      Cyan   = things the machine is telling you.
+      Red    = things that are broken.
+
+  v1 (Styles.axaml) is untouched — both skins live in the same binary,
+  selected with `WowLauncher.exe “ui v2”`.
+-->
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:sys="using:System">
+
+    <Styles.Resources>
+        <!-- ─── Surfaces: warm, dirty darkness. No pure black. ─── -->
+        <SolidColorBrush x:Key="OBasalt"    Color="#14110F"/>
+        <SolidColorBrush x:Key="OIron"      Color="#1C1917"/>
+        <SolidColorBrush x:Key="OSteel"     Color="#262321"/>
+        <SolidColorBrush x:Key="OHair"      Color="#302D2A"/>
+
+        <!-- ─── Type: off-white with a temperature. Never #FFF. ─── -->
+        <SolidColorBrush x:Key="OWarm"      Color="#E9E5E1"/>
+        <SolidColorBrush x:Key="OMute"      Color="#8B837D"/>
+        <SolidColorBrush x:Key="ODim"       Color="#5A534E"/>
+
+        <!-- ─── The three signals. Never mixed. ─── -->
+        <SolidColorBrush x:Key="OEmber"     Color="#D9752B"/>
+        <SolidColorBrush x:Key="OEmberInk"  Color="#150C04"/>
+        <SolidColorBrush x:Key="OCyan"      Color="#78D2E1"/>
+        <SolidColorBrush x:Key="OCyanDim"   Color="#2F5A62"/>
+        <SolidColorBrush x:Key="ORed"       Color="#E63946"/>
+
+        <!-- ─── Fonts ─── -->
+        <FontFamily x:Key="OFontDisplay">avares://WowLauncher/Assets/Fonts#Bricolage Grotesque</FontFamily>
+        <FontFamily x:Key="OFontUi">avares://WowLauncher/Assets/Fonts#Inter Tight</FontFamily>
+        <FontFamily x:Key="OFontMono">avares://WowLauncher/Assets/Fonts#JetBrains Mono</FontFamily>
+        <FontFamily x:Key="OFontMark">avares://WowLauncher/Assets/Fonts#IM FELL English</FontFamily>
+    </Styles.Resources>
+
+    <!-- ═══ Titlebar tabs ═══ -->
+    <Style Selector="Button.otab">
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="BorderThickness" Value="0,0,0,2"/>
+        <Setter Property="BorderBrush" Value="Transparent"/>
+        <Setter Property="CornerRadius" Value="0"/>
+        <Setter Property="Padding" Value="18,0"/>
+        <Setter Property="FontFamily" Value="{StaticResource OFontUi}"/>
+        <Setter Property="FontSize" Value="13"/>
+        <Setter Property="FontWeight" Value="Medium"/>
+        <Setter Property="Foreground" Value="{StaticResource OMute}"/>
+        <Setter Property="VerticalAlignment" Value="Stretch"/>
+        <Setter Property="VerticalContentAlignment" Value="Center"/>
+        <Setter Property="Cursor" Value="Hand"/>
+    </Style>
+    <Style Selector="Button.otab:pointerover /template/ ContentPresenter">
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="TextElement.Foreground" Value="{StaticResource OWarm}"/>
+    </Style>
+    <Style Selector="Button.otab.active">
+        <Setter Property="Foreground" Value="{StaticResource OWarm}"/>
+        <Setter Property="BorderBrush" Value="{StaticResource OEmber}"/>
+    </Style>
+
+    <!-- ═══ Window chrome buttons ═══ -->
+    <Style Selector="Button.ochrome">
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="BorderThickness" Value="0"/>
+        <Setter Property="CornerRadius" Value="0"/>
+        <Setter Property="Width" Value="34"/>
+        <Setter Property="Padding" Value="0"/>
+        <Setter Property="FontSize" Value="12"/>
+        <Setter Property="Foreground" Value="{StaticResource OMute}"/>
+        <Setter Property="HorizontalContentAlignment" Value="Center"/>
+        <Setter Property="VerticalContentAlignment" Value="Center"/>
+        <Setter Property="VerticalAlignment" Value="Stretch"/>
+    </Style>
+    <Style Selector="Button.ochrome:pointerover /template/ ContentPresenter">
+        <Setter Property="Background" Value="{StaticResource OSteel}"/>
+        <Setter Property="TextElement.Foreground" Value="{StaticResource OWarm}"/>
+    </Style>
+    <Style Selector="Button.ochrome.oclose:pointerover /template/ ContentPresenter">
+        <Setter Property="Background" Value="{StaticResource ORed}"/>
+        <Setter Property="TextElement.Foreground" Value="#FFFFFF"/>
+    </Style>
+
+    <!-- ═══ The action slab — full height of the bar, sharp, solid ═══ -->
+    <Style Selector="Button.oslab">
+        <Setter Property="Background" Value="{StaticResource OEmber}"/>
+        <Setter Property="Foreground" Value="{StaticResource OEmberInk}"/>
+        <Setter Property="BorderThickness" Value="0"/>
+        <Setter Property="CornerRadius" Value="0"/>
+        <Setter Property="Width" Value="300"/>
+        <Setter Property="FontFamily" Value="{StaticResource OFontUi}"/>
+        <Setter Property="FontSize" Value="15"/>
+        <Setter Property="FontWeight" Value="Bold"/>
+        <Setter Property="HorizontalContentAlignment" Value="Center"/>
+        <Setter Property="VerticalContentAlignment" Value="Center"/>
+        <Setter Property="Cursor" Value="Hand"/>
+    </Style>
+    <Style Selector="Button.oslab:pointerover /template/ ContentPresenter">
+        <Setter Property="Background" Value="#E68436"/>
+    </Style>
+    <Style Selector="Button.oslab:disabled /template/ ContentPresenter">
+        <Setter Property="Background" Value="{StaticResource OSteel}"/>
+        <Setter Property="TextElement.Foreground" Value="{StaticResource ODim}"/>
+    </Style>
+    <!-- ghost: the realm is down, there is nothing to press but a re-check -->
+    <Style Selector="Button.oslab.oghost">
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="Foreground" Value="{StaticResource OMute}"/>
+        <Setter Property="BorderThickness" Value="1,0,0,0"/>
+        <Setter Property="BorderBrush" Value="{StaticResource OHair}"/>
+        <Setter Property="FontSize" Value="13"/>
+    </Style>
+    <Style Selector="Button.oslab.oghost:pointerover /template/ ContentPresenter">
+        <Setter Property="Background" Value="{StaticResource OSteel}"/>
+        <Setter Property="TextElement.Foreground" Value="{StaticResource OWarm}"/>
+    </Style>
+
+    <!-- ═══ Telemetry rows ═══ -->
+    <Style Selector="TextBlock.olabel">
+        <Setter Property="FontFamily" Value="{StaticResource OFontMono}"/>
+        <Setter Property="FontSize" Value="9"/>
+        <Setter Property="Foreground" Value="{StaticResource ODim}"/>
+        <Setter Property="LetterSpacing" Value="1.8"/>
+    </Style>
+    <Style Selector="TextBlock.okey">
+        <Setter Property="FontFamily" Value="{StaticResource OFontMono}"/>
+        <Setter Property="FontSize" Value="11"/>
+        <Setter Property="Foreground" Value="{StaticResource OMute}"/>
+    </Style>
+    <Style Selector="TextBlock.oval">
+        <Setter Property="FontFamily" Value="{StaticResource OFontMono}"/>
+        <Setter Property="FontSize" Value="11"/>
+        <Setter Property="Foreground" Value="{StaticResource OWarm}"/>
+        <Setter Property="HorizontalAlignment" Value="Right"/>
+    </Style>
+    <Style Selector="TextBlock.oval.live">
+        <Setter Property="Foreground" Value="{StaticResource OCyan}"/>
+    </Style>
+    <Style Selector="TextBlock.oval.bad">
+        <Setter Property="Foreground" Value="{StaticResource ORed}"/>
+    </Style>
+    <Style Selector="TextBlock.oval.act">
+        <Setter Property="Foreground" Value="{StaticResource OEmber}"/>
+    </Style>
+
+    <!-- ═══ The lantern flame — the only colour in the mark, and the only thing that moves ═══ -->
+    <Style Selector="Path.oflame">
+        <Setter Property="Fill" Value="{StaticResource OEmber}"/>
+        <Setter Property="RenderTransform" Value="scaleY(1)"/>
+        <Style.Animations>
+            <Animation Duration="0:0:3.2" IterationCount="Infinite" Easing="SineEaseInOut">
+                <KeyFrame Cue="0%">   <Setter Property="Opacity" Value="0.92"/><Setter Property="ScaleTransform.ScaleY" Value="1.0"/></KeyFrame>
+                <KeyFrame Cue="28%">  <Setter Property="Opacity" Value="1.0"/> <Setter Property="ScaleTransform.ScaleY" Value="1.07"/></KeyFrame>
+                <KeyFrame Cue="46%">  <Setter Property="Opacity" Value="0.82"/><Setter Property="ScaleTransform.ScaleY" Value="0.95"/></KeyFrame>
+                <KeyFrame Cue="71%">  <Setter Property="Opacity" Value="1.0"/> <Setter Property="ScaleTransform.ScaleY" Value="1.04"/></KeyFrame>
+                <KeyFrame Cue="100%"> <Setter Property="Opacity" Value="0.92"/><Setter Property="ScaleTransform.ScaleY" Value="1.0"/></KeyFrame>
+            </Animation>
+        </Style.Animations>
+    </Style>
+
+    <!-- ═══ Settings controls ═══ -->
+    <Style Selector="Border.ofield">
+        <Setter Property="Background" Value="{StaticResource OIron}"/>
+        <Setter Property="BorderBrush" Value="{StaticResource OHair}"/>
+        <Setter Property="BorderThickness" Value="1"/>
+        <Setter Property="CornerRadius" Value="2"/>
+        <Setter Property="Padding" Value="12,10"/>
+    </Style>
+    <Style Selector="CheckBox.obox">
+        <Setter Property="FontFamily" Value="{StaticResource OFontUi}"/>
+        <Setter Property="FontSize" Value="13"/>
+        <Setter Property="Foreground" Value="{StaticResource OWarm}"/>
+    </Style>
+</Styles>

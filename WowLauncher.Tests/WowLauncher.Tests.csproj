@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+    <!-- Real skips for the opt-in Wine integration proofs: without MECHAGON_WINE_IT=1 they must show
+         as SKIPPED, never counted as passing (WP2 fixrunde F5). [SkippableFact] + Skip.IfNot. -->
+    <PackageReference Include="Xunit.SkippableFact" Version="1.5.23" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\WowLauncher\WowLauncher.csproj" />
+  </ItemGroup>
+
+  <!-- WP4 contract fixtures: synthetic manifest JSON (no real URLs/hashes) copied next to the test
+       assembly so the deserialisation + behaviour tests read the exact on-wire shape WP6 will serve. -->
+  <ItemGroup>
+    <None Include="fixtures\*.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

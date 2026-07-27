@@ -1,0 +1,84 @@
+<!--
+  The keep-running prompt shown when the player presses the close button and no choice is remembered.
+  Yes hides the launcher to the system tray; No quits it; the checkbox remembers the pick. Frameless
+  and centred on the shell, in the shared Stone / Parchment / Ember tokens (Styles.axaml) so it reads
+  as part of the launcher, not a system message box. All text is English (VOICE.md): no em dashes,
+  no apostrophes.
+-->
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:loc="using:WowLauncher.Localization"
+        x:Class="WowLauncher.Views.ClosePromptWindow"
+        Title="{loc:Tr Close_Prompt_Title}"
+        Icon="avares://WowLauncher/Assets/stonetavern-logo.png"
+        SizeToContent="WidthAndHeight"
+        CanResize="False"
+        ShowInTaskbar="False"
+        WindowStartupLocation="CenterOwner"
+        WindowDecorations="None"
+        Background="Transparent">
+
+    <Window.Styles>
+        <!-- Primary (Yes): solid ember fill, the one accent on the card. -->
+        <Style Selector="Button.promptPrimary">
+            <Setter Property="Background" Value="{StaticResource EmberBase}"/>
+            <Setter Property="Foreground" Value="{StaticResource StoneBase}"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Height" Value="38"/>
+            <Setter Property="Padding" Value="18,0"/>
+            <Setter Property="HorizontalContentAlignment" Value="Center"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+        </Style>
+        <Style Selector="Button.promptPrimary:pointerover /template/ ContentPresenter">
+            <Setter Property="Background" Value="{StaticResource EmberBright}"/>
+        </Style>
+        <!-- Secondary (No): flat stone. -->
+        <Style Selector="Button.promptGhost">
+            <Setter Property="Background" Value="{StaticResource StoneHover}"/>
+            <Setter Property="Foreground" Value="{StaticResource ParchmentSecondary}"/>
+            <Setter Property="Height" Value="38"/>
+            <Setter Property="Padding" Value="18,0"/>
+            <Setter Property="HorizontalContentAlignment" Value="Center"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+        </Style>
+        <Style Selector="Button.promptGhost:pointerover /template/ ContentPresenter">
+            <Setter Property="Background" Value="{StaticResource StoneBorder}"/>
+        </Style>
+    </Window.Styles>
+
+    <!-- Carved card: 1px stone border on the base fill, matching the shell edge. -->
+    <Border Background="{StaticResource StoneBase}"
+            BorderBrush="{StaticResource StoneBorder}" BorderThickness="1"
+            Width="420">
+        <StackPanel Margin="28,26" Spacing="16">
+
+            <!-- Brand cue + heading -->
+            <StackPanel Orientation="Horizontal" Spacing="12" VerticalAlignment="Center">
+                <Image Source="avares://WowLauncher/Assets/lantern.png" Height="28"
+                       VerticalAlignment="Center"
+                       RenderOptions.BitmapInterpolationMode="HighQuality"/>
+                <TextBlock Text="{loc:Tr Close_Prompt_Title}" FontSize="17"
+                           FontFamily="{StaticResource FontDisplay}"
+                           Foreground="{StaticResource ParchmentPrimary}"
+                           TextWrapping="Wrap" VerticalAlignment="Center"/>
+            </StackPanel>
+
+            <TextBlock Text="{loc:Tr Close_Prompt_Body}" FontSize="13" TextWrapping="Wrap"
+                       Foreground="{StaticResource ParchmentSecondary}"/>
+
+            <CheckBox x:Name="RememberCheck" Content="{loc:Tr Close_Prompt_Remember}"
+                      Foreground="{StaticResource ParchmentSecondary}"
+                      AutomationProperties.Name="{loc:Tr Close_Prompt_Remember}"/>
+
+            <!-- Actions: quit on the left (destructive, quieter), keep-running on the right (default). -->
+            <Grid ColumnDefinitions="Auto,*,Auto" Margin="0,4,0,0">
+                <Button Grid.Column="0" Classes="promptGhost" Content="{loc:Tr Close_Prompt_Quit}"
+                        Click="OnQuitClick"
+                        AutomationProperties.Name="{loc:Tr Close_Prompt_Quit}"/>
+                <Button Grid.Column="2" Classes="promptPrimary" IsDefault="True"
+                        Content="{loc:Tr Close_Prompt_KeepRunning}" Click="OnKeepRunningClick"
+                        AutomationProperties.Name="{loc:Tr Close_Prompt_KeepRunning}"/>
+            </Grid>
+        </StackPanel>
+    </Border>
+</Window>

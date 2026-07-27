@@ -1,0 +1,29 @@
+<Application xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:local="using:WowLauncher"
+             x:Class="WowLauncher.App"
+             RequestedThemeVariant="Dark">
+    <Application.Resources>
+        <!-- §6.1: Ember ist das EINZIGE Chroma — Fluent-Default-Blau global auf Ember umbiegen. -->
+        <Color x:Key="SystemAccentColor">#C9772E</Color>
+        <Color x:Key="SystemAccentColorDark1">#E2912F</Color>
+        <Color x:Key="SystemAccentColorDark2">#8A5523</Color>
+        <Color x:Key="SystemAccentColorDark3">#8A5523</Color>
+        <Color x:Key="SystemAccentColorLight1">#E2912F</Color>
+        <Color x:Key="SystemAccentColorLight2">#E2912F</Color>
+        <Color x:Key="SystemAccentColorLight3">#E2912F</Color>
+    </Application.Resources>
+    <Application.DataTemplates>
+        <local:ViewLocator/>
+    </Application.DataTemplates>
+    <Application.Styles>
+        <FluentTheme />
+        <StyleInclude Source="avares://WowLauncher/Styles.axaml"/>
+        <!-- v2 skin ("Obsidian Instrument"). Its resources are O*-prefixed and its selectors are
+             o*-classed, so including it costs v1 nothing — only `“ui v2”` ever binds to them. -->
+        <StyleInclude Source="avares://WowLauncher/Styles.v2.axaml"/>
+        <!-- v3 skin ("Battle.net" layout in the warm stone identity). Its selectors are all
+             v3-classed, so including it costs v1/v2 nothing; only the v3 skin binds to them. -->
+        <StyleInclude Source="avares://WowLauncher/Styles.v3.axaml"/>
+    </Application.Styles>
+</Application>

@@ -1,0 +1,33 @@
+name: Bug report
+description: Something in the launcher does not work
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not include your account name, password, IP address or any part of a
+        log that contains them.
+  - type: input
+    id: version
+    attributes:
+      label: Launcher version
+      description: Shown in Settings.
+    validations: { required: true }
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options: [Windows, Linux, macOS]
+    validations: { required: true }
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what happened, what you expected instead.
+    validations: { required: true }
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log output
+      description: Redact anything identifying before pasting.
+      render: text

@@ -1,0 +1,6 @@
+# Default owner for everything in this repository.
+*       @stonetavern-innkeeper
+
+# Release and packaging paths deserve a second look.
+/deploy/            @stonetavern-innkeeper
+/.github/workflows/ @stonetavern-innkeeper

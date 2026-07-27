@@ -1,0 +1,416 @@
+<!-- Stonetavern Brand Styles for Avalonia -->
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:sys="clr-namespace:System;assembly=System.Runtime">
+
+    <!-- ═══ Stonetavern Brand Tokens ═══ -->
+    <!-- Ref: BRAND_BIBLE.md §6.1 — Color, §6.2 — Typography, §6.3 — Motion -->
+
+    <!-- === COLORS === -->
+    <Styles.Resources>
+        <!-- Stone palette (backgrounds) -->
+        <SolidColorBrush x:Key="StoneBase" Color="#100D0A"/>
+        <SolidColorBrush x:Key="StoneSurface" Color="#161210"/>
+        <SolidColorBrush x:Key="StoneHover" Color="#221C17"/>
+        <SolidColorBrush x:Key="StoneBorder" Color="#2E2620"/>
+        
+        <!-- Parchment (text) -->
+        <SolidColorBrush x:Key="ParchmentPrimary" Color="#ECE3D2"/>
+        <SolidColorBrush x:Key="ParchmentSecondary" Color="#B6A88C"/>
+        <SolidColorBrush x:Key="ParchmentFaint" Color="#6F6553"/>
+        
+        <!-- Ember (the only accent) -->
+        <SolidColorBrush x:Key="EmberBase" Color="#C9772E"/>
+        <SolidColorBrush x:Key="EmberBright" Color="#E2912F"/>
+        <SolidColorBrush x:Key="EmberDim" Color="#8A5523"/>
+        
+        <!-- Status -->
+        <SolidColorBrush x:Key="StatusOk" Color="#6F8A55"/>
+        <SolidColorBrush x:Key="StatusWarn" Color="#C9952E"/>
+        <SolidColorBrush x:Key="StatusDown" Color="#A24A38"/>
+        
+        <!-- Hairline border -->
+        <SolidColorBrush x:Key="BorderHairline" Color="#2A2520"/>
+        
+        <!-- === TYPOGRAPHY === (§3: embedded OFL-Fonts, Assets/Fonts/, Lizenzen unter licenses/) -->
+        <FontFamily x:Key="FontDisplay">avares://WowLauncher/Assets/Fonts#IM FELL English</FontFamily>
+        <FontFamily x:Key="FontBody">avares://WowLauncher/Assets/Fonts#Alegreya</FontFamily>
+        <FontFamily x:Key="FontMono">avares://WowLauncher/Assets/Fonts#JetBrains Mono</FontFamily>
+        
+        <!-- === CORNER RADIUS (stone is massive) === -->
+        <CornerRadius x:Key="RadiusSm">1</CornerRadius>
+        <CornerRadius x:Key="RadiusMd">2</CornerRadius>
+        <CornerRadius x:Key="RadiusLg">4</CornerRadius>
+        
+        <!-- === DURATIONS (candlelight pace) === -->
+        <sys:Double x:Key="DurationFast">0.12</sys:Double>
+        <sys:Double x:Key="DurationNormal">0.24</sys:Double>
+    </Styles.Resources>
+
+    <!-- ═══ GLOBAL DEFAULTS ═══ -->
+    
+    <!-- Window -->
+    <Style Selector="Window">
+        <Setter Property="Background" Value="{StaticResource StoneBase}"/>
+        <Setter Property="Foreground" Value="{StaticResource ParchmentPrimary}"/>
+        <Setter Property="FontFamily" Value="{StaticResource FontBody}"/>
+        <Setter Property="FontSize" Value="14"/>
+    </Style>
+
+    <!-- TextBlock defaults -->
+    <Style Selector="TextBlock">
+        <Setter Property="Foreground" Value="{StaticResource ParchmentPrimary}"/>
+    </Style>
+
+    <!-- Button base -->
+    <Style Selector="Button">
+        <Setter Property="Background" Value="{StaticResource EmberBase}"/>
+        <Setter Property="Foreground" Value="{StaticResource StoneBase}"/>
+        <Setter Property="FontWeight" Value="SemiBold"/>
+        <Setter Property="CornerRadius" Value="{StaticResource RadiusMd}"/>
+        <Setter Property="Cursor" Value="Hand"/>
+        <Setter Property="Padding" Value="16,8"/>
+        <Setter Property="RenderTransformOrigin" Value="0.5,0.5"/>
+        <Setter Property="Transitions">
+            <Transitions>
+                <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.12"/>
+                <!-- Hover/Press-Farbwechsel candlelight-eased statt hartem Sprung (§6 Motion). -->
+                <BrushTransition Property="Background" Duration="0:0:0.12"/>
+            </Transitions>
+        </Setter>
+    </Style>
+    
+    <!-- §3: Hover = nur Farbwechsel, kein Scale-Bounce -->
+    <Style Selector="Button:pointerover">
+        <Setter Property="Background" Value="{StaticResource EmberBright}"/>
+    </Style>
+
+    <!-- §3: ein dezenter 1.0→0.98-Press ist erlaubt, candlelight-eased -->
+    <Style Selector="Button:pressed">
+        <Setter Property="Background" Value="{StaticResource EmberDim}"/>
+        <Setter Property="RenderTransform" Value="scale(0.98)"/>
+    </Style>
+
+    <Style Selector="Button:disabled">
+        <Setter Property="Opacity" Value="0.4"/>
+    </Style>
+
+    <!-- Window chrome buttons -->
+    <Style Selector="Button.chrome">
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="Foreground" Value="{StaticResource ParchmentFaint}"/>
+        <Setter Property="CornerRadius" Value="0"/>
+        <Setter Property="Padding" Value="12,4"/>
+        <Setter Property="FontSize" Value="10"/>
+        <Setter Property="MinWidth" Value="36"/>
+    </Style>
+    
+    <Style Selector="Button.chrome:pointerover">
+        <Setter Property="Background" Value="{StaticResource StoneHover}"/>
+        <Setter Property="Foreground" Value="{StaticResource ParchmentPrimary}"/>
+        <Setter Property="RenderTransform" Value=""/>
+    </Style>
+    
+    <Style Selector="Button.chrome.close:pointerover">
+        <Setter Property="Background" Value="{StaticResource StatusDown}"/>
+    </Style>
+
+    <!-- Small inline buttons -->
+    <Style Selector="Button.inline">
+        <Setter Property="Background" Value="{StaticResource EmberDim}"/>
+        <Setter Property="FontSize" Value="12"/>
+        <Setter Property="Padding" Value="10,4"/>
+    </Style>
+    
+    <!-- Status bar buttons -->
+    <Style Selector="Button.statusbar">
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="Foreground" Value="{StaticResource ParchmentFaint}"/>
+        <Setter Property="CornerRadius" Value="0"/>
+        <Setter Property="Padding" Value="4,2"/>
+        <Setter Property="FontSize" Value="12"/>
+    </Style>
+
+    <!-- Border card -->
+    <Style Selector="Border.card">
+        <Setter Property="Background" Value="{StaticResource StoneSurface}"/>
+        <Setter Property="CornerRadius" Value="{StaticResource RadiusMd}"/>
+        <Setter Property="BorderBrush" Value="{StaticResource BorderHairline}"/>
+        <Setter Property="BorderThickness" Value="1"/>
+        <Setter Property="Padding" Value="16"/>
+    </Style>
+
+    <!-- Progress bar -->
+    <Style Selector="ProgressBar">
+        <Setter Property="Background" Value="{StaticResource StoneHover}"/>
+        <Setter Property="Foreground" Value="{StaticResource EmberBase}"/>
+        <Setter Property="CornerRadius" Value="{StaticResource RadiusSm}"/>
+        <Setter Property="Height" Value="6"/>
+    </Style>
+
+    <!-- TextBox -->
+    <Style Selector="TextBox">
+        <Setter Property="Background" Value="{StaticResource StoneSurface}"/>
+        <Setter Property="Foreground" Value="{StaticResource ParchmentPrimary}"/>
+        <Setter Property="BorderBrush" Value="{StaticResource BorderHairline}"/>
+        <Setter Property="BorderThickness" Value="1"/>
+        <Setter Property="CornerRadius" Value="{StaticResource RadiusMd}"/>
+    </Style>
+
+    <!-- ScrollViewer -->
+    <Style Selector="ScrollViewer">
+        <Setter Property="Background" Value="Transparent"/>
+    </Style>
+
+    <!-- ═══ NavRail (§4): aktiv = Stone700-Fläche + Ember-Vertikalkante 3px ═══ -->
+    <Style Selector="Button.nav">
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="Foreground" Value="{StaticResource ParchmentSecondary}"/>
+        <Setter Property="CornerRadius" Value="0"/>
+        <Setter Property="BorderThickness" Value="3,0,0,0"/>
+        <Setter Property="BorderBrush" Value="Transparent"/>
+        <Setter Property="Padding" Value="0,12"/>
+        <Setter Property="HorizontalAlignment" Value="Stretch"/>
+        <Setter Property="HorizontalContentAlignment" Value="Center"/>
+        <Setter Property="FontWeight" Value="Normal"/>
+    </Style>
+    <Style Selector="Button.nav:pointerover /template/ ContentPresenter">
+        <Setter Property="Background" Value="{StaticResource StoneHover}"/>
+    </Style>
+    <Style Selector="Button.nav:pointerover">
+        <Setter Property="Foreground" Value="{StaticResource ParchmentPrimary}"/>
+    </Style>
+    <Style Selector="Button.nav.active">
+        <Setter Property="Background" Value="{StaticResource StoneHover}"/>
+        <Setter Property="BorderBrush" Value="{StaticResource EmberBase}"/>
+        <Setter Property="Foreground" Value="{StaticResource ParchmentPrimary}"/>
+    </Style>
+
+    <!-- ═══ ActionBar primary (§6): solider Ember-Fill, kein Glow ═══ -->
+    <Style Selector="Button.action">
+        <Setter Property="MinWidth" Value="232"/>
+        <Setter Property="Height" Value="52"/>
+        <Setter Property="CornerRadius" Value="{StaticResource RadiusLg}"/>
+        <Setter Property="HorizontalContentAlignment" Value="Center"/>
+        <Setter Property="VerticalContentAlignment" Value="Center"/>
+        <Setter Property="VerticalAlignment" Value="Center"/>
+    </Style>
+
+    <!-- ═══ Ghost-Button (sekundär, flacher Stein) ═══ -->
+    <Style Selector="Button.ghost">
+        <Setter Property="Background" Value="{StaticResource StoneHover}"/>
+        <Setter Property="Foreground" Value="{StaticResource ParchmentSecondary}"/>
+        <Setter Property="FontWeight" Value="Normal"/>
+        <Setter Property="FontSize" Value="12"/>
+        <Setter Property="HorizontalContentAlignment" Value="Center"/>
+    </Style>
+    <Style Selector="Button.ghost:pointerover">
+        <Setter Property="Background" Value="{StaticResource StoneBorder}"/>
+        <Setter Property="Foreground" Value="{StaticResource ParchmentPrimary}"/>
+    </Style>
+
+    <!-- ═══ News-Karte: flacher, klickbarer Listeneintrag (KEIN Ember-Hover — Ember bleibt der Aktion) ═══ -->
+    <Style Selector="Button.newscard">
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="Foreground" Value="{StaticResource ParchmentPrimary}"/>
+        <Setter Property="CornerRadius" Value="0"/>
+        <Setter Property="Padding" Value="2,12"/>
+        <Setter Property="FontWeight" Value="Normal"/>
+        <Setter Property="HorizontalAlignment" Value="Stretch"/>
+        <Setter Property="HorizontalContentAlignment" Value="Left"/>
+        <Setter Property="BorderThickness" Value="0,0,0,1"/>
+        <Setter Property="BorderBrush" Value="{StaticResource BorderHairline}"/>
+    </Style>
+    <Style Selector="Button.newscard:pointerover">
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="RenderTransform" Value="none"/>
+    </Style>
+    <Style Selector="Button.newscard:pointerover /template/ ContentPresenter">
+        <Setter Property="Background" Value="{StaticResource StoneHover}"/>
+    </Style>
+    <Style Selector="Button.newscard:pressed">
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="RenderTransform" Value="none"/>
+    </Style>
+
+    <!-- Kategorie-Chip: kleiner Ember-Tag -->
+    <Style Selector="Border.newstag">
+        <Setter Property="Background" Value="{StaticResource EmberDim}"/>
+        <Setter Property="CornerRadius" Value="1"/>
+        <Setter Property="Padding" Value="5,1"/>
+        <Setter Property="VerticalAlignment" Value="Center"/>
+    </Style>
+    <Style Selector="Border.newstag > TextBlock">
+        <Setter Property="Foreground" Value="{StaticResource ParchmentPrimary}"/>
+    </Style>
+
+    <!-- Letter-spacing für Wordmark/Section-Header -->
+    <Style Selector="TextBlock.tracked">
+        <Setter Property="LetterSpacing" Value="2"/>
+    </Style>
+
+    <!-- ═══ Community-Link (NavRail-Fuß): dezent, faint→Ember bei Hover ═══ -->
+    <Style Selector="Button.navlink">
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="Foreground" Value="{StaticResource ParchmentFaint}"/>
+        <Setter Property="FontSize" Value="11"/>
+        <Setter Property="FontWeight" Value="Normal"/>
+        <Setter Property="Padding" Value="0,4"/>
+        <Setter Property="CornerRadius" Value="0"/>
+        <Setter Property="HorizontalAlignment" Value="Stretch"/>
+        <Setter Property="HorizontalContentAlignment" Value="Center"/>
+    </Style>
+    <Style Selector="Button.navlink:pointerover">
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="Foreground" Value="{StaticResource EmberBase}"/>
+    </Style>
+
+    <!-- ═══ Carved recess (Hermes): gemeißelte Stein-Vertiefung, Tiefe durch Dichte —
+         KEIN Gradient/Glow/Blur. Realm-Status sitzt darin wie eine eingelassene Plakette.
+         Bevel-Illusion: dunkler Inset-Grund + heller Hairline oben/links, dunkler unten/rechts. ═══ -->
+    <Style Selector="Border.recess">
+        <Setter Property="Background" Value="#0B0907"/>           <!-- dunkler als Page = „eingelassen" -->
+        <Setter Property="BorderBrush" Value="#070504"/>           <!-- unten/rechts: Schattenkante -->
+        <Setter Property="BorderThickness" Value="0,0,1,1"/>
+        <Setter Property="CornerRadius" Value="2"/>
+        <Setter Property="Padding" Value="34,22"/>
+    </Style>
+    <!-- innerer Lichtkant (oben/links) als zweite Border-Schicht -->
+    <Style Selector="Border.recessLip">
+        <Setter Property="BorderBrush" Value="#2A2218"/>
+        <Setter Property="BorderThickness" Value="1,1,0,0"/>
+        <Setter Property="CornerRadius" Value="2"/>
+    </Style>
+
+    <!-- ═══ Solid Slab (Hermes): montierte Stein-Plakette für Text auf Art — harte Kanten,
+         #161210 ~92%, Hairline-Rahmen, 2px Radius. „Kontrast durch Dichte, kein Verlauf." ═══ -->
+    <Style Selector="Border.slab">
+        <Setter Property="Background" Value="#EB161210"/>
+        <Setter Property="BorderBrush" Value="{StaticResource BorderHairline}"/>
+        <Setter Property="BorderThickness" Value="1"/>
+        <Setter Property="CornerRadius" Value="2"/>
+        <Setter Property="Padding" Value="20,14"/>
+    </Style>
+
+    <!-- ═══ Expansion-Picker (segmentiert): flacher Stein, aktiv = Ember-Unterkante ═══ -->
+    <Style Selector="ListBox.expansions">
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="BorderThickness" Value="0"/>
+        <Setter Property="Padding" Value="0"/>
+    </Style>
+    <Style Selector="ListBox.expansions ListBoxItem">
+        <Setter Property="Background" Value="{StaticResource StoneSurface}"/>
+        <Setter Property="Foreground" Value="{StaticResource ParchmentSecondary}"/>
+        <Setter Property="BorderBrush" Value="Transparent"/>
+        <Setter Property="BorderThickness" Value="0,0,0,2"/>
+        <Setter Property="CornerRadius" Value="0"/>
+        <Setter Property="Padding" Value="16,8"/>
+        <Setter Property="Cursor" Value="Hand"/>
+        <Setter Property="Transitions">
+            <Transitions>
+                <BrushTransition Property="Background" Duration="0:0:0.12"/>
+                <BrushTransition Property="BorderBrush" Duration="0:0:0.12"/>
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="ListBox.expansions ListBoxItem:pointerover /template/ ContentPresenter">
+        <Setter Property="Background" Value="{StaticResource StoneHover}"/>
+        <Setter Property="TextElement.Foreground" Value="{StaticResource ParchmentPrimary}"/>
+    </Style>
+    <Style Selector="ListBox.expansions ListBoxItem:selected /template/ ContentPresenter">
+        <Setter Property="Background" Value="{StaticResource StoneHover}"/>
+        <Setter Property="TextElement.Foreground" Value="{StaticResource ParchmentPrimary}"/>
+    </Style>
+    <Style Selector="ListBox.expansions ListBoxItem:selected">
+        <Setter Property="BorderBrush" Value="{StaticResource EmberBase}"/>
+        <Setter Property="Foreground" Value="{StaticResource ParchmentPrimary}"/>
+    </Style>
+
+    <!-- ═══ Laternen-Flackern: unregelmäßiger Kerzenlicht-Puls auf dem Brand-Mark (candlelight,
+         kein Bounce/Glow). Leichte, leicht arrhythmische Opacity-Schwankung = lebendiges Licht. ═══ -->
+    <Style Selector="Image.flicker">
+        <Style.Animations>
+            <Animation Duration="0:0:4.0" IterationCount="INFINITE" Easing="SineEaseInOut">
+                <KeyFrame Cue="0%"><Setter Property="Opacity" Value="1.0"/></KeyFrame>
+                <KeyFrame Cue="18%"><Setter Property="Opacity" Value="0.82"/></KeyFrame>
+                <KeyFrame Cue="33%"><Setter Property="Opacity" Value="0.97"/></KeyFrame>
+                <KeyFrame Cue="55%"><Setter Property="Opacity" Value="0.78"/></KeyFrame>
+                <KeyFrame Cue="72%"><Setter Property="Opacity" Value="0.93"/></KeyFrame>
+                <KeyFrame Cue="100%"><Setter Property="Opacity" Value="1.0"/></KeyFrame>
+            </Animation>
+        </Style.Animations>
+    </Style>
+
+    <!-- ═══ Reveal-Choreografie: Hero-Elemente treten beim Start gestaffelt ein wie aufflackerndes
+         Kerzenlicht (reine Opacity-Blende, candlelight-eased, kein Slide/Bounce). Basis-Opacity 0,
+         Animation bringt sie mit gestaffeltem Delay auf 1 (FillMode Forward → bleibt sichtbar). ═══ -->
+    <Style Selector="Control.reveal1, Control.reveal2, Control.reveal3">
+        <Setter Property="Opacity" Value="0"/>
+    </Style>
+    <Style Selector="Control.reveal1">
+        <Style.Animations>
+            <Animation Duration="0:0:0.5" Delay="0:0:0.06" FillMode="Forward" Easing="CubicEaseOut">
+                <KeyFrame Cue="0%"><Setter Property="Opacity" Value="0"/></KeyFrame>
+                <KeyFrame Cue="100%"><Setter Property="Opacity" Value="1"/></KeyFrame>
+            </Animation>
+        </Style.Animations>
+    </Style>
+    <Style Selector="Control.reveal2">
+        <Style.Animations>
+            <Animation Duration="0:0:0.5" Delay="0:0:0.20" FillMode="Forward" Easing="CubicEaseOut">
+                <KeyFrame Cue="0%"><Setter Property="Opacity" Value="0"/></KeyFrame>
+                <KeyFrame Cue="100%"><Setter Property="Opacity" Value="1"/></KeyFrame>
+            </Animation>
+        </Style.Animations>
+    </Style>
+    <Style Selector="Control.reveal3">
+        <Style.Animations>
+            <Animation Duration="0:0:0.5" Delay="0:0:0.34" FillMode="Forward" Easing="CubicEaseOut">
+                <KeyFrame Cue="0%"><Setter Property="Opacity" Value="0"/></KeyFrame>
+                <KeyFrame Cue="100%"><Setter Property="Opacity" Value="1"/></KeyFrame>
+            </Animation>
+        </Style.Animations>
+    </Style>
+
+    <!-- ═══ PulseDot (§9): candlelight-Puls — ruhig, kein nervöses Blinken ═══
+         v1.0.1 (FIX B1): Amplitude deutlich angehoben (1.0→0.18 statt 1.0→0.35), damit der Punkt
+         live als „lebendig" lesbar ist (Baseline war perzeptiv fast statisch, Frame-Diff ~561).
+
+         🔴 CRASH-FIX (v1.0.1) — zwei falsche Wege verworfen, per Launch/Coredump belegt:
+           1. `ScaleTransform.ScaleX/ScaleY` als KeyFrame-Setter → StackOverflow/SIGABRT beim Start
+              (attached-Transform-Setter re-triggert die Style-Auswertung endlos).
+           2. `RenderTransform` (CSS `scale()`) als KeyFrame-Setter → InvalidOperationException
+              „No animator registered for the property RenderTransform" (Avalonia 12 registriert
+              in Style.Animations keinen TransformOperations-Animator für den KeyFrame-Pfad).
+         Robuster, crash-freier Weg (= was v1.0.0 schon nutzte): reiner Opacity-Puls. Opacity hat
+         einen registrierten DoubleAnimator; die Sichtbarkeit kommt aus der starken Amplitude, nicht
+         aus Scale. Dauer 1.8s, SineEaseInOut → weich, atmend. Keine neue Farbe (Fill trägt den Status). -->
+    <Style Selector="Ellipse.pulse">
+        <Style.Animations>
+            <Animation Duration="0:0:1.8" IterationCount="INFINITE" Easing="SineEaseInOut">
+                <KeyFrame Cue="0%"><Setter Property="Opacity" Value="1.0"/></KeyFrame>
+                <KeyFrame Cue="50%"><Setter Property="Opacity" Value="0.18"/></KeyFrame>
+                <KeyFrame Cue="100%"><Setter Property="Opacity" Value="1.0"/></KeyFrame>
+            </Animation>
+        </Style.Animations>
+    </Style>
+
+    <!-- ═══ PulseGlow (v1.0.1, FIX B1): weiche Kerzenlicht-Aura hinter dem Status-Punkt ═══
+         Eine größere, blur-weiche Ellipse in der Statusfarbe, die im selben 1.8s-Takt atmet
+         (Opacity 0.5→0). Zweck: (a) der Puls wird perzeptiv klar „lebendig" — der Halo dehnt/
+         schwindet sichtbar; (b) die animierte Fläche wächst deutlich (der 13px-Punkt allein
+         änderte nur ~561 Pixel → Frame-Diff blieb an der Baseline; der Halo hebt ihn klar darüber).
+         Reiner Opacity-Puls (registrierter Animator, crash-frei) + BlurEffect für die Aura.
+         Keine neue Farbe — Fill = Statusfarbe. Liegt via Grid HINTER dem Punkt, kein Layout-Einfluss. -->
+    <Style Selector="Ellipse.pulseGlow">
+        <Setter Property="Effect"><BlurEffect Radius="9"/></Setter>
+        <Style.Animations>
+            <Animation Duration="0:0:1.8" IterationCount="INFINITE" Easing="SineEaseInOut">
+                <KeyFrame Cue="0%"><Setter Property="Opacity" Value="0.50"/></KeyFrame>
+                <KeyFrame Cue="50%"><Setter Property="Opacity" Value="0.0"/></KeyFrame>
+                <KeyFrame Cue="100%"><Setter Property="Opacity" Value="0.50"/></KeyFrame>
+            </Animation>
+        </Style.Animations>
+    </Style>
+
+</Styles>

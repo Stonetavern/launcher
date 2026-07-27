@@ -1,0 +1,151 @@
+<!-- Stonetavern Launcher — 3-Spalten-Shell (DESIGN-UI-ENTERPRISE §2) -->
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:loc="using:WowLauncher.Localization"
+        xmlns:vm="using:WowLauncher.ViewModels"
+        x:Class="WowLauncher.Views.MainWindow"
+        x:DataType="vm:ShellViewModel"
+        x:Name="Root"
+        Icon="avares://WowLauncher/Assets/stonetavern-logo.png"
+        Title="{loc:Tr App_WindowTitle}"
+        Width="1000" Height="640"
+        CanResize="False"
+        WindowStartupLocation="CenterScreen"
+        WindowDecorations="BorderOnly"
+        Background="{StaticResource StoneBase}">
+
+    <Border BorderBrush="{StaticResource StoneBorder}" BorderThickness="1" ClipToBounds="True">
+    <Grid RowDefinitions="36,*,88">
+
+        <!-- ═══ TitleBar (drag) ═══ -->
+        <Border Grid.Row="0" Background="{StaticResource StoneBase}"
+                BorderBrush="{StaticResource BorderHairline}" BorderThickness="0,0,0,1"
+                PointerPressed="OnTitleBarPressed">
+            <Grid ColumnDefinitions="Auto,*,Auto" Margin="14,0">
+                <!-- Echtes Laternen-Brand-Mark oben links -->
+                <Image Grid.Column="0" Source="avares://WowLauncher/Assets/lantern.png"
+                       Height="22" VerticalAlignment="Center" Classes="flicker"
+                       RenderOptions.BitmapInterpolationMode="HighQuality"/>
+                <!-- Wordmark in der Mitte zentriert -->
+                <TextBlock Grid.Column="1" Text="{Binding Wordmark}" FontSize="13"
+                           FontFamily="{StaticResource FontDisplay}"
+                           Foreground="{StaticResource ParchmentSecondary}"
+                           HorizontalAlignment="Center" VerticalAlignment="Center"
+                           Classes="tracked"/>
+                <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="0">
+                    <Button Content="─" Classes="chrome" Click="OnMinimizeClick"
+                            AutomationProperties.Name="{loc:Tr Titlebar_Minimize}"/>
+                    <Button Content="✕" Classes="chrome close" Click="OnCloseClick"
+                            AutomationProperties.Name="{loc:Tr Titlebar_Close}"/>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <!-- ═══ Body: NavRail | aktive Sektion ═══ -->
+        <Grid Grid.Row="1" ColumnDefinitions="78,*">
+
+            <!-- NavRail -->
+            <Border Grid.Column="0" Background="{StaticResource StoneSurface}"
+                    BorderBrush="{StaticResource BorderHairline}" BorderThickness="0,0,1,0">
+                <Grid RowDefinitions="Auto,*,Auto" Margin="0,12">
+                    <StackPanel Grid.Row="0" Spacing="2">
+                        <Button Classes="nav" Classes.active="{Binding IsPlay}" Command="{Binding GoPlayCommand}"
+                                AutomationProperties.Name="{loc:Tr Nav_PlayA11y}">
+                            <StackPanel Spacing="4">
+                                <TextBlock Text="◈" FontSize="20" HorizontalAlignment="Center"/>
+                                <TextBlock Text="{loc:Tr Nav_Play}" FontSize="11" HorizontalAlignment="Center"/>
+                            </StackPanel>
+                        </Button>
+                        <Button Classes="nav" Classes.active="{Binding IsPatchNotes}" Command="{Binding GoPatchNotesCommand}"
+                                AutomationProperties.Name="{loc:Tr Nav_NotesA11y}">
+                            <StackPanel Spacing="4">
+                                <TextBlock Text="◆" FontSize="18" HorizontalAlignment="Center"/>
+                                <TextBlock Text="{loc:Tr Nav_Notes}" FontSize="11" HorizontalAlignment="Center"/>
+                            </StackPanel>
+                        </Button>
+                        <Button Classes="nav" Classes.active="{Binding IsSettings}" Command="{Binding GoSettingsCommand}"
+                                AutomationProperties.Name="{loc:Tr Nav_OptionsA11y}">
+                            <StackPanel Spacing="4">
+                                <TextBlock Text="⚙" FontSize="19" HorizontalAlignment="Center"/>
+                                <TextBlock Text="{loc:Tr Nav_Options}" FontSize="11" HorizontalAlignment="Center"/>
+                            </StackPanel>
+                        </Button>
+                    </StackPanel>
+
+                    <StackPanel Grid.Row="2" Spacing="2">
+                        <!-- Stonetavern-Laternen-Logo (Brand-Mark unten) -->
+                        <Image Source="avares://WowLauncher/Assets/stonetavern-logo.png"
+                               Width="44" Height="44" HorizontalAlignment="Center"
+                               Margin="0,0,0,10" Opacity="0.92"
+                               RenderOptions.BitmapInterpolationMode="HighQuality"/>
+                        <Button Classes="navlink" Content="{loc:Tr Nav_Forum}" Command="{Binding OpenForumCommand}"
+                                AutomationProperties.Name="{loc:Tr Nav_ForumA11y}"/>
+                        <Button Classes="navlink" Content="{loc:Tr Nav_Discord}" Command="{Binding OpenDiscordCommand}"
+                                AutomationProperties.Name="{loc:Tr Nav_DiscordA11y}"/>
+                        <TextBlock Text="{Binding VersionText}" FontSize="11"
+                                   FontFamily="{StaticResource FontMono}"
+                                   Foreground="{StaticResource ParchmentFaint}" HorizontalAlignment="Center"
+                                   Margin="0,8,0,0"/>
+                    </StackPanel>
+                </Grid>
+            </Border>
+
+            <!-- Aktive Sektion — Cross-Fade beim Wechsel (§6 Motion, candlelight 0.24s) -->
+            <TransitioningContentControl Grid.Column="1" Content="{Binding Current}">
+                <TransitioningContentControl.PageTransition>
+                    <CrossFade Duration="0:0:0.24"/>
+                </TransitioningContentControl.PageTransition>
+            </TransitioningContentControl>
+        </Grid>
+
+        <!-- ═══ ActionBar (global, §6) ═══ -->
+        <Border Grid.Row="2" Background="{StaticResource StoneBase}"
+                BorderBrush="{StaticResource BorderHairline}" BorderThickness="0,1,0,0">
+            <Panel Margin="28,0">
+
+                <!-- READY / UPDATE / ERROR / NO_CLIENT -->
+                <Grid ColumnDefinitions="*,Auto" IsVisible="{Binding !Play.ShowProgress}">
+                    <StackPanel VerticalAlignment="Center" Spacing="3">
+                        <TextBlock Text="{Binding Play.ClientVersionText}" FontSize="13"
+                                   FontFamily="{StaticResource FontMono}"
+                                   Foreground="{StaticResource ParchmentSecondary}"/>
+                        <TextBlock Text="{Binding Play.StatusLine}" FontSize="13"
+                                   Foreground="{StaticResource ParchmentFaint}"/>
+                    </StackPanel>
+                    <Button Grid.Column="1" Classes="action" Command="{Binding Play.PlayCommand}"
+                            IsEnabled="{Binding Play.ActionEnabled}"
+                            AutomationProperties.Name="{Binding Play.ActionPrimaryText}">
+                        <StackPanel Orientation="Horizontal" Spacing="10">
+                            <TextBlock Text="{Binding Play.ActionGlyph}" FontSize="16" VerticalAlignment="Center"/>
+                            <TextBlock Text="{Binding Play.ActionPrimaryText}" FontSize="16" FontWeight="Bold"
+                                       VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </Button>
+                </Grid>
+
+                <!-- DOWNLOADING / VERIFYING — der „20-Minuten-Moment": große Ember-Prozentzahl
+                     als Fokus, Narration + ETA darunter, solider Ember-Fill (kein Shimmer/Glow). -->
+                <Grid ColumnDefinitions="*,Auto" VerticalAlignment="Center"
+                      IsVisible="{Binding Play.ShowProgress}">
+                    <StackPanel Grid.Column="0" Spacing="7" VerticalAlignment="Center">
+                        <Grid ColumnDefinitions="*,Auto">
+                            <TextBlock Text="{Binding Play.StatusLine}" FontSize="14"
+                                       Foreground="{StaticResource ParchmentPrimary}"/>
+                            <TextBlock Grid.Column="1" Text="{Binding Play.DownloadDetail}" FontSize="12"
+                                       FontFamily="{StaticResource FontMono}"
+                                       Foreground="{StaticResource ParchmentSecondary}"/>
+                        </Grid>
+                        <ProgressBar Value="{Binding Play.DownloadProgress}" Minimum="0" Maximum="100" Height="8"/>
+                    </StackPanel>
+                    <TextBlock Grid.Column="1" Text="{Binding Play.DownloadPercentText}"
+                               FontSize="34" FontFamily="{StaticResource FontDisplay}"
+                               Foreground="{StaticResource EmberBase}"
+                               VerticalAlignment="Center" Margin="24,0,0,0" MinWidth="84"
+                               TextAlignment="Right"/>
+                </Grid>
+            </Panel>
+        </Border>
+
+    </Grid>
+    </Border>
+</Window>

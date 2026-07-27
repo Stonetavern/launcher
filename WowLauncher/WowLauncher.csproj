@@ -1,0 +1,66 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <!-- v1.0.1 (Polish-Run 2026-07-17): explizite Version, sonst default 1.0.0.
+         package-linux.sh liest primär <Version> aus dieser csproj (read_version). -->
+    <Version>1.5.1</Version>
+    <AssemblyVersion>1.1.0.0</AssemblyVersion>
+    <FileVersion>1.1.0.0</FileVersion>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!-- Marke auf der Exe: ohne das trägt WowLauncher.exe das generische .NET-Konsolen-Icon, im
+         Explorer, in der Taskleiste und im Download-Ordner. Multi-Resolution (16..256), aus
+         Assets/stonetavern-logo.png erzeugt - keine Blizzard-Grafik. Das Fenster-Icon setzen die
+         Shells zusätzlich per Window.Icon, das ist eine andere Stelle. -->
+    <ApplicationIcon>Assets\stonetavern.ico</ApplicationIcon>
+    <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
+    <!-- Native NuGet-.pdb (libSkiaSharp.pdb ~84 MB, libHarfBuzzSharp.pdb ~20 MB) NICHT ins
+         Release kopieren — managed Symbols sind via DebugType=embedded eh eingebettet. -->
+    <AllowedReferenceRelatedFileExtensions>none</AllowedReferenceRelatedFileExtensions>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Folder Include="Models\" />
+    <AvaloniaResource Include="Assets\**" Exclude="Assets\Fonts\licenses\**;Assets\Backgrounds\*.md" />
+    <!-- OFL-Lizenzen: im Repo/Release als Compliance-Doku, nicht ins Binary embedden -->
+    <None Include="Assets\Fonts\licenses\**" CopyToOutputDirectory="PreserveNewest" />
+    <!-- UI-Sprachkataloge: bewusst EmbeddedResource statt Satelliten-Assemblies. Satelliten
+         scheitern in einem PublishSingleFile-Bundle STILL auf Englisch zurück (CORE §3: grün ist
+         kein Beweis); eingebettete JSONs liegen garantiert im Binary. -->
+    <EmbeddedResource Include="Localization\lang\*.json" />
+    <InternalsVisibleTo Include="WowLauncher.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia" Version="12.0.5" />
+    <PackageReference Include="Avalonia.Desktop" Version="12.0.5" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="12.0.5" />
+    <PackageReference Include="Avalonia.Fonts.Inter" Version="12.0.5" />
+    <PackageReference Include="AvaloniaUI.DiagnosticsSupport" Version="2.2.3">
+      <IncludeAssets Condition="'$(Configuration)' != 'Debug'">None</IncludeAssets>
+      <PrivateAssets Condition="'$(Configuration)' != 'Debug'">All</PrivateAssets>
+    </PackageReference>
+    <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.1" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.9" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.9" />
+    <PackageReference Include="Microsoft.Extensions.Http" Version="10.0.9" />
+    <!-- DPAPI for at-rest encryption of the launcher session token on Windows (OS-native, user-bound,
+         MIT/OSS). Managed wrapper over the system crypt32.dll — no native asset to self-extract, so it
+         does not trip the Defender dropper heuristic. No-op path guards keep Linux/macOS off it. -->
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="10.0.10" />
+    <PackageReference Include="Serilog" Version="4.3.1" />
+    <PackageReference Include="Serilog.Extensions.Hosting" Version="10.0.0" />
+    <PackageReference Include="Serilog.Sinks.Console" Version="6.1.1" />
+    <PackageReference Include="Serilog.Sinks.File" Version="7.0.0" />
+  </ItemGroup>
+
+  <!-- Strip native NuGet .pdb (libSkiaSharp.pdb ~84 MB etc.) from the publish output —
+       they bloat the release by ~100 MB and are never needed at runtime. -->
+  <Target Name="RemoveNativePdbsFromPublish" AfterTargets="Publish">
+    <ItemGroup>
+      <_PublishedPdb Include="$(PublishDir)**\*.pdb" />
+    </ItemGroup>
+    <Delete Files="@(_PublishedPdb)" />
+  </Target>
+</Project>

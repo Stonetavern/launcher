@@ -1,0 +1,949 @@
+<!--
+  Stonetavern Launcher — v3 skin ("Battle.net" layout, warm stone identity).
+
+  Four zones: Row0 titlebar + top-nav; Row1 realm rail | hero | friends sidebar; Row2 action bar.
+  Same ViewModels as v1/v2 — only the skin differs. Started with the v3 command-line switch.
+  All new visible text is English (VOICE.md): no em dashes, no apostrophes. Colours are the shared
+  Stone / Parchment / Ember / Status tokens (Styles.axaml); presence + top-nav selectors live in
+  Styles.v3.axaml. v1 (MainWindow) and v2 (ShellV2Window) are untouched.
+-->
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:loc="using:WowLauncher.Localization"
+        xmlns:vm="using:WowLauncher.ViewModels"
+        xmlns:m="using:WowLauncher.Models"
+        xmlns:views="using:WowLauncher.Views"
+        xmlns:imaging="using:Avalonia.Media.Imaging"
+        xmlns:sys="clr-namespace:System;assembly=System.Runtime"
+        x:Class="WowLauncher.Views.ShellV3Window"
+        x:DataType="vm:ShellViewModel"
+        x:Name="Root"
+        Icon="avares://WowLauncher/Assets/stonetavern-logo.png"
+        Title="{loc:Tr App_WindowTitleShort}"
+        Width="1180" Height="760" MinWidth="1040" MinHeight="680"
+        WindowStartupLocation="CenterScreen"
+        WindowDecorations="None"
+        ExtendClientAreaToDecorationsHint="True"
+        Background="{StaticResource StoneBase}">
+
+    <!-- x:Name="Shell" + the "live" class are the motion gate: the code-behind removes the class
+         whenever the window is minimised or hidden. Every endless animation this shell uses is
+         selectored as a descendant of Border.live (kenburns transition, hearth, PLAY breathe,
+         v3flicker, v3pulse, v3pulseGlow — the list is enumerated in the Styles.v3.axaml motion
+         header), so dropping the class unmatches all of them at once and also stops the Ken Burns
+         timer. The v3-prefixed flicker/pulse classes exist for exactly this: the unprefixed ones in
+         Styles.axaml belong to v1/v2 and are not gated. A launcher must not paint frames nobody is
+         looking at. -->
+    <Border x:Name="Shell" Classes="live"
+            BorderBrush="{StaticResource StoneBorder}" BorderThickness="1" ClipToBounds="True">
+    <Grid RowDefinitions="48,*,72">
+
+        <!-- ═══════════ Row0 · TitleBar + TopNav (drag) ═══════════ -->
+        <Border Grid.Row="0" Background="{StaticResource StoneBase}"
+                BorderBrush="{StaticResource BorderHairline}" BorderThickness="0,0,0,1"
+                PointerPressed="OnTitleBarPressed">
+            <Grid ColumnDefinitions="Auto,Auto,Auto,*,Auto,Auto">
+
+                <!-- macOS-only left padding so the native traffic lights do not overlap the wordmark.
+                     Hidden on Windows/Linux (custom chrome sits at the right instead). -->
+                <Border Grid.Column="0" x:Name="MacSpacer" Width="72" IsVisible="False"/>
+
+                <!-- Brand: hanging lantern + wordmark (the flame is the only moving thing). -->
+                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="10"
+                            VerticalAlignment="Center" Margin="16,0,4,0">
+                    <Image Source="avares://WowLauncher/Assets/lantern.png"
+                           Height="24" VerticalAlignment="Center" Classes="v3flicker"
+                           RenderOptions.BitmapInterpolationMode="HighQuality"/>
+                    <TextBlock Text="{Binding Wordmark}" FontSize="15"
+                               FontFamily="{StaticResource FontDisplay}"
+                               Foreground="{StaticResource ParchmentSecondary}"
+                               VerticalAlignment="Center" Classes="tracked"/>
+                </StackPanel>
+
+                <!-- TopNav tabs (active = ember underline). No SHOP tab. -->
+                <StackPanel Grid.Column="2" Orientation="Horizontal" Margin="20,0,0,0">
+                    <Button Classes="v3tab" Classes.active="{Binding IsPlay}"
+                            Command="{Binding GoPlayCommand}" Content="{loc:Tr Nav_Home}"
+                            AutomationProperties.Name="{loc:Tr Nav_Home}"/>
+                    <Button Classes="v3tab" Classes.active="{Binding IsPatchNotes}"
+                            Command="{Binding GoPatchNotesCommand}" Content="{loc:Tr Nav_PatchNotesUpper}"
+                            AutomationProperties.Name="{loc:Tr Nav_NotesA11y}"/>
+                    <Button Classes="v3tab" Classes.active="{Binding IsArmory}"
+                            Command="{Binding GoArmoryCommand}" Content="{loc:Tr Nav_Armory}"
+                            AutomationProperties.Name="{loc:Tr Nav_ArmoryA11y}"/>
+                </StackPanel>
+
+                <!-- Account. Opens the ACCOUNT panel, not settings: a player pressing this wants to
+                     know who is signed in, and settings could not answer that. The disc shows the
+                     first letter of the account instead of a hardcoded "S", so a signed-out launcher
+                     no longer looks like a signed-in one. -->
+                <StackPanel Grid.Column="4" Orientation="Horizontal" Spacing="4"
+                            VerticalAlignment="Center" Margin="0,0,6,0">
+                    <Button Classes="v3account" Command="{Binding GoAccountCommand}"
+                            AutomationProperties.Name="{loc:Tr V3_Account}">
+                        <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                            <Grid Width="22" Height="22">
+                                <Ellipse Width="22" Height="22" Fill="{StaticResource StoneHover}"
+                                         Stroke="{StaticResource StoneBorder}" StrokeThickness="1"/>
+                                <TextBlock Text="{Binding AccountInitial}"
+                                           FontFamily="{StaticResource FontDisplay}" FontSize="12"
+                                           Foreground="{StaticResource ParchmentSecondary}"
+                                           HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </Grid>
+                            <TextBlock Text="{Binding AccountButtonText}" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </Button>
+                </StackPanel>
+
+                <!-- Custom window chrome (hidden on macOS → native traffic lights). -->
+                <StackPanel Grid.Column="5" x:Name="ChromeButtons" Orientation="Horizontal" Spacing="0">
+                    <Button Content="─" Classes="chrome" Click="OnMinimizeClick"
+                            AutomationProperties.Name="{loc:Tr Titlebar_Minimize}"/>
+                    <Button Content="□" Classes="chrome" Click="OnMaximizeClick"
+                            AutomationProperties.Name="{loc:Tr Titlebar_Maximize}"/>
+                    <Button Content="✕" Classes="chrome close" Click="OnCloseClick"
+                            AutomationProperties.Name="{loc:Tr Titlebar_Close}"/>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <!-- ═══════════ Row1 · Rail | Content | Friends ═══════════ -->
+        <Grid Grid.Row="1" ColumnDefinitions="72,*,Auto,Auto">
+
+            <!-- ─── Realm rail (switcher: Elwynn / Barrens + custom add) ─── -->
+            <Border Grid.Column="0" Background="{StaticResource StoneSurface}"
+                    BorderBrush="{StaticResource BorderHairline}" BorderThickness="0,0,1,0">
+                <Grid RowDefinitions="Auto,*,Auto" Margin="0,12">
+                    <StackPanel Grid.Row="0" Spacing="0">
+                        <ListBox Classes="v3rail" ItemsSource="{Binding Realms}"
+                                 SelectedItem="{Binding SelectedRealm, Mode=TwoWay}"
+                                 IsEnabled="{Binding Play.CanSwitchContext}"
+                                 AutomationProperties.Name="{loc:Tr V3_Realm_A11y}">
+                            <ListBox.ItemTemplate>
+                                <DataTemplate x:DataType="m:RealmEntry">
+                                    <StackPanel Spacing="3" VerticalAlignment="Center">
+                                        <TextBlock Text="{Binding ShortTag}" FontSize="22"
+                                                   FontFamily="{StaticResource FontDisplay}"
+                                                   HorizontalAlignment="Center"/>
+                                        <TextBlock Text="{Binding Name}" FontSize="9"
+                                                   Classes="tracked" HorizontalAlignment="Center"
+                                                   Foreground="{StaticResource ParchmentFaint}"/>
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+                        <Button Classes="v3railadd" Content="+" Command="{Binding OpenAddRealmCommand}"
+                                AutomationProperties.Name="{loc:Tr V3_AddRealm_A11y}"/>
+                    </StackPanel>
+
+                    <!-- Brand mark anchored at the rail foot. -->
+                    <Image Grid.Row="2" Source="avares://WowLauncher/Assets/stonetavern-logo.png"
+                           Width="40" Height="40" HorizontalAlignment="Center" Opacity="0.9"
+                           RenderOptions.BitmapInterpolationMode="HighQuality"/>
+                </Grid>
+            </Border>
+
+            <!-- ─── Content: hero (HOME) or patch-notes list ─── -->
+            <Panel Grid.Column="1">
+
+                <!-- ═══ HERO (HOME) — a carved stage: key-art or stone backdrop, one anchored
+                     info block bottom-left (realm = hero, era = subtitle). ═══ -->
+                <!-- ClipToBounds: the key-art below is slowly scaled past the stage edge (Ken Burns),
+                     and without the clip it would spill over the rail and the friends sidebar.
+                     Classes.shown drives the section cross-fade (Styles.v3.axaml, Panel.xfade). -->
+                <Panel IsVisible="{Binding IsPlay}" ClipToBounds="True"
+                       Classes="xfade" Classes.shown="{Binding IsPlay}">
+
+                    <!-- Base + carved stone stage backdrop. Fills the void when no key-art is
+                         delivered (Border.recess / recessLip vocabulary from Styles.axaml), so the
+                         stage reads as hewn stone, never a black hole. Covered by the art when present. -->
+                    <Border Background="{StaticResource StoneBase}"/>
+                    <Border Margin="24" Classes="recess">
+                        <Border Classes="recessLip" Margin="-1"/>
+                    </Border>
+
+                    <!-- Realm key-art (realm-keyed, cover; 240ms cross-fade). Null today → the carved
+                         stone stage above is the backdrop, never the era text placeholder. -->
+                    <TransitioningContentControl x:Name="HeroArt" Classes="kenburns"
+                                                RenderTransformOrigin="50%,55%"
+                                                Content="{Binding RealmHeroArt}">
+                        <TransitioningContentControl.PageTransition>
+                            <CrossFade Duration="0:0:0.24"/>
+                        </TransitioningContentControl.PageTransition>
+                        <TransitioningContentControl.ContentTemplate>
+                            <DataTemplate x:DataType="imaging:Bitmap">
+                                <Image Source="{Binding}" Stretch="UniformToFill" Opacity="0.82"
+                                       RenderOptions.BitmapInterpolationMode="HighQuality"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </DataTemplate>
+                        </TransitioningContentControl.ContentTemplate>
+                    </TransitioningContentControl>
+
+                    <!-- Legibility: a flat overall wash + a warm directional vignette that deepens
+                         toward the bottom-left where the info block sits (carved density, not decor). -->
+                    <Border Background="#59100D0A"/>
+                    <Border>
+                        <Border.Background>
+                            <LinearGradientBrush StartPoint="0%,100%" EndPoint="80%,4%">
+                                <GradientStop Offset="0.0" Color="#F20A0705"/>
+                                <GradientStop Offset="0.5" Color="#990A0705"/>
+                                <GradientStop Offset="1.0" Color="#000A0705"/>
+                            </LinearGradientBrush>
+                        </Border.Background>
+                    </Border>
+
+                    <!-- Hearth: firelight pooling along the foot of the stage, breathing on the same
+                         irregular 4s cue shape as the lantern in the titlebar, so both read as one
+                         flame in the room rather than two effects. EmberDim at low alpha (peak ~24%
+                         at the very bottom edge, gone 170px up) — warm light, not the ember accent:
+                         nothing here competes with PLAY. Not hit-testable, no layout effect. -->
+                    <Border Classes="hearth" Height="170" Width="560" HorizontalAlignment="Left" VerticalAlignment="Bottom"
+                            IsHitTestVisible="False">
+                        <Border.Background>
+                            <!-- Pooled, not banded: the light has a source (low and left, under the
+                                 composition) and falls off in every direction from it. A full-width
+                                 horizontal band reads as an overlay; a pool reads as a fire. -->
+                            <RadialGradientBrush Center="42%,100%" GradientOrigin="42%,100%"
+                                                 RadiusX="62%" RadiusY="100%">
+                                <GradientStop Offset="0.0" Color="#428A5523"/>
+                                <GradientStop Offset="0.45" Color="#1C8A5523"/>
+                                <GradientStop Offset="1.0" Color="#008A5523"/>
+                            </RadialGradientBrush>
+                        </Border.Background>
+                    </Border>
+
+                    <!-- One anchored composition, bottom-left. -->
+                    <Grid Margin="44,28" RowDefinitions="*,Auto">
+
+                        <StackPanel Grid.Row="0" HorizontalAlignment="Left" VerticalAlignment="Bottom"
+                                    MaxWidth="640" Spacing="22">
+
+                            <!-- Realm = the hero. Big display headline + live heartbeat inline. -->
+                            <StackPanel Spacing="10" Classes="reveal1">
+                                <StackPanel Orientation="Horizontal" Spacing="20">
+                                    <!-- The realm name cross-fades with its key-art instead of
+                                         snapping, so switching realms reads as one change of place
+                                         and not as two unrelated repaints. Same 240ms as the art. -->
+                                    <TransitioningContentControl Content="{Binding SelectedRealm.NameUpper}"
+                                                                 VerticalAlignment="Center" ClipToBounds="True">
+                                        <!-- Realm switch: the name does not snap. It cross-fades AND rises
+                                             a line-height into place - the same opacity-led "rise out of the
+                                             stone" language as the section xfade and the reveal cues, not a
+                                             carousel slide (the motion header forbids that). Vertical, so the
+                                             travel is one line, never the full stage. 0.24s to match the
+                                             key-art cross-fade below, so the name and its art read as one
+                                             change of place and not two repaints. -->
+                                        <TransitioningContentControl.PageTransition>
+                                            <CompositePageTransition>
+                                                <CrossFade Duration="0:0:0.24"/>
+                                                <PageSlide Duration="0:0:0.24" Orientation="Vertical"
+                                                           SlideInEasing="CubicEaseOut" SlideOutEasing="CubicEaseOut"/>
+                                            </CompositePageTransition>
+                                        </TransitioningContentControl.PageTransition>
+                                        <TransitioningContentControl.ContentTemplate>
+                                            <DataTemplate x:DataType="sys:String">
+                                                <TextBlock Text="{Binding}"
+                                                           FontFamily="{StaticResource FontDisplay}" FontSize="76"
+                                                           LineHeight="80"
+                                                           Foreground="{StaticResource ParchmentPrimary}"
+                                                           VerticalAlignment="Center"/>
+                                            </DataTemplate>
+                                        </TransitioningContentControl.ContentTemplate>
+                                    </TransitioningContentControl>
+                                    <Grid Width="24" Height="24" VerticalAlignment="Center">
+                                        <Ellipse Width="24" Height="24" Classes="v3pulseGlow"
+                                                 Fill="{StaticResource StatusOk}" IsVisible="{Binding Play.RealmOnline}"/>
+                                        <Ellipse Width="12" Height="12" Classes="v3pulse"
+                                                 Fill="{StaticResource StatusOk}" IsVisible="{Binding Play.RealmOnline}"/>
+                                        <Ellipse Width="12" Height="12"
+                                                 Fill="{StaticResource StatusDown}" IsVisible="{Binding Play.RealmOffline}"/>
+                                        <Ellipse Width="24" Height="24" Classes="v3pulseGlow"
+                                                 Fill="{StaticResource ParchmentFaint}" IsVisible="{Binding Play.RealmChecking}"/>
+                                        <Ellipse Width="12" Height="12" Classes="v3pulse"
+                                                 Fill="{StaticResource ParchmentFaint}" IsVisible="{Binding Play.RealmChecking}"/>
+                                    </Grid>
+                                </StackPanel>
+
+                                <!-- Which client this realm needs (era tag + exact version/build) +
+                                     realm status + preparing tag. The version comes from the REALM, not
+                                     from the picker: "Vanilla" alone stopped being an answer once it
+                                     meant either 1.12.1 (5875) or 1.14.2 (42597). -->
+                                <StackPanel Orientation="Horizontal" Spacing="12" VerticalAlignment="Center">
+                                    <Border Classes="newstag" VerticalAlignment="Center">
+                                        <TextBlock Text="{Binding SelectedRealm.Client.Era}"
+                                                   FontSize="10" Classes="tracked"/>
+                                    </Border>
+                                    <TextBlock Text="{Binding SelectedRealm.Client.PreciseLabel}"
+                                               FontSize="12" FontFamily="{StaticResource FontMono}"
+                                               Foreground="{StaticResource ParchmentSecondary}"
+                                               VerticalAlignment="Center"/>
+                                    <TextBlock Text="·" FontSize="13" Foreground="{StaticResource ParchmentFaint}"
+                                               VerticalAlignment="Center"/>
+                                    <TextBlock Text="{Binding Play.RealmStatusText}" FontSize="13"
+                                               Foreground="{StaticResource EmberBright}"
+                                               VerticalAlignment="Center"/>
+                                    <Border Classes="newstag" VerticalAlignment="Center"
+                                            IsVisible="{Binding !SelectedRealm.IsLive}">
+                                        <TextBlock Text="{loc:Tr V3_Preparing}" FontSize="9" Classes="tracked"/>
+                                    </Border>
+                                    <!-- The realm names a build via ClientKey; if that build is not
+                                         shippable yet (TBC/Wrath) say so calmly instead of pointing the
+                                         player at a client that will never download. -->
+                                    <Border Classes="newstag" VerticalAlignment="Center"
+                                            IsVisible="{Binding !SelectedRealm.ClientAvailable}">
+                                        <TextBlock Text="{loc:Tr V3_ComingSoon}" FontSize="9" Classes="tracked"/>
+                                    </Border>
+                                </StackPanel>
+
+                                <!-- The realm decides which client(s) it speaks (owner decision
+                                     2026-07-21) - most realms offer exactly one, so this only appears
+                                     for a realm that offers more than one (RealmEntry.HasMultipleClients,
+                                     Elwynn: 1.12.1 + 1.14.2). No large picker, no "LOAD NEW ERA": a small
+                                     row next to the badge above, same ember-underline language as the
+                                     top-nav tabs, scaled down. -->
+                                <ListBox Classes="v3clienttoggle" HorizontalAlignment="Left"
+                                         IsVisible="{Binding SelectedRealm.HasMultipleClients}"
+                                         ItemsSource="{Binding SelectedRealm.AvailableClients}"
+                                         SelectedItem="{Binding ActiveRealmClient, Mode=TwoWay}"
+                                         IsEnabled="{Binding Play.CanSwitchContext}"
+                                         AutomationProperties.Name="{loc:Tr V3_ClientToggle_A11y}">
+                                    <ListBox.ItemsPanel>
+                                        <ItemsPanelTemplate>
+                                            <StackPanel Orientation="Horizontal" Spacing="0"/>
+                                        </ItemsPanelTemplate>
+                                    </ListBox.ItemsPanel>
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate x:DataType="m:ClientVersion">
+                                            <TextBlock Text="{Binding ShortLabel}"/>
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
+                            </StackPanel>
+
+                            <!-- PLAY, same anchored block. -->
+                            <StackPanel Spacing="16" Classes="reveal2">
+                                <!-- Classes.breathe: the resting ember swell runs only while the
+                                     action is actually actionable. A disabled PLAY must keep its
+                                     0.4 dimming, and an infinite opacity animation would override it. -->
+                                <Button Classes="action" Classes.breathe="{Binding Play.ActionEnabled}"
+                                        Command="{Binding Play.PlayCommand}"
+                                        IsEnabled="{Binding Play.ActionEnabled}" HorizontalAlignment="Left"
+                                        AutomationProperties.Name="{Binding Play.ActionPrimaryText}">
+                                    <StackPanel Orientation="Horizontal" Spacing="10">
+                                        <TextBlock Text="{Binding Play.ActionGlyph}" FontSize="16" VerticalAlignment="Center"/>
+                                        <TextBlock Text="{Binding Play.ActionPrimaryText}" FontSize="16" FontWeight="Bold"
+                                                   VerticalAlignment="Center"/>
+                                    </StackPanel>
+                                </Button>
+                                <!-- "I already have WoW": point the launcher at an existing install instead
+                                     of downloading gigabytes. Only shown when there is no usable client yet
+                                     (ShowLocate = NoClient / EraTransition / DownloadError / Paused). -->
+                                <Button Classes="ghost" Content="{loc:Tr Play_Locate}"
+                                        Command="{Binding Play.LocateExistingClientCommand}"
+                                        IsVisible="{Binding Play.ShowLocate}" HorizontalAlignment="Left"
+                                        AutomationProperties.Name="{loc:Tr Play_Locate_A11y}"/>
+                            </StackPanel>
+                        </StackPanel>
+
+                        <!-- Subordinate patch-notes ticker pinned to the very bottom of the stage. -->
+                        <StackPanel Grid.Row="1" Spacing="9" Classes="reveal3" Margin="0,22,0,0">
+                            <TextBlock Text="{loc:Tr Nav_PatchNotesUpper}" FontSize="10" FontWeight="SemiBold"
+                                       Classes="tracked" Foreground="{StaticResource ParchmentSecondary}"/>
+                            <!-- Ohne Feed stand hier eine nackte Ueberschrift ueber Nichts. Ein Satz ist
+                                 ehrlicher als erfundene Meldungen (der Offline-Fallback erfindet keine mehr). -->
+                            <TextBlock Text="{loc:Tr V3_NoPatchNotes}" FontSize="12"
+                                       Foreground="{StaticResource ParchmentFaint}"
+                                       IsVisible="{Binding !Play.News.Count}"/>
+                            <!-- Die Karten laufen ueber die Buehne hinaus. Ohne Kante sah die letzte Karte
+                                 nach Overflow-Fehler aus (mitten im Wort abgeschnitten); die weiche Kante
+                                 macht daraus ein Weiter-rechts. Reine Deckkraft, keine neue Farbe. -->
+                            <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
+                                <ScrollViewer.OpacityMask>
+                                    <LinearGradientBrush StartPoint="0%,0%" EndPoint="100%,0%">
+                                        <GradientStop Offset="0.0" Color="#FFFFFFFF"/>
+                                        <GradientStop Offset="0.88" Color="#FFFFFFFF"/>
+                                        <GradientStop Offset="1.0" Color="#00FFFFFF"/>
+                                    </LinearGradientBrush>
+                                </ScrollViewer.OpacityMask>
+                            <ItemsControl ItemsSource="{Binding Play.News}">
+                                    <ItemsControl.ItemsPanel>
+                                        <ItemsPanelTemplate>
+                                            <StackPanel Orientation="Horizontal" Spacing="12"/>
+                                        </ItemsPanelTemplate>
+                                    </ItemsControl.ItemsPanel>
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate x:DataType="m:NewsItem">
+                                            <Button Classes="v3patchcard"
+                                                    Command="{Binding $parent[ItemsControl].((vm:ShellViewModel)DataContext).Play.OpenNewsCommand}"
+                                                    CommandParameter="{Binding}">
+                                                <StackPanel Spacing="6">
+                                                    <StackPanel Orientation="Horizontal" Spacing="8">
+                                                        <TextBlock Text="{Binding DateShort}" FontSize="10"
+                                                                   FontFamily="{StaticResource FontMono}"
+                                                                   Foreground="{StaticResource ParchmentFaint}"/>
+                                                        <Border Classes="newstag">
+                                                            <TextBlock Text="{Binding CategoryTag}" FontSize="9" Classes="tracked"/>
+                                                        </Border>
+                                                    </StackPanel>
+                                                    <TextBlock Text="{Binding Title}" FontSize="13" TextWrapping="Wrap"
+                                                               MaxLines="2" TextTrimming="CharacterEllipsis"
+                                                               Foreground="{StaticResource ParchmentPrimary}"/>
+                                                </StackPanel>
+                                            </Button>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </ScrollViewer>
+                        </StackPanel>
+                    </Grid>
+                </Panel>
+
+                <!-- PATCH NOTES (full list) -->
+                <Grid Background="{StaticResource StoneBase}" IsVisible="{Binding IsPatchNotes}"
+                      Classes="xfade" Classes.shown="{Binding IsPatchNotes}">
+                    <!-- Stretch statt Left: die Karten sind auf Stretch gestylt, aber ein linksbuendiges
+                         Raster gab ihnen nur ihre Wunschbreite und liess rechts die halbe Seite schwarz. -->
+                    <Grid Margin="40,30" RowDefinitions="Auto,*" MaxWidth="820" HorizontalAlignment="Stretch">
+                        <TextBlock Grid.Row="0" Text="{loc:Tr Nav_PatchNotesUpper}" FontSize="13" FontWeight="SemiBold"
+                                   Classes="tracked" Foreground="{StaticResource ParchmentSecondary}"
+                                   Margin="0,0,0,16"/>
+                        <TextBlock Grid.Row="1" Text="{loc:Tr V3_NoPatchNotes}" FontSize="13"
+                                   VerticalAlignment="Top" Foreground="{StaticResource ParchmentFaint}"
+                                   IsVisible="{Binding !Play.News.Count}"/>
+                        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+                            <ItemsControl ItemsSource="{Binding Play.News}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate x:DataType="m:NewsItem">
+                                        <Button Classes="newscard"
+                                                Command="{Binding $parent[ItemsControl].((vm:ShellViewModel)DataContext).Play.OpenNewsCommand}"
+                                                CommandParameter="{Binding}">
+                                            <StackPanel Spacing="5">
+                                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                                    <TextBlock Text="{Binding DateShort}" FontSize="11"
+                                                               FontFamily="{StaticResource FontMono}"
+                                                               Foreground="{StaticResource ParchmentFaint}"/>
+                                                    <Border Classes="newstag">
+                                                        <TextBlock Text="{Binding CategoryTag}" FontSize="9" Classes="tracked"/>
+                                                    </Border>
+                                                </StackPanel>
+                                                <TextBlock Text="{Binding Title}" FontSize="14" TextWrapping="Wrap"
+                                                           Foreground="{StaticResource ParchmentPrimary}"/>
+                                                <TextBlock Text="{Binding Summary}" FontSize="12" TextWrapping="Wrap"
+                                                           Foreground="{StaticResource ParchmentSecondary}"/>
+                                            </StackPanel>
+                                        </Button>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </ScrollViewer>
+                    </Grid>
+                </Grid>
+
+                <!-- ═══ ARMORY — the characters of the signed-in account on the selected realm.
+                     Left: a narrow chooser whose only ornament is the class-coloured edge.
+                     Right: the selected character as a ledger (identity, score, numbers, lockouts).
+                     No paperdoll: item icons would mean Blizzard art in the binary, which is a hard
+                     no (CLAUDE.md §10). The score and every display name are computed server side. ═══ -->
+                <Grid Background="{StaticResource StoneBase}" IsVisible="{Binding IsArmory}"
+                      Classes="xfade" Classes.shown="{Binding IsArmory}">
+
+                    <!-- Roster present -->
+                    <Grid ColumnDefinitions="236,*" Margin="0" IsVisible="{Binding Armory.HasCharacters}">
+
+                        <!-- ── Character chooser ── -->
+                        <Border Grid.Column="0" BorderBrush="{StaticResource BorderHairline}"
+                                BorderThickness="0,0,1,0">
+                            <Grid RowDefinitions="Auto,*" Margin="16,26,12,16">
+                                <TextBlock Grid.Row="0" Text="{loc:Tr Armory_Characters}"
+                                           Classes="v3caption tracked" Margin="4,0,0,12"/>
+                                <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+                                    <ListBox Classes="v3chars" ItemsSource="{Binding Armory.Characters}"
+                                             SelectedItem="{Binding Armory.Selected, Mode=TwoWay}"
+                                             AutomationProperties.Name="{loc:Tr Armory_Characters_A11y}">
+                                        <ListBox.ItemTemplate>
+                                            <DataTemplate x:DataType="m:ArmoryCharacter">
+                                                <Grid ColumnDefinitions="2,*,Auto" Height="46">
+                                                    <!-- Class colour is the identity marker -->
+                                                    <Border Grid.Column="0" Background="{Binding Accent}"/>
+                                                    <StackPanel Grid.Column="1" Spacing="2" Margin="12,0,0,0"
+                                                                VerticalAlignment="Center">
+                                                        <TextBlock Text="{Binding Name}" FontSize="14"
+                                                                   FontFamily="{StaticResource FontDisplay}"
+                                                                   Foreground="{Binding Accent}"/>
+                                                        <TextBlock Text="{Binding Subtitle}" FontSize="11"
+                                                                   Foreground="{StaticResource ParchmentFaint}"/>
+                                                    </StackPanel>
+                                                    <Ellipse Grid.Column="2" Width="7" Height="7" Margin="0,0,10,0"
+                                                             VerticalAlignment="Center"
+                                                             Classes="presence"
+                                                             Classes.ingame="{Binding Online}"/>
+                                                </Grid>
+                                            </DataTemplate>
+                                        </ListBox.ItemTemplate>
+                                    </ListBox>
+                                </ScrollViewer>
+                            </Grid>
+                        </Border>
+
+                        <!-- ── Selected character: the ledger ── -->
+                        <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto"
+                                      IsVisible="{Binding Armory.HasSelection}">
+                            <!-- Fixed measure, not MaxWidth: the ledger is a COLUMN of aligned rows, so
+                                 every row must share one width. Sized to content it collapsed to the
+                                 widest label and the lockout names ran straight into their dates. -->
+                            <StackPanel Margin="34,26,34,26" Width="440" HorizontalAlignment="Left">
+
+                                <!-- Identity -->
+                                <StackPanel Orientation="Horizontal" Spacing="10">
+                                    <TextBlock Text="{Binding Armory.Selected.Name}" FontSize="30"
+                                               FontFamily="{StaticResource FontDisplay}"
+                                               Foreground="{Binding Armory.Selected.Accent}"
+                                               VerticalAlignment="Center"/>
+                                    <Ellipse Width="8" Height="8" VerticalAlignment="Center"
+                                             Classes="presence"
+                                             Classes.ingame="{Binding Armory.Selected.Online}"/>
+                                </StackPanel>
+                                <TextBlock Text="{Binding Armory.Selected.Subtitle}" FontSize="13"
+                                           Foreground="{StaticResource ParchmentSecondary}" Margin="0,4,0,0"/>
+                                <TextBlock Text="{Binding Armory.Selected.GuildLine}" FontSize="12"
+                                           IsVisible="{Binding Armory.Selected.HasGuild}"
+                                           Foreground="{StaticResource ParchmentFaint}" Margin="0,3,0,0"/>
+
+                                <Border Classes="v3rule"/>
+
+                                <!-- Score: the one ember number on the page -->
+                                <StackPanel Orientation="Horizontal" Spacing="16">
+                                    <TextBlock Text="{Binding Armory.Selected.ScoreText}" Classes="v3score"/>
+                                    <StackPanel VerticalAlignment="Center" Spacing="4">
+                                        <TextBlock Text="{loc:Tr Armory_Score}" Classes="v3caption tracked"/>
+                                        <TextBlock Text="{Binding Armory.Selected.ScoreTier}" FontSize="14"
+                                                   Foreground="{StaticResource ParchmentPrimary}"/>
+                                    </StackPanel>
+                                </StackPanel>
+
+                                <Border Classes="v3rule"/>
+
+                                <!-- Ledger rows -->
+                                <StackPanel Spacing="9">
+                                    <Grid ColumnDefinitions="*,Auto">
+                                        <TextBlock Grid.Column="0" Text="{loc:Tr Armory_Label_Level}" Classes="v3ledgerlabel"/>
+                                        <TextBlock Grid.Column="1" Text="{Binding Armory.Selected.LevelText}" Classes="v3ledgervalue"/>
+                                    </Grid>
+                                    <Grid ColumnDefinitions="*,Auto" IsVisible="{Binding Armory.Selected.HasZone}">
+                                        <TextBlock Grid.Column="0" Text="{loc:Tr Armory_Label_Zone}" Classes="v3ledgerlabel"/>
+                                        <TextBlock Grid.Column="1" Text="{Binding Armory.Selected.Zone}" Classes="v3ledgervalue"/>
+                                    </Grid>
+                                    <Grid ColumnDefinitions="*,Auto">
+                                        <TextBlock Grid.Column="0" Text="{loc:Tr Armory_Label_Gold}" Classes="v3ledgerlabel"/>
+                                        <TextBlock Grid.Column="1" Text="{Binding Armory.Selected.Gold}" Classes="v3ledgervalue"/>
+                                    </Grid>
+                                    <Grid ColumnDefinitions="*,Auto">
+                                        <TextBlock Grid.Column="0" Text="{loc:Tr Armory_Label_Played}" Classes="v3ledgerlabel"/>
+                                        <TextBlock Grid.Column="1" Text="{Binding Armory.Selected.Played}" Classes="v3ledgervalue"/>
+                                    </Grid>
+                                    <Grid ColumnDefinitions="*,Auto">
+                                        <TextBlock Grid.Column="0" Text="{loc:Tr Armory_Label_Quests}" Classes="v3ledgerlabel"/>
+                                        <TextBlock Grid.Column="1" Text="{Binding Armory.Selected.QuestText}" Classes="v3ledgervalue"/>
+                                    </Grid>
+                                    <Grid ColumnDefinitions="*,Auto" IsVisible="{Binding Armory.Selected.HasHonorRank}">
+                                        <TextBlock Grid.Column="0" Text="{loc:Tr Armory_Label_Rank}" Classes="v3ledgerlabel"/>
+                                        <TextBlock Grid.Column="1" Text="{Binding Armory.Selected.HonorRankName}" Classes="v3ledgervalue"/>
+                                    </Grid>
+                                </StackPanel>
+
+                                <!-- Lockouts (hidden entirely when there are none) -->
+                                <StackPanel IsVisible="{Binding Armory.Selected.HasLockouts}">
+                                    <Border Classes="v3rule"/>
+                                    <TextBlock Text="{loc:Tr Armory_Lockouts}" Classes="v3caption tracked"
+                                               Margin="0,0,0,10"/>
+                                    <ItemsControl ItemsSource="{Binding Armory.Selected.Lockouts}">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate x:DataType="m:ArmoryLockout">
+                                                <Grid ColumnDefinitions="*,Auto" Margin="0,0,0,8">
+                                                    <TextBlock Grid.Column="0" Text="{Binding Instance}" Classes="v3ledgerlabel"/>
+                                                    <TextBlock Grid.Column="1" Text="{Binding Resets}" Classes="v3ledgervalue"/>
+                                                </Grid>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </StackPanel>
+                            </StackPanel>
+                        </ScrollViewer>
+                    </Grid>
+
+                    <!-- Empty state: one calm sentence, centred. Signed out, nothing here yet, or the
+                         service could not answer - never an error box, never a retry button that
+                         would only fail again. -->
+                    <TextBlock Text="{Binding Armory.EmptyMessage}" FontSize="13"
+                               IsVisible="{Binding Armory.ShowEmpty}"
+                               Foreground="{StaticResource ParchmentFaint}"
+                               HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                </Grid>
+
+                <!-- ═══ SETTINGS — the account cog (top bar) navigates here (GoSettingsCommand
+                     already existed and worked), but the v3 shell never had a visible section bound
+                     to IsSettings: HOME/PATCH NOTES/ARMORY were the only three panels in this stage,
+                     so a click here painted nothing and the screen went black (BACKLOG: "v3 zeigt
+                     SettingsView nirgends an, Panel bleibt schwarz"). Reuses the existing
+                     SettingsView/SettingsViewModel unchanged - install folder, WoW path and the
+                     realm list were never reachable in the shipped v3 skin without this. ═══ -->
+                <Grid Background="{StaticResource StoneBase}" IsVisible="{Binding IsSettings}"
+                      Classes="xfade" Classes.shown="{Binding IsSettings}">
+                    <views:SettingsView DataContext="{Binding Settings}"/>
+                </Grid>
+
+                <!-- ═══ ACCOUNT — identity, and nothing else. Before this panel existed the Account
+                     button in the titlebar opened SETTINGS, so the one question it raises ("am I
+                     signed in, and as whom") had no answer anywhere in the launcher. Signing in
+                     lives here now; the friends panel is a place to LOOK at friends, not a login
+                     gate that cannot be dismissed. ═══ -->
+                <Grid Background="{StaticResource StoneBase}" IsVisible="{Binding IsAccount}"
+                      Classes="xfade" Classes.shown="{Binding IsAccount}">
+                    <ScrollViewer>
+                        <StackPanel Margin="32,28" Spacing="18" MaxWidth="520" HorizontalAlignment="Left">
+                            <TextBlock Text="{loc:Tr V3_Account_Title}" FontSize="22"
+                                       FontFamily="{StaticResource FontDisplay}"
+                                       Foreground="{StaticResource Parchment}"/>
+
+                            <!-- Signed in: who, and the way out. -->
+                            <StackPanel Spacing="14" IsVisible="{Binding IsLoggedIn}">
+                                <StackPanel Orientation="Horizontal" Spacing="14">
+                                    <Grid Width="44" Height="44">
+                                        <Ellipse Width="44" Height="44" Fill="{StaticResource StoneHover}"
+                                                 Stroke="{StaticResource StoneBorder}" StrokeThickness="1"/>
+                                        <TextBlock Text="{Binding AccountInitial}" FontSize="20"
+                                                   FontFamily="{StaticResource FontDisplay}"
+                                                   Foreground="{StaticResource Parchment}"
+                                                   HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                    </Grid>
+                                    <StackPanel VerticalAlignment="Center">
+                                        <TextBlock Text="{loc:Tr V3_Account_SignedInAs}" FontSize="11"
+                                                   Classes="tracked"
+                                                   Foreground="{StaticResource ParchmentFaint}"/>
+                                        <TextBlock Text="{Binding AccountName}" FontSize="17"
+                                                   Foreground="{StaticResource Parchment}" Margin="0,2,0,0"/>
+                                    </StackPanel>
+                                </StackPanel>
+                                <TextBlock Text="{loc:Tr V3_Account_FriendsHint}" FontSize="13"
+                                           TextWrapping="Wrap"
+                                           Foreground="{StaticResource ParchmentSecondary}"/>
+                                <StackPanel Orientation="Horizontal" Spacing="10">
+                                    <Button Content="{loc:Tr V3_Account_OpenFriends}"
+                                            Command="{Binding ToggleFriendsCommand}"/>
+                                    <Button Content="{loc:Tr V3_SignOut}" Command="{Binding SignOutCommand}"/>
+                                </StackPanel>
+                            </StackPanel>
+
+                            <!-- Signed out: say what it is for, then the same card as the sidebar. -->
+                            <StackPanel Spacing="14" IsVisible="{Binding !IsLoggedIn}">
+                                <TextBlock Text="{loc:Tr V3_Account_SignedOutLead}" FontSize="14"
+                                           TextWrapping="Wrap" MaxWidth="460"
+                                           Foreground="{StaticResource ParchmentSecondary}"/>
+                                <Border Width="300" HorizontalAlignment="Left"
+                                        Background="{StaticResource StoneSurface}"
+                                        BorderBrush="{StaticResource BorderHairline}" BorderThickness="1">
+                                    <views:LoginView DataContext="{Binding Login}"/>
+                                </Border>
+                            </StackPanel>
+                        </StackPanel>
+                    </ScrollViewer>
+                </Grid>
+            </Panel>
+
+            <!-- ─── Collapsed handle ───────────────────────────────────────────────────────────
+                 A tab you can actually hit. The first version was a hairline sliver with a rotated
+                 caption: it read as a rendering seam, not as a control, and the click target was a
+                 few pixels wide (owner: "viel zu klein"). Now it is a 44px column with the lantern
+                 mark, the rotated caption underneath and, once signed in, the online count - so the
+                 closed state still answers "is anyone around" without being opened. -->
+            <Border Grid.Column="2" Width="44" Background="{StaticResource StoneSurface}"
+                    BorderBrush="{StaticResource BorderHairline}" BorderThickness="1,0,0,0"
+                    IsVisible="{Binding !IsFriendsOpen}">
+                <Button Classes="v3sidetoggle" Command="{Binding ToggleFriendsCommand}"
+                        HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
+                        AutomationProperties.Name="{loc:Tr V3_ShowFriends}"
+                        ToolTip.Tip="{loc:Tr V3_ShowFriends}">
+                    <StackPanel Spacing="14" VerticalAlignment="Center" HorizontalAlignment="Center">
+                        <TextBlock Text="‹" FontSize="15" HorizontalAlignment="Center"
+                                   Foreground="{StaticResource ParchmentFaint}"/>
+                        <Image Source="avares://WowLauncher/Assets/lantern.png" Width="18"
+                               HorizontalAlignment="Center" Opacity="0.75"
+                               RenderOptions.BitmapInterpolationMode="HighQuality"/>
+                        <LayoutTransformControl HorizontalAlignment="Center">
+                            <LayoutTransformControl.LayoutTransform>
+                                <RotateTransform Angle="90"/>
+                            </LayoutTransformControl.LayoutTransform>
+                            <TextBlock Text="{loc:Tr V3_Friends}" FontSize="11" Classes="tracked"
+                                       Foreground="{StaticResource ParchmentSecondary}"/>
+                        </LayoutTransformControl>
+                        <!-- Online count as a small ember disc. Only while signed in: a "0" for a
+                             signed-out player would be a claim we cannot make. -->
+                        <Border IsVisible="{Binding IsLoggedIn}" HorizontalAlignment="Center"
+                                Width="22" Height="22" CornerRadius="11"
+                                Background="{StaticResource StoneHover}"
+                                BorderBrush="{StaticResource StoneBorder}" BorderThickness="1">
+                            <TextBlock Text="{Binding OnlineFriendCount}" FontSize="11"
+                                       FontFamily="{StaticResource FontMono}"
+                                       Foreground="{StaticResource EmberBase}"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                    </StackPanel>
+                </Button>
+            </Border>
+
+            <!-- ─── Friends sidebar (by account) ───
+                 It does not snap in and out: the panel unfurls from the right edge (Width 0->264) while
+                 its content fades in and settles the last 18px leftwards - 0.25s CubicEaseOut, the same
+                 finite, user-triggered motion class as the section cross-fade, never an ambient
+                 animation, so it stays OUTSIDE the Border.live gate exactly like xfade and the friend-row
+                 arrival. IsVisible is gone (it would collapse instantly and give the close no animation);
+                 the closed state is Width 0 + Opacity 0 from the style. The inner Panel is pinned to 264
+                 so the content is laid out once and the Border merely clips it as it opens (no text reflow
+                 mid-slide); ClipToBounds does the clipping, IsHitTestVisible keeps the collapsed panel
+                 inert. Style: Border.v3friendspanel in Styles.v3.axaml. -->
+            <Border Grid.Column="3" Classes="v3friendspanel" Classes.open="{Binding IsFriendsOpen}"
+                    ClipToBounds="True" IsHitTestVisible="{Binding IsFriendsOpen}"
+                    Background="{StaticResource StoneSurface}"
+                    BorderBrush="{StaticResource BorderHairline}" BorderThickness="1,0,0,0">
+                <Panel Width="264">
+
+                    <!-- Signed out: a short prompt with its own close button, NOT a login form.
+                         The form used to fill this sidebar and had no way out, because the collapse
+                         control lived in the signed-in branch below: the players least interested in
+                         signing in were the ones who could not dismiss it. Signing in happens in the
+                         ACCOUNT panel now; this only says why it would be worth it. -->
+                    <Grid RowDefinitions="Auto,*" Margin="16,18" IsVisible="{Binding !IsLoggedIn}">
+                        <Grid Grid.Row="0" ColumnDefinitions="*,Auto">
+                            <TextBlock Text="{loc:Tr V3_Friends}" FontSize="12" FontWeight="SemiBold"
+                                       Classes="tracked" VerticalAlignment="Center"
+                                       Foreground="{StaticResource ParchmentSecondary}"/>
+                            <Button Grid.Column="1" Classes="chrome" Content="›" VerticalAlignment="Top"
+                                    Command="{Binding ToggleFriendsCommand}"
+                                    AutomationProperties.Name="{loc:Tr V3_HideFriends}"/>
+                        </Grid>
+                        <StackPanel Grid.Row="1" Spacing="12" VerticalAlignment="Center">
+                            <TextBlock Text="{loc:Tr V3_Friends_SignInPrompt}" FontSize="13"
+                                       TextWrapping="Wrap" HorizontalAlignment="Center"
+                                       TextAlignment="Center"
+                                       Foreground="{StaticResource ParchmentSecondary}"/>
+                            <Button Content="{loc:Tr V3_Friends_GoToAccount}"
+                                    Command="{Binding GoAccountCommand}"
+                                    HorizontalAlignment="Center"/>
+                        </StackPanel>
+                    </Grid>
+
+                    <!-- Signed in: the friends roster. -->
+                    <Grid RowDefinitions="Auto,Auto,Auto,Auto,*" Margin="16,18"
+                          IsVisible="{Binding IsLoggedIn}">
+
+                        <!-- Header: title + online count + sign-out + collapse -->
+                        <Grid Grid.Row="0" ColumnDefinitions="*,Auto,Auto">
+                            <StackPanel VerticalAlignment="Center">
+                                <TextBlock Text="{loc:Tr V3_Friends}" FontSize="12" FontWeight="SemiBold" Classes="tracked"
+                                           Foreground="{StaticResource ParchmentSecondary}"/>
+                                <TextBlock Text="{Binding OnlineFriendCountText}"
+                                           FontSize="11" FontFamily="{StaticResource FontMono}"
+                                           Foreground="{StaticResource ParchmentFaint}" Margin="0,2,0,0"/>
+                            </StackPanel>
+                            <Button Grid.Column="1" Classes="v3signout" Content="{loc:Tr V3_SignOut}"
+                                    VerticalAlignment="Center" Command="{Binding SignOutCommand}"
+                                    AutomationProperties.Name="{loc:Tr V3_SignOut}"/>
+                            <Button Grid.Column="2" Classes="chrome" Content="›" VerticalAlignment="Top"
+                                    Command="{Binding ToggleFriendsCommand}"
+                                    AutomationProperties.Name="{loc:Tr V3_HideFriends}"/>
+                        </Grid>
+
+                        <!-- Add account -->
+                        <Grid Grid.Row="1" ColumnDefinitions="*,Auto" Margin="0,16,0,0" ColumnSpacing="6">
+                            <TextBox Grid.Column="0" Classes="v3add" Text="{Binding AddFriendInput, Mode=TwoWay}"
+                                     PlaceholderText="{loc:Tr V3_AddAccount_Placeholder}" AutomationProperties.Name="{loc:Tr V3_AddAccount_A11y}">
+                                <TextBox.KeyBindings>
+                                    <KeyBinding Gesture="Enter" Command="{Binding AddFriendCommand}"/>
+                                </TextBox.KeyBindings>
+                            </TextBox>
+                            <Button Grid.Column="1" Classes="v3addbtn" Content="+"
+                                    Command="{Binding AddFriendCommand}"
+                                    AutomationProperties.Name="{loc:Tr V3_Add_A11y}"/>
+                        </Grid>
+
+                        <!-- Add-account rejection line (unknown account / already added) -->
+                        <TextBlock Grid.Row="2" Classes="v3adderror" Text="{Binding AddFriendError}"
+                                   IsVisible="{Binding HasAddFriendError}"/>
+
+                        <!-- Die Rubrik hiess frueher ACCOUNTS unter der Ueberschrift FRIENDS: zwei
+                             Woerter fuer dieselbe Liste, und ohne Eintraege eine leere Ueberschrift. -->
+
+                        <TextBlock Grid.Row="4" Text="{loc:Tr V3_NoAccounts}" FontSize="12" TextWrapping="Wrap"
+                                   VerticalAlignment="Top" Foreground="{StaticResource ParchmentFaint}"
+                                   IsVisible="{Binding !Friends.Count}"/>
+                        <ScrollViewer Grid.Row="4" VerticalScrollBarVisibility="Auto">
+                            <ItemsControl ItemsSource="{Binding Friends}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate x:DataType="vm:FriendRow">
+                                        <!-- "enter" plays once per realised row. The row is a
+                                             FriendRow (an observable object), not the FriendPresence
+                                             record: a changed activity is written into the row, so
+                                             the container survives and this animation does NOT
+                                             replay. It plays on Add / Insert only, which is a real
+                                             arrival and not an 18s repaint. -->
+                                        <Button Classes="v3friend" Classes.dim="{Binding IsPresenceOffline}"
+                                                AutomationProperties.Name="{Binding Account}">
+                                            <Grid Classes="v3enterrow" ColumnDefinitions="Auto,*" ColumnSpacing="11">
+                                                <!-- Round avatar + presence dot -->
+                                                <Grid Grid.Column="0" Width="34" Height="34" VerticalAlignment="Center">
+                                                    <Ellipse Classes="v3avatar"/>
+                                                    <TextBlock Text="{Binding Initial}" Classes="v3avatarInitial"/>
+                                                    <Grid Width="14" Height="14" HorizontalAlignment="Right"
+                                                          VerticalAlignment="Bottom" Margin="0,0,-1,-1">
+                                                        <Ellipse Width="14" Height="14" Fill="{StaticResource StoneSurface}"/>
+                                                        <Ellipse Width="10" Height="10" Classes="presence"
+                                                                 Classes.online="{Binding IsPresenceOnline}"
+                                                                 Classes.away="{Binding IsAway}"
+                                                                 Classes.busy="{Binding IsBusy}"
+                                                                 Classes.ingame="{Binding IsInGame}"
+                                                                 Classes.offline="{Binding IsPresenceOffline}"/>
+                                                    </Grid>
+                                                </Grid>
+                                                <!-- Account (identity) + activity (what the account plays) -->
+                                                <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="2">
+                                                    <TextBlock Text="{Binding Account}" FontSize="13"
+                                                               Foreground="{StaticResource ParchmentPrimary}"
+                                                               TextTrimming="CharacterEllipsis"/>
+                                                    <TextBlock Text="{Binding Activity}" FontSize="11"
+                                                               Foreground="{StaticResource ParchmentFaint}"
+                                                               TextTrimming="CharacterEllipsis"
+                                                               IsVisible="{Binding IsOnline}"/>
+                                                </StackPanel>
+                                            </Grid>
+                                        </Button>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </ScrollViewer>
+                    </Grid>
+                </Panel>
+            </Border>
+        </Grid>
+
+        <!-- ═══ Add-realm overlay: the "+" rail button opens this. No second window - a dim scrim
+             over the whole content row plus a carved card, same cross-fade the hero sections use.
+             The add-form itself is Settings' - name/address/client/update-link validation already
+             lives there (SettingsViewModel.AddRealmCommand); this is a different presentation of the
+             SAME logic, not a second copy of it. Remove-realm is Shell's own (its own SelectedRealm,
+             see ShellViewModel.RemoveSelectedRealmCommand): Settings keeps an independent selection,
+             and reusing it here risked deleting whichever realm Settings last had selected instead of
+             the one open in this overlay. ═══ -->
+        <Border Grid.Row="1" Classes="v3overlayscrim xfade" Classes.shown="{Binding IsAddRealmOpen}"
+                IsVisible="{Binding IsAddRealmOpen}">
+            <Border Classes="recess" Padding="30,26" MaxWidth="380" HorizontalAlignment="Center" VerticalAlignment="Center">
+                <StackPanel Spacing="14" DataContext="{Binding Settings}" x:DataType="vm:SettingsViewModel">
+                    <Grid ColumnDefinitions="*,Auto">
+                        <TextBlock Grid.Column="0" Text="{loc:Tr Settings_AddRealm}" FontSize="18"
+                                   FontFamily="{StaticResource FontDisplay}"
+                                   Foreground="{StaticResource ParchmentPrimary}" VerticalAlignment="Center"/>
+                        <Button Grid.Column="1" Classes="chrome" Content="✕"
+                                Command="{Binding $parent[Window].((vm:ShellViewModel)DataContext).CloseAddRealmCommand}"
+                                AutomationProperties.Name="{loc:Tr V3_AddRealm_Close_A11y}"/>
+                    </Grid>
+
+                    <StackPanel Spacing="6">
+                        <TextBox Classes="v3overlayfield" Text="{Binding NewRealmName}"
+                                 PlaceholderText="{loc:Tr Settings_Name_Placeholder}"
+                                 AutomationProperties.Name="{loc:Tr Settings_Name_A11y}"/>
+                        <TextBox Classes="v3overlayfield" FontFamily="{StaticResource FontMono}"
+                                 Text="{Binding NewRealmAddress}"
+                                 PlaceholderText="{loc:Tr Settings_Realmlist_Placeholder}"
+                                 AutomationProperties.Name="{loc:Tr Settings_Realmlist_A11y}"/>
+                        <ComboBox Classes="v3overlayfield" ItemsSource="{Binding AddableClientVersions}"
+                                  SelectedItem="{Binding NewRealmClient, Mode=TwoWay}"
+                                  AutomationProperties.Name="{loc:Tr Settings_Client_A11y}">
+                            <ComboBox.ItemTemplate>
+                                <DataTemplate x:DataType="m:ClientVersion">
+                                    <TextBlock Text="{Binding DisplayName}"/>
+                                </DataTemplate>
+                            </ComboBox.ItemTemplate>
+                        </ComboBox>
+                        <TextBox Classes="v3overlayfield" FontFamily="{StaticResource FontMono}"
+                                 Text="{Binding NewRealmManifestUrl}"
+                                 PlaceholderText="{loc:Tr V3_AddRealm_UpdateSource_Placeholder}"
+                                 AutomationProperties.Name="{loc:Tr V3_AddRealm_UpdateSource_A11y}"/>
+                        <TextBlock Text="{loc:Tr V3_AddRealm_UpdateSource_Hint}" FontSize="11"
+                                   TextWrapping="Wrap" Foreground="{StaticResource ParchmentFaint}"/>
+                        <!-- Calm, at the field - not a popup, not a red scream. -->
+                        <TextBlock Text="{Binding AddRealmError}" IsVisible="{Binding HasAddRealmError}"
+                                   FontSize="12" TextWrapping="Wrap"
+                                   Foreground="{StaticResource ParchmentSecondary}"/>
+                    </StackPanel>
+
+                    <Grid ColumnDefinitions="Auto,*,Auto">
+                        <Button Grid.Column="0" Classes="v3addbtn" Content="{loc:Tr Settings_Add}"
+                                Command="{Binding AddRealmCommand}"/>
+                        <!-- Presets can never reach this button - Shell's own hard IsPreset check,
+                             independent of Settings' analogous guard on its page. -->
+                        <Button Grid.Column="2" Classes="ghost" Content="{loc:Tr Settings_RemoveRealm}"
+                                Command="{Binding $parent[Window].((vm:ShellViewModel)DataContext).RemoveSelectedRealmCommand}"
+                                IsVisible="{Binding $parent[Window].((vm:ShellViewModel)DataContext).CanRemoveSelectedRealm}"/>
+                    </Grid>
+                </StackPanel>
+            </Border>
+        </Border>
+
+        <!-- ═══════════ Row2 · ActionBar (Play status + progress) ═══════════ -->
+        <Border Grid.Row="2" Background="{StaticResource StoneBase}"
+                BorderBrush="{StaticResource BorderHairline}" BorderThickness="0,1,0,0">
+            <Panel Margin="28,0">
+
+                <!-- READY / UPDATE / ERROR / NO_CLIENT -->
+                <Grid ColumnDefinitions="*,Auto" IsVisible="{Binding !Play.ShowProgress}">
+                    <StackPanel VerticalAlignment="Center" Spacing="3">
+                        <TextBlock Text="{Binding Play.ClientVersionText}" FontSize="13"
+                                   FontFamily="{StaticResource FontMono}"
+                                   Foreground="{StaticResource ParchmentSecondary}"/>
+                        <TextBlock Text="{Binding Play.StatusLine}" FontSize="13"
+                                   Foreground="{StaticResource ParchmentFaint}"/>
+                    </StackPanel>
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                        <Button Classes="ghost" Content="{loc:Tr Play_Repair}" Command="{Binding Play.RepairCommand}"
+                                AutomationProperties.Name="{loc:Tr Play_Repair_A11y}"/>
+                        <Button Classes="ghost" Content="{loc:Tr Play_CheckUpdates}"
+                                Command="{Binding Play.CheckForUpdatesCommand}"
+                                AutomationProperties.Name="{loc:Tr Play_CheckUpdates_A11y}"/>
+                    </StackPanel>
+                </Grid>
+
+                <!-- DOWNLOADING / VERIFYING / PAUSED — big ember percentage, narration, solid fill,
+                     and a Pause affordance while bytes are actually flowing. -->
+                <Grid ColumnDefinitions="*,Auto,Auto" VerticalAlignment="Center"
+                      IsVisible="{Binding Play.ShowProgress}">
+                    <StackPanel Grid.Column="0" Spacing="7" VerticalAlignment="Center">
+                        <Grid ColumnDefinitions="*,Auto">
+                            <TextBlock Text="{Binding Play.StatusLine}" FontSize="14"
+                                       Foreground="{StaticResource ParchmentPrimary}"/>
+                            <TextBlock Grid.Column="1" Text="{Binding Play.DownloadDetail}" FontSize="12"
+                                       FontFamily="{StaticResource FontMono}"
+                                       Foreground="{StaticResource ParchmentSecondary}"/>
+                        </Grid>
+                        <!-- v3progress adds a value transition: the download reports in coarse steps,
+                             and without it the bar jumps. Glides instead. -->
+                        <ProgressBar Classes="v3progress" Value="{Binding Play.DownloadProgress}"
+                                     Minimum="0" Maximum="100" Height="8"/>
+                    </StackPanel>
+                    <!-- Pause: only while bytes flow (IsPausable = Downloading). Resume is the big
+                         action button, which reads RESUME in the Paused state. -->
+                    <Button Grid.Column="1" Classes="ghost" Content="{loc:Tr Play_Pause}"
+                            Command="{Binding Play.PauseDownloadCommand}"
+                            IsVisible="{Binding Play.IsPausable}"
+                            VerticalAlignment="Center" Margin="16,0,0,0"
+                            AutomationProperties.Name="{loc:Tr Play_Pause_A11y}"/>
+                    <TextBlock Grid.Column="2" Text="{Binding Play.DownloadPercentText}"
+                               FontSize="34" FontFamily="{StaticResource FontDisplay}"
+                               Foreground="{StaticResource EmberBase}"
+                               VerticalAlignment="Center" Margin="24,0,0,0" MinWidth="84"
+                               TextAlignment="Right"/>
+                </Grid>
+            </Panel>
+        </Border>
+
+    </Grid>
+    </Border>
+</Window>

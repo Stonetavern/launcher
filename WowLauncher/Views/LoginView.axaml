@@ -1,0 +1,143 @@
+<!--
+  Stonetavern Launcher — v3 sign-in card. Lives INSIDE the friends sidebar (264px) when signed out:
+  friends is a sidebar feature, so its gate belongs in the same column (leanest integration — no
+  shell-wide overlay, no modal state, no focus trap; this is how Battle.net itself gates its friends
+  panel). Warm stone identity, ember for the one primary action. All text English (VOICE.md): no em
+  dashes, no apostrophes. Compiled bindings, x:DataType=LoginViewModel.
+-->
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:loc="using:WowLauncher.Localization"
+             xmlns:vm="using:WowLauncher.ViewModels"
+             x:Class="WowLauncher.Views.LoginView"
+             x:DataType="vm:LoginViewModel">
+
+    <Grid RowDefinitions="Auto,*" Margin="16,18">
+
+        <!-- Header: matches the friends header rhythm -->
+        <StackPanel Grid.Row="0" Spacing="2">
+            <TextBlock Text="{loc:Tr V3_Friends}" FontSize="12" FontWeight="SemiBold" Classes="tracked"
+                       Foreground="{StaticResource ParchmentSecondary}"/>
+            <TextBlock Text="{loc:Tr Login_SignInToSee}" FontSize="11"
+                       FontFamily="{StaticResource FontMono}"
+                       Foreground="{StaticResource ParchmentFaint}" Margin="0,2,0,0"/>
+        </StackPanel>
+
+        <!-- Card body: one of two faces (sign in / create account), vertically centered. A ScrollViewer
+             so the taller register form never clips in the narrow sidebar column. -->
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto"
+                      HorizontalScrollBarVisibility="Disabled">
+          <Panel>
+
+            <!-- ─── Face 1: Sign in (default) ─────────────────────────────────────────────── -->
+            <StackPanel VerticalAlignment="Center" Spacing="12" IsVisible="{Binding !IsRegisterMode}">
+
+                <Image Source="avares://WowLauncher/Assets/lantern.png"
+                       Height="40" HorizontalAlignment="Center" Classes="v3flicker"
+                       RenderOptions.BitmapInterpolationMode="HighQuality"/>
+
+                <TextBlock Text="{loc:Tr Login_UseAccount}" FontSize="12"
+                           Foreground="{StaticResource ParchmentSecondary}"
+                           TextWrapping="Wrap" TextAlignment="Center" Margin="0,0,0,4"/>
+
+                <TextBox Classes="v3login" Text="{Binding Username, Mode=TwoWay}"
+                         PlaceholderText="{loc:Tr Login_Username}" AutomationProperties.Name="{loc:Tr Login_Username}"/>
+
+                <TextBox Classes="v3login" Text="{Binding Password, Mode=TwoWay}"
+                         PasswordChar="●" RevealPassword="False"
+                         PlaceholderText="{loc:Tr Login_Password}" AutomationProperties.Name="{loc:Tr Login_Password}">
+                    <TextBox.KeyBindings>
+                        <KeyBinding Gesture="Enter" Command="{Binding SignInCommand}"/>
+                    </TextBox.KeyBindings>
+                </TextBox>
+
+                <!-- Error line (calm, VOICE-compliant); only present when there is one -->
+                <TextBlock Text="{Binding Error}" FontSize="12" TextWrapping="Wrap"
+                           Foreground="{StaticResource StatusDown}"
+                           IsVisible="{Binding HasError}"/>
+
+                <Button Classes="v3signin" Command="{Binding SignInCommand}"
+                        IsEnabled="{Binding !SignInCommand.IsRunning}"
+                        HorizontalAlignment="Stretch"
+                        AutomationProperties.Name="{loc:Tr Login_SignIn}">
+                    <Panel>
+                        <TextBlock Text="{loc:Tr Login_SignIn}" FontWeight="SemiBold"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center"
+                                   IsVisible="{Binding !SignInCommand.IsRunning}"/>
+                        <TextBlock Text="{loc:Tr Login_SigningIn}" FontWeight="SemiBold"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center"
+                                   IsVisible="{Binding SignInCommand.IsRunning}"/>
+                    </Panel>
+                </Button>
+
+                <!-- Quiet switch to the create-account face -->
+                <Button Classes="v3signout" Command="{Binding ShowRegisterCommand}"
+                        HorizontalAlignment="Center" Content="{loc:Tr Register_Switch}"
+                        AutomationProperties.Name="{loc:Tr Register_Switch}"/>
+            </StackPanel>
+
+            <!-- ─── Face 2: Create account ────────────────────────────────────────────────── -->
+            <StackPanel VerticalAlignment="Center" Spacing="10" IsVisible="{Binding IsRegisterMode}">
+
+                <TextBlock Text="{loc:Tr Register_Title}" FontSize="13" FontWeight="SemiBold"
+                           Foreground="{StaticResource Parchment}"
+                           TextAlignment="Center" Margin="0,0,0,2"/>
+                <TextBlock Text="{loc:Tr Register_Lead}" FontSize="11"
+                           Foreground="{StaticResource ParchmentSecondary}"
+                           TextWrapping="Wrap" TextAlignment="Center" Margin="0,0,0,2"/>
+
+                <TextBox Classes="v3login" Text="{Binding Register.Username, Mode=TwoWay}"
+                         PlaceholderText="{loc:Tr Login_Username}" AutomationProperties.Name="{loc:Tr Login_Username}"/>
+
+                <TextBox Classes="v3login" Text="{Binding Register.Email, Mode=TwoWay}"
+                         PlaceholderText="{loc:Tr Register_Email}" AutomationProperties.Name="{loc:Tr Register_Email}"/>
+
+                <TextBox Classes="v3login" Text="{Binding Register.Password, Mode=TwoWay}"
+                         PasswordChar="●" RevealPassword="False"
+                         PlaceholderText="{loc:Tr Login_Password}" AutomationProperties.Name="{loc:Tr Login_Password}"/>
+
+                <TextBox Classes="v3login" Text="{Binding Register.Confirm, Mode=TwoWay}"
+                         PasswordChar="●" RevealPassword="False"
+                         PlaceholderText="{loc:Tr Register_Confirm}" AutomationProperties.Name="{loc:Tr Register_Confirm}">
+                    <TextBox.KeyBindings>
+                        <KeyBinding Gesture="Enter" Command="{Binding Register.CreateAccountCommand}"/>
+                    </TextBox.KeyBindings>
+                </TextBox>
+
+                <CheckBox IsChecked="{Binding Register.AcceptRules, Mode=TwoWay}"
+                          Content="{loc:Tr Register_AcceptRules}"
+                          Foreground="{StaticResource ParchmentSecondary}"
+                          AutomationProperties.Name="{loc:Tr Register_AcceptRules}"/>
+                <CheckBox IsChecked="{Binding Register.Newsletter, Mode=TwoWay}"
+                          Content="{loc:Tr Register_Newsletter}"
+                          Foreground="{StaticResource ParchmentSecondary}"
+                          AutomationProperties.Name="{loc:Tr Register_Newsletter}"/>
+
+                <!-- Error line (calm, VOICE-compliant); only present when there is one -->
+                <TextBlock Text="{Binding Register.Error}" FontSize="12" TextWrapping="Wrap"
+                           Foreground="{StaticResource StatusDown}"
+                           IsVisible="{Binding Register.HasError}"/>
+
+                <Button Classes="v3signin" Command="{Binding Register.CreateAccountCommand}"
+                        IsEnabled="{Binding !Register.CreateAccountCommand.IsRunning}"
+                        HorizontalAlignment="Stretch"
+                        AutomationProperties.Name="{loc:Tr Register_Submit}">
+                    <Panel>
+                        <TextBlock Text="{loc:Tr Register_Submit}" FontWeight="SemiBold"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center"
+                                   IsVisible="{Binding !Register.CreateAccountCommand.IsRunning}"/>
+                        <TextBlock Text="{loc:Tr Register_Submitting}" FontWeight="SemiBold"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center"
+                                   IsVisible="{Binding Register.CreateAccountCommand.IsRunning}"/>
+                    </Panel>
+                </Button>
+
+                <!-- Quiet switch back to the sign-in face -->
+                <Button Classes="v3signout" Command="{Binding ShowSignInCommand}"
+                        HorizontalAlignment="Center" Content="{loc:Tr Register_BackToSignIn}"
+                        AutomationProperties.Name="{loc:Tr Register_BackToSignIn}"/>
+            </StackPanel>
+          </Panel>
+        </ScrollViewer>
+    </Grid>
+</UserControl>

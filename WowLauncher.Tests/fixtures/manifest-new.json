@@ -1,0 +1,32 @@
+{
+  "product": "stonetavern-classic",
+  "current_version": "1.4.0",
+  "build_date": "2026-07-17",
+  "base": {
+    "version": "1.4.0",
+    "url": "https://downloads.stonetavern.app/client/base-1.4.0.zip",
+    "size": 5123456789,
+    "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+  },
+  "patches": [],
+  "launcher": {
+    "version": "2.0.0",
+    "url": "https://downloads.stonetavern.app/launcher/WowLauncher-2.0.0.exe",
+    "size": 41943040,
+    "sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+  },
+  "launcher_linux": {
+    "version": "3.0.0",
+    "url": "https://downloads.stonetavern.app/launcher/WowLauncher-3.0.0-linux-x64.tar.xz",
+    "size": 62914560,
+    "sha256": "3333333333333333333333333333333333333333333333333333333333333333"
+  },
+  "active_phase": "vanilla",
+  "phases": [
+    {
+      "phase": "vanilla",
+      "realmlist": "vanilla.play.stonetavern.app",
+      "client": null
+    }
+  ]
+}
