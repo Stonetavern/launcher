@@ -40,11 +40,120 @@ sealed class Program
             return;
         }
 
+        // Startvorbereitung als Frage, nicht als Nebenwirkung: `--preflight` sagt, ob ein Start hier
+        // gelingen kann, und gibt genau den Satz aus, den ein Spieler zu lesen bekaeme.
+        //
+        // 🔴 Gebaut, weil der erste Lauf in einer nackten VM (2026-08-05) genau diese Meldung NICHT
+        // pruefen konnte: sie entsteht erst durch einen Druck auf Spielen, und der war in der VM mit
+        // keinem Mittel ausloesbar. Eine Auskunft, die nur ein Mensch mit einer Maus hervorlocken
+        // kann, ist auf jedem Prueftstand unsichtbar - und damit unbelegt.
+        //
+        // Startet nichts. Exit 0 = startklar, 1 = nicht startklar (Grund auf stdout), 2 = kein Client.
+        if (args.Contains("--preflight"))
+        {
+            Environment.Exit(RunPreflightAsync(args).GetAwaiter().GetResult());
+            return;
+        }
+
         // Which skin: v1 (default) or v2 "Obsidian Instrument" (`--ui v2`). Decided before the
         // ViewModels are built, because the telemetry column asks Ui.Demo at construction time.
         Ui.Configure(args);
 
-        BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
+        // 🔴 Bevor Avalonia es versucht: kann hier ueberhaupt ein Fenster aufgehen? Ohne diese
+        // Pruefung endet der Start mit "System.Exception: XOpenDisplay failed" und acht Zeilen
+        // Spurabzug - gemessen beim ersten Lauf in der nackten Ubuntu-VM am 2026-08-05. Das ist ein
+        // Text fuer Entwickler, und er widerspricht der eigenen Regel: kein nackter Spurabzug
+        // erreicht je einen Spieler. Abgestuerzt ist dabei gar nichts; es fehlte ein Bildschirm.
+        static string? Env(string name) => Environment.GetEnvironmentVariable(name);
+        if (GraphicalSession.Missing(Env, OperatingSystem.IsLinux()) is { } missing)
+        {
+            Console.Error.WriteLine(missing);
+            Environment.Exit(3);
+            return;
+        }
+
+        try
+        {
+            BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
+        }
+        catch (Exception ex) when (OperatingSystem.IsLinux() && IsDisplayFailure(ex))
+        {
+            // Der haeufigere Fall: eine Anzeige ist ANGEGEBEN, laesst sich aber nicht oeffnen (ueber
+            // SSH gestartet, als Dienst gestartet, fehlende Berechtigung). Die Umgebung steht mit im
+            // Text, weil sie die halbe Diagnose ist - und wer das liest, hat kein Fenster, in dem er
+            // etwas nachschlagen koennte.
+            Console.Error.WriteLine(GraphicalSession.Refused(Env, ex.Message));
+            WriteCrashLog(ex, "no usable display");
+            Environment.Exit(3);
+        }
+    }
+
+    /// <summary>
+    /// Ob dieser Fehlschlag daher kommt, dass keine Anzeige zu bekommen war.
+    ///
+    /// <para>An der Meldung erkannt und nicht am Typ, weil Avalonia hier eine nackte
+    /// <see cref="Exception"/> wirft. Bewusst eng gehalten: was NICHT sicher eine Anzeigefrage ist,
+    /// muss weiter durchschlagen und im Absturzprotokoll landen. Ein zu weiter Fang wuerde echte
+    /// Fehler in eine beruhigende Meldung ueber Bildschirme verwandeln.</para>
+    /// </summary>
+    private static bool IsDisplayFailure(Exception ex)
+    {
+        for (var e = ex; e is not null; e = e.InnerException)
+        {
+            var m = e.Message ?? "";
+            if (m.Contains("XOpenDisplay", StringComparison.OrdinalIgnoreCase)
+                || m.Contains("Could not initialize GTK", StringComparison.OrdinalIgnoreCase)
+                || m.Contains("wl_display", StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Kann hier gestartet werden, und wenn nicht: was stuende auf dem Bildschirm?
+    ///
+    /// <para>Fragt genau die Kette, die der Druck auf Spielen auch fragt - denselben Launcher, dieselbe
+    /// Bereitschaftspruefung, dieselben Saetze. Ein zweiter, eigener Pfad waere hier das Gegenteil
+    /// eines Beweises: er koennte gelingen, waehrend der echte scheitert.</para>
+    /// </summary>
+    private static async Task<int> RunPreflightAsync(string[] args)
+    {
+        try
+        {
+            using var host = DependencyInjection.BuildHost(args);
+            var cfg = host.Services.GetRequiredService<IConfigService>().Load();
+            var realm = RealmRegistry.All(cfg).FirstOrDefault(r => r.Id == cfg.SelectedRealmId);
+            var client = realm?.Client ?? ClientVersion.Default;
+
+            Console.WriteLine($"Realm: {realm?.Name ?? "none"} ({cfg.RealmlistAddress})");
+            Console.WriteLine($"Client: {client.PreciseLabel}");
+
+            if (!cfg.ClientInstalls.TryGetValue(client.Build, out var dir) || string.IsNullOrWhiteSpace(dir))
+            {
+                Console.WriteLine("No client is registered for this build. Nothing to start yet.");
+                return 2;
+            }
+            Console.WriteLine($"Client folder: {dir}");
+
+            // Derselbe Launcher, den der Start nimmt - inklusive der Weiche zwischen 1.12.1 und 1.14.2.
+            var launcher = host.Services.GetRequiredService<IGameLauncher>();
+            var problem = await launcher.CheckReadyAsync(client.ExeName);
+            if (problem is null)
+            {
+                Console.WriteLine("Ready to start.");
+                return 0;
+            }
+
+            Console.WriteLine("NOT ready to start. This is what a player would read:");
+            Console.WriteLine();
+            Console.WriteLine(problem);
+            return 1;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Preflight failed: {ex.Message}");
+            return 1;
+        }
     }
 
     private static async Task<int> RunE2EAsync(string[] args)
@@ -124,7 +233,7 @@ sealed class Program
             // placeholder instead of our mark. The id equals the .desktop file name written by
             // deploy/package-linux.sh (integration/stonetavern-launcher.desktop). X11 uses the same
             // string as WM_CLASS, so one value serves both.
-            .With(new X11PlatformOptions { WmClass = "stonetavern-launcher" })
+            .With(new X11PlatformOptions { WmClass = DesktopIntegration.WmClass })
             .WithInterFont()
             .LogToTrace();
 }

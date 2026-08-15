@@ -23,8 +23,8 @@ namespace WowLauncher.Services.Platform;
 /// icons, but the AppImage file on disk is not registered with the desktop, so Plasma shows a generic
 /// icon for it. (2) The embedded entry historically carried no <c>StartupWMClass</c>, so even a
 /// registered entry would not match the <em>running</em> window (its <c>WM_CLASS</c> is
-/// <c>WowLauncher</c>, set in <c>Program.BuildAvaloniaApp</c>). The entry written here carries
-/// <c>StartupWMClass=WowLauncher</c> and an <c>Exec</c> that points at the real launch target
+/// <c>stonetavern-launcher</c>, set in <c>Program.BuildAvaloniaApp</c>). The entry written here carries
+/// <c>StartupWMClass=stonetavern-launcher</c> and an <c>Exec</c> that points at the real launch target
 /// (the <c>$APPIMAGE</c> file under AppImage, else the executable), which fixes both.</para>
 ///
 /// <para>Everything is best-effort and never throws to the caller: the result is a value, not an
@@ -99,7 +99,7 @@ public static class DesktopIntegration
     /// <summary>The running window's <c>WM_CLASS</c>, set in <c>Program.BuildAvaloniaApp</c>. The
     /// <c>.desktop</c> entry's <c>StartupWMClass</c> must equal this or the taskbar shows a placeholder
     /// for the live window even when the menu icon is correct.</summary>
-    public const string WmClass = "WowLauncher";
+    public const string WmClass = AppId;
 
     /// <summary>Human-readable menu name.</summary>
     public const string DisplayName = "Stonetavern Launcher";

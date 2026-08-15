@@ -185,10 +185,14 @@ public sealed class UmuGameLauncher : IGameLauncher
 /// <item>modern client (1.14.2) -> <b>wine-ge</b>, when a Lutris runner is installed. This is the only
 /// path proven end to end on this project: <c>Play Stonetavern.sh</c> starts the client this way and a
 /// character reached the world with it. wine-ge carries the D3D12 layer in the runner itself.</item>
-/// <item>modern client with no wine-ge -> umu/Proton as the fallback. It is the second choice, not the
-/// first: it downloads roughly 2.9 GB on first run and has never been proven with this client. An
-/// earlier note had this the other way round, claiming D3D12 was Proton-only, which the working script
-/// disproves.</item>
+/// <item>modern client with no wine-ge -> <b>refused</b>, with a message that says what to install.
+/// This used to fall back to umu/Proton, and that fallback was worse than nothing: it starts the
+/// client exe on its own, and the modern client only reaches this realm THROUGH a local proxy. The
+/// player got a window, a login screen and a realm that was never contacted — a launch that succeeds
+/// and arrives nowhere, with no error anywhere to explain it. Matches a real player report (Discord
+/// 2026-07-26). Refusing is not the end state; it is honest until the proxy runs without wine-ge too
+/// (PLAN-baseline-2026-08-02.md, step 5), at which point umu comes back as a proxy-owning launcher
+/// rather than a bare exe start.</item>
 /// </list>
 ///
 /// <para>The modern launcher is resolved ONCE at construction, not per launch, so the choice is a
@@ -199,34 +203,65 @@ public sealed class LinuxGameLauncherRouter : IGameLauncher
 {
     private readonly IGameLauncher _legacyWine;
     private readonly IGameLauncher? _modernWine;
-    private readonly IGameLauncher _modernFallback;
     private readonly Serilog.ILogger _logger;
 
     /// <param name="legacyWine">System Wine, for the 32-bit builds.</param>
-    /// <param name="modernWine">wine-ge for the modern client, or null when no wine-ge is installed.</param>
-    /// <param name="modernFallback">umu/Proton, used for the modern client only when
-    /// <paramref name="modernWine"/> is null.</param>
+    /// <param name="modernWine">The modern-client path (wine-ge if the player has it, otherwise the
+    /// system Wine — see <see cref="ModernWineRuntime"/>), or null when the machine has no Wine at all,
+    /// in which case the modern client is refused rather than started without its proxy.</param>
     public LinuxGameLauncherRouter(
         IGameLauncher legacyWine,
         IGameLauncher? modernWine,
-        IGameLauncher modernFallback,
         Serilog.ILogger logger)
     {
         _legacyWine = legacyWine;
         _modernWine = modernWine;
-        _modernFallback = modernFallback;
         _logger = logger;
     }
 
     public Task<GameLaunchResult> LaunchAsync(string exePath, string workingDirectory)
     {
         var exeName = Path.GetFileName(exePath);
-        var target = NeedsModernRuntime(exeName)
-            ? _modernWine ?? _modernFallback
-            : _legacyWine;
+
+        if (NeedsModernRuntime(exeName) && _modernWine is null)
+        {
+            _logger.Error(
+                "Refusing to start {Exe}: no Wine on this machine, and this client only reaches the " +
+                "realm through the local proxy the modern launch path owns", exeName);
+            return Task.FromResult(GameLaunchResult.Failed(NoModernRuntimeMessage()));
+        }
+
+        var target = NeedsModernRuntime(exeName) ? _modernWine! : _legacyWine;
         _logger.Debug("Routing launch of {Exe} to {Launcher}", exeName, target.GetType().Name);
         return target.LaunchAsync(exePath, workingDirectory);
     }
+
+    /// <summary>
+    /// Dieselbe Weiche wie beim Start, nur ohne zu starten.
+    ///
+    /// <para>🔴 Ohne diese Ueberschreibung meldete die Weiche „bereit", weil die Vorgabe der
+    /// Schnittstelle das tut - auf einer Maschine ganz ohne Wine. Gefunden am 2026-08-05 in der
+    /// nackten VM, zehn Minuten nachdem die Pruefung gebaut war: sie fragte den Falschen. Eine
+    /// Bereitschaftspruefung, die „ja" sagt, weil niemand nachgesehen hat, ist genau die Sorte
+    /// beruhigende Falschaussage, gegen die sie gebaut wurde.</para>
+    /// </summary>
+    public Task<string?> CheckReadyAsync(string exeName)
+    {
+        if (NeedsModernRuntime(exeName) && _modernWine is null)
+            return Task.FromResult<string?>(NoModernRuntimeMessage());
+
+        var target = NeedsModernRuntime(exeName) ? _modernWine! : _legacyWine;
+        return target.CheckReadyAsync(exeName);
+    }
+
+    /// <summary>What the player sees instead of a window that leads nowhere. It names the one thing
+    /// that fixes it, because "not supported" would leave them with nothing to do.</summary>
+    internal static string NoModernRuntimeMessage() =>
+        "This client needs Wine, and the launcher did not find any on this machine.\n" +
+        "Install your distribution's wine package (Fedora: sudo dnf install wine), or a wine-ge runner " +
+        "through Lutris, then start the game again.\n" +
+        "The launcher will not start this client without one: it would come up, show a login screen, and " +
+        "never actually reach the realm.";
 
     /// <summary>Whether this executable belongs to a build needing the modern (64-bit, D3D12) runtime.
     /// Delegates to <c>ClientVersion</c> so adding a second modern build is a one-line change there and

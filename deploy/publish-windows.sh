@@ -28,6 +28,23 @@ if [[ -z "$VERSION" ]]; then
 fi
 [[ -n "$VERSION" ]] || { echo "FEHLER: keine Version ermittelbar" >&2; exit 1; }
 
+# 🔴 AssemblyVersion MUSS mitgesetzt werden, nicht nur Version.
+#
+# Bis 2026-08-01 setzte dieser Publish ausschliesslich -p:Version. Die csproj trug daneben eine fest
+# eingetragene <AssemblyVersion>1.1.0.0</AssemblyVersion>, und die gewinnt gegen ein nicht gesetztes
+# Property. Der Self-Update verglich genau diese Zahl gegen das Manifest — jeder ausgelieferte Build
+# meldete sich als 1.1.0.0, das Manifest sagte 1.5.1, also war IMMER ein Update faellig: laden,
+# tauschen, neu starten, wieder 1.1.0.0. Windows-Spieler steckten in einer Endlosschleife
+# (Akte: decisions/2026-08-01-update-loop-assemblyversion.md).
+#
+# Ein Release, das dieses Skript mit einem Versionsargument aufruft, wuerde die Divergenz sofort neu
+# erzeugen — deshalb wird sie hier abgeleitet statt der csproj ueberlassen. AssemblyVersion verlangt
+# rein numerische Stellen, also faellt ein etwaiges Suffix (1.6.1-rc1) weg.
+ASM_VERSION="${VERSION%%-*}"
+ASM_VERSION="${ASM_VERSION%%+*}"
+[[ "$ASM_VERSION" =~ ^[0-9]+(\.[0-9]+){1,3}$ ]] || {
+  echo "FEHLER: '$VERSION' ergibt keine numerische AssemblyVersion ('$ASM_VERSION')" >&2; exit 1; }
+
 echo "== Stonetavern Launcher $VERSION -> win-x64 (single file)"
 rm -rf "$OUT"
 mkdir -p "$OUT"
@@ -41,6 +58,8 @@ dotnet publish "$PROJECT" \
   -p:EnableCompressionInSingleFile=true \
   -p:DebugType=embedded \
   -p:Version="$VERSION" \
+  -p:AssemblyVersion="$ASM_VERSION" \
+  -p:FileVersion="$ASM_VERSION" \
   -o "$OUT"
 
 echo

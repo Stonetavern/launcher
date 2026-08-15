@@ -53,15 +53,15 @@ public sealed class RealmClientToggleTests
     }
 
     /// <summary>
-    /// The real proof for Codex Finding 3 (2026-07-22): a pre-2026-07-21 saved Elwynn (hand-authored
-    /// JSON, no ClientKeys property at all, exactly what an old launcher wrote) must still end up
-    /// offering both clients after RealmRegistry.All() merges it - and the player's own edit (a
-    /// repointed address) must survive the merge. Goes through the REAL file + the REAL
-    /// ConfigService.Load(), not a hand-built RealmEntry: a prior version of this test only
-    /// constructed an object in memory and proved nothing about deserialization or the merge.
+    /// The real proof for Codex Finding 3 (2026-07-22), now also the migration proof (2026-07-27): a
+    /// pre-2026-07-21 saved <b>Elwynn</b> (hand-authored JSON, no ClientKeys property at all, exactly
+    /// what an old launcher wrote) must come back as the single <b>Stonetavern</b> entry, still offering
+    /// both clients - and the player's own edit (a repointed address) must survive. Goes through the
+    /// REAL file + the REAL ConfigService.Load(), not a hand-built RealmEntry: a prior version of this
+    /// test only constructed an object in memory and proved nothing about deserialization or the merge.
     /// </summary>
     [Fact]
-    public void AnOldSavedElwynn_WithoutClientKeys_StillOffersBothClientsAfterMerging()
+    public void AnOldSavedElwynn_BecomesStonetavern_KeepsItsEditedAddressAndBothClients()
     {
         var paths = new TempPaths();
         paths.EnsureDirectories();
@@ -82,33 +82,57 @@ public sealed class RealmClientToggleTests
         var svc = new ConfigService(paths);
         var cfg = svc.Load();
 
-        // Load() itself already calls RealmRegistry.ApplyActiveRealm -> All(), which mutates the
-        // deserialized RealmEntry in place - by the time Load() returns, ClientKeys has ALREADY been
-        // patched onto the stored instance. That merge running on every load (not just when the rail
-        // is rebuilt) is exactly why an old save recovers immediately, with no separate migration step.
-        var storedElwynn = cfg.Realms.Single(r => r.Id == RealmRegistry.ElwynnId);
-        Assert.Equal(["1.12.1", "1.14.2"], storedElwynn.ClientKeys);
+        // Load() itself already calls RealmRegistry.ApplyActiveRealm -> All(), which migrates and merges
+        // in place - by the time Load() returns, the vanished rail entry is gone and the selection has
+        // followed it. That running on every load (not a separate migration step) is why an old save
+        // recovers immediately.
+        Assert.DoesNotContain(cfg.Realms, r => r.Id == RealmRegistry.ElwynnId);
+        Assert.DoesNotContain(cfg.Realms, r => r.Id == RealmRegistry.BarrensId);
+        Assert.Equal(RealmRegistry.StonetavernId, cfg.SelectedRealmId);
 
-        var elwynn = RealmRegistry.All(cfg).Single(r => r.Id == RealmRegistry.ElwynnId);
-        Assert.True(elwynn.HasMultipleClients);
-        Assert.Equal(["1.12.1", "1.14.2"], elwynn.AvailableClients.Select(c => c.Key));
-        // The deliberate edit (repointed address) must not be lost by fixing the Stammdaten merge.
-        Assert.Equal("old.stonetavern.app", elwynn.RealmlistAddress);
+        var stonetavern = RealmRegistry.All(cfg).Single(r => r.Id == RealmRegistry.StonetavernId);
+        Assert.True(stonetavern.HasMultipleClients);
+        Assert.Equal(["1.12.1", "1.14.2"], stonetavern.AvailableClients.Select(c => c.Key));
+        // The deliberate edit (repointed address) must not be lost by collapsing the two entries.
+        Assert.Equal("old.stonetavern.app", stonetavern.RealmlistAddress);
+    }
+
+    /// <summary>
+    /// A saved Elwynn that still carries the SHIPPED address is not an edit — it must fold away without
+    /// leaving a stray realm behind, so the rail shows exactly one entry.
+    /// </summary>
+    [Fact]
+    public void AnOldSavedElwynn_WithTheShippedAddress_LeavesExactlyOneRealm()
+    {
+        var cfg = new LauncherConfig
+        {
+            SelectedRealmId = "barrens",
+            Realms =
+            [
+                new RealmEntry { Id = "elwynn", Name = "Elwynn", RealmlistAddress = "play.stonetavern.app", IsPreset = true },
+                new RealmEntry { Id = "barrens", Name = "Barrens", RealmlistAddress = "play.stonetavern.app", IsPreset = true },
+            ],
+        };
+
+        var all = RealmRegistry.All(cfg);
+
+        var only = Assert.Single(all);
+        Assert.Equal(RealmRegistry.StonetavernId, only.Id);
+        Assert.Equal(RealmRegistry.StonetavernId, cfg.SelectedRealmId);
+        Assert.Empty(cfg.Realms);
     }
 
     [Fact]
-    public void BothVanillaPresets_OfferBothClients()
+    public void TheOneVanillaPreset_OffersBothClients_AndCoversBothGameRealms()
     {
-        // Owner 2026-07-23: both Vanilla realms speak the same two clients, so Barrens offers 1.14.2
-        // as well as 1.12.1 (the install is keyed by gamebuild, shared across realms, no re-download).
-        var elwynn = RealmRegistry.Presets().Single(r => r.Id == RealmRegistry.ElwynnId);
-        var barrens = RealmRegistry.Presets().Single(r => r.Id == RealmRegistry.BarrensId);
+        // Owner 2026-07-27: ONE rail entry. Both game realms speak the same two clients (the install is
+        // keyed by gamebuild, shared, no re-download), and both stay reachable for the account APIs.
+        var stonetavern = Assert.Single(RealmRegistry.Presets());
 
-        Assert.True(elwynn.HasMultipleClients);
-        Assert.Equal(["1.12.1", "1.14.2"], elwynn.AvailableClients.Select(c => c.Key));
-
-        Assert.True(barrens.HasMultipleClients);
-        Assert.Equal(["1.12.1", "1.14.2"], barrens.AvailableClients.Select(c => c.Key));
+        Assert.Equal(RealmRegistry.StonetavernId, stonetavern.Id);
+        Assert.True(stonetavern.HasMultipleClients);
+        Assert.Equal(["1.12.1", "1.14.2"], stonetavern.AvailableClients.Select(c => c.Key));
+        Assert.Equal([RealmRegistry.ElwynnId, RealmRegistry.BarrensId], stonetavern.AccountRealms);
     }
 
     // ── Test doubles (same shape as ShellRealmRailTests) ───────────────────────────────────────
@@ -147,6 +171,11 @@ public sealed class RealmClientToggleTests
                     },
                 ],
             });
+        /// <summary>Kein Launcher-Manifest in diesem Double: der Selbst-Update-Pfad ist hier
+        /// nicht der Prüfgegenstand, und "keins" heißt "kein Update", nie "irgendeins".</summary>
+        public Task<ServerManifest?> FetchLauncherManifestAsync(CancellationToken ct = default) =>
+            Task.FromResult<ServerManifest?>(null);
+
         public Task<ClientFileManifest?> FetchFileManifestAsync(string url, CancellationToken ct = default) =>
             Task.FromResult<ClientFileManifest?>(null);
     }
@@ -182,6 +211,11 @@ public sealed class RealmClientToggleTests
                     },
                 ],
             });
+        /// <summary>Kein Launcher-Manifest in diesem Double: der Selbst-Update-Pfad ist hier
+        /// nicht der Prüfgegenstand, und "keins" heißt "kein Update", nie "irgendeins".</summary>
+        public Task<ServerManifest?> FetchLauncherManifestAsync(CancellationToken ct = default) =>
+            Task.FromResult<ServerManifest?>(null);
+
         public Task<ClientFileManifest?> FetchFileManifestAsync(string url, CancellationToken ct = default) =>
             Task.FromResult<ClientFileManifest?>(null);
     }
@@ -219,6 +253,11 @@ public sealed class RealmClientToggleTests
                     },
                 ],
             });
+        /// <summary>Kein Launcher-Manifest in diesem Double: der Selbst-Update-Pfad ist hier
+        /// nicht der Prüfgegenstand, und "keins" heißt "kein Update", nie "irgendeins".</summary>
+        public Task<ServerManifest?> FetchLauncherManifestAsync(CancellationToken ct = default) =>
+            Task.FromResult<ServerManifest?>(null);
+
 
         public Task<ClientFileManifest?> FetchFileManifestAsync(string url, CancellationToken ct = default) =>
             Task.FromResult<ClientFileManifest?>(null);
@@ -364,6 +403,9 @@ public sealed class RealmClientToggleTests
 
     private sealed class NoUpdate : IUpdateService
     {
+        // Never raised here: these doubles model "there is no update", so nothing announces one.
+        public event System.EventHandler? LauncherUpdateStarting { add { } remove { } }
+
         public Task<bool> CheckAndApplyAsync(ServerManifest? m, CancellationToken ct = default) => Task.FromResult(false);
         public LauncherUpdateNotice? CheckForNotice(ServerManifest? m) => null;
     }
@@ -421,7 +463,8 @@ public sealed class RealmClientToggleTests
             Task.FromResult(ArmoryRoster.Empty(ArmoryStatus.SignedOut));
     }
 
-    private static (ShellViewModel shell, MemoryConfig cfg, NoDownload dl) NewShell(IClientService? client = null)
+    private static (ShellViewModel shell, MemoryConfig cfg, NoDownload dl) NewShell(IClientService? client = null,
+        IFolderPickerService? picker = null)
     {
         var cfg = new MemoryConfig();
         var dl = new NoDownload();
@@ -429,7 +472,7 @@ public sealed class RealmClientToggleTests
         var paths = new TempPaths();
         var play = new PlayViewModel(cfg, new FixedManifest(), client ?? new NoClient(), new OfflineStatus(), dl,
             new ClientVerifyService(log), new NoUpdate(), new NoNews(), new ExitNow(), paths,
-            new NullFolderPicker(), log);
+            picker ?? new NullFolderPicker(), log);
         var auth = new SignedOutAuth();
         var shell = new ShellViewModel(play, new PatchNotesViewModel(new NoNews(), cfg, log),
             new SettingsViewModel(cfg, new NullFolderPicker()), new NoFriends(), auth, new LoginViewModel(auth), cfg,
@@ -440,12 +483,12 @@ public sealed class RealmClientToggleTests
     // ── The badge/footer contradiction, closed ─────────────────────────────────────────────────
 
     [Fact]
-    public async Task SwitchingElwynnToItsSecondClient_MakesTheBadgeAndTheFooterAgree()
+    public async Task SwitchingTheRealmToItsSecondClient_MakesTheBadgeAndTheFooterAgree()
     {
         var (shell, cfg, dl) = NewShell();
         await shell.InitAsync();
 
-        Assert.Equal(RealmRegistry.ElwynnId, shell.SelectedRealm.Id);
+        Assert.Equal(RealmRegistry.StonetavernId, shell.SelectedRealm.Id);
         Assert.True(shell.SelectedRealm.HasMultipleClients);
         Assert.Equal("1.12.1", shell.SelectedRealm.ClientKey);
         Assert.Contains("1.12.1", shell.Play.ClientVersionText);
@@ -480,10 +523,44 @@ public sealed class RealmClientToggleTests
         await shell.SelectRealmClientCommand.ExecuteAsync(modernClient);
 
         Assert.Equal(LauncherState.NoClient, shell.Play.State);
-        // PlayCommand in NoClient state tries to download - it must refuse on "no URL" BEFORE ever
-        // calling the download service, never hand it the 5875 zip's URL for a 42597 pick.
+        // PlayCommand in this state must never reach the download service with the 5875 zip's URL for
+        // a 42597 pick. Since 2026-08-05 it does not even try to download: with no managed source for
+        // this build the action IS "find my client", so the folder picker opens instead. The property
+        // that mattered then still holds now - the wrong package is never fetched.
         await shell.Play.PlayCommand.ExecuteAsync(null);
-        Assert.Equal(LauncherState.DownloadError, shell.Play.State);
+        Assert.Equal(0, dl.CallCount);
+        Assert.Equal(LauncherState.NoClient, shell.Play.State);
+    }
+
+    /// <summary>
+    /// Owner finding 2026-08-05: a realm the player added themselves has no manifest, so the launcher
+    /// showed a grey <c>UNAVAILABLE</c> with nothing to press and no sentence saying why. The realm
+    /// genuinely cannot download, and that is fine - but the one thing that DOES work here (point the
+    /// launcher at a client already on the machine) has to be what the button does.
+    /// </summary>
+    [Fact]
+    public async Task ARealmWithNoDownloadSource_OffersToFindTheClient_InsteadOfADeadButton()
+    {
+        var picker = new NullFolderPicker();
+        var (shell, cfg, dl) = NewShell(picker: picker);
+        await shell.InitAsync();
+
+        var modernClient = shell.SelectedRealm.AvailableClients.Single(c => c.Key == "1.14.2");
+        await shell.SelectRealmClientCommand.ExecuteAsync(modernClient);
+
+        Assert.Equal(LauncherState.NoClient, shell.Play.State);
+        Assert.True(shell.Play.NeedsOwnClient);
+
+        // The button is pressable and says what it does.
+        Assert.True(shell.Play.ActionEnabled);
+        Assert.Equal(WowLauncher.Localization.Loc.T("Play_Cta_Locate"), shell.Play.ActionPrimaryText);
+
+        // And the line next to it names the build and the way out, rather than the launcher's plumbing.
+        Assert.Contains("1.14.2", shell.Play.StatusLine, System.StringComparison.Ordinal);
+
+        // Pressing it opens the folder dialog - the only action that can succeed here.
+        await shell.Play.PlayCommand.ExecuteAsync(null);
+        Assert.Equal(1, picker.CallCount);
         Assert.Equal(0, dl.CallCount);
     }
 
@@ -576,9 +653,14 @@ public sealed class RealmClientToggleTests
     /// "click DOWNLOAD" state - the click was guaranteed to fail (empty URL -> DownloadError) rather
     /// than the launcher being honest up front. The action must be disabled and the text must say the
     /// player brings their own client, not invite a doomed click.
+    ///
+    /// <para><b>Revised 2026-08-05.</b> Disabling was the right half of the answer and the wrong whole
+    /// one: the button became grey and unexplained. What must never happen is the DOWNLOAD label on a
+    /// build with no download - that is still pinned here - but the button now carries the action that
+    /// does work instead of being switched off.</para>
     /// </summary>
     [Fact]
-    public async Task ASecondClientRealmWithoutAnInstall_DisablesTheActionAndSaysBringYourOwn()
+    public async Task ASecondClientRealmWithoutAnInstall_NeverOffersDownload()
     {
         var (shell, cfg, dl) = NewShell();
         await shell.InitAsync();
@@ -588,7 +670,7 @@ public sealed class RealmClientToggleTests
 
         Assert.Equal(LauncherState.NoClient, shell.Play.State);
         Assert.True(shell.Play.NeedsOwnClient);
-        Assert.False(shell.Play.ActionEnabled);
+        Assert.NotEqual(WowLauncher.Localization.Loc.T("Play_Cta_Download"), shell.Play.ActionPrimaryText);
     }
 
     /// <summary>
@@ -615,7 +697,7 @@ public sealed class RealmClientToggleTests
 
         // Precondition: the case where State does NOT move, so nothing else raises on our behalf.
         Assert.Equal(LauncherState.NoClient, shell.Play.State);
-        Assert.True(shell.Play.ActionEnabled);
+        Assert.Equal(WowLauncher.Localization.Loc.T("Play_Cta_Download"), shell.Play.ActionPrimaryText);
 
         var raised = new List<string>();
         shell.Play.PropertyChanged += (_, e) => raised.Add(e.PropertyName ?? "");
@@ -626,7 +708,9 @@ public sealed class RealmClientToggleTests
 
         Assert.Equal(LauncherState.NoClient, shell.Play.State);   // State really did not move
         Assert.DoesNotContain(nameof(PlayViewModel.State), raised);
-        Assert.False(shell.Play.ActionEnabled);
+        // The label really did change (DOWNLOAD -> find my client), which is what the ActionBar has to
+        // be told about. Before the notification fix it kept rendering the stale DOWNLOAD.
+        Assert.Equal(WowLauncher.Localization.Loc.T("Play_Cta_Locate"), shell.Play.ActionPrimaryText);
         Assert.Contains(nameof(PlayViewModel.ActionEnabled), raised);
         Assert.Contains(nameof(PlayViewModel.ActionPrimaryText), raised);
         Assert.Contains(nameof(PlayViewModel.ActionGlyph), raised);
@@ -725,8 +809,8 @@ public sealed class RealmClientToggleTests
     // ── Presets can never be removed ───────────────────────────────────────────────────────────
 
     // NOTE (Codex review, 2026-07-22): a prior version of this file also had a
-    // "RemoveSelectedRealm_RefusesAPreset_EvenBypassingCanExecute" test that asserted Elwynn survives
-    // a bypassed remove. It passed for the WRONG reason: Elwynn is never actually IN cfg.Realms on a
+    // "RemoveSelectedRealm_RefusesAPreset_EvenBypassingCanExecute" test that asserted the preset survives
+    // a bypassed remove. It passed for the WRONG reason: a preset is never actually IN cfg.Realms on a
     // fresh config (it is a virtual preset RealmRegistry.All() re-adds every time regardless of what
     // RemoveSelectedRealm's body does), so the assertion held even with the guard deleted - a
     // placebo. Removed; the real proof of "a preset survives a forced remove" is the test right below,
@@ -734,7 +818,7 @@ public sealed class RealmClientToggleTests
 
     /// <summary>
     /// RealmRegistry.All() always re-adds the shipped presets from Presets() regardless of what
-    /// cfg.Realms holds, so an unguarded remove can never make Elwynn vanish from the rail - it would
+    /// cfg.Realms holds, so an unguarded remove can never make the preset vanish from the rail - it would
     /// only strip a PLAYER'S persisted override (an edited address/client) back to the shipped
     /// default, silently. That is the actual thing the hard guard protects, and it is invisible if you
     /// only look at "is the realm still on the rail".
@@ -745,12 +829,12 @@ public sealed class RealmClientToggleTests
         var (shell, cfg, dl) = NewShell();
         await shell.InitAsync();
 
-        // A persisted override of Elwynn, the shape Settings/the client toggle writes when a preset
+        // A persisted override of the preset, the shape Settings/the client toggle writes when a preset
         // is edited: same id, IsPreset still true, but a build the shipped default does not carry.
         var edited = new RealmEntry
         {
-            Id = RealmRegistry.ElwynnId,
-            Name = "Elwynn",
+            Id = RealmRegistry.StonetavernId,
+            Name = "Stonetavern",
             RealmlistAddress = "play.stonetavern.app",
             ClientKey = "1.14.2",
             ClientKeys = ["1.12.1", "1.14.2"],
@@ -762,7 +846,7 @@ public sealed class RealmClientToggleTests
 
         shell.RemoveSelectedRealmCommand.Execute(null);
 
-        var stillStored = Assert.Single(cfg.Current.Realms, r => r.Id == RealmRegistry.ElwynnId);
+        var stillStored = Assert.Single(cfg.Current.Realms, r => r.Id == RealmRegistry.StonetavernId);
         Assert.Equal("1.14.2", stillStored.ClientKey);
     }
 

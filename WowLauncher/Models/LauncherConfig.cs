@@ -54,7 +54,7 @@ public sealed class LauncherConfig
     public List<RealmEntry> Realms { get; set; } = [];
 
     /// <summary>Id of the realm currently selected in the rail.</summary>
-    public string SelectedRealmId { get; set; } = RealmRegistry.ElwynnId;
+    public string SelectedRealmId { get; set; } = RealmRegistry.StonetavernId;
 
     // ─── Legacy (pre-2026-07-21 "server profiles") ────────────────────────────
     // Read only so an existing launcher_config.json can be migrated into Realms once; never written
@@ -88,6 +88,24 @@ public sealed class LauncherConfig
     /// interface itself is English only and has no setting (see <see cref="Localization.Loc"/>).
     /// </summary>
     public string Locale { get; set; } = "enUS";
+
+    /// <summary>
+    /// Die Sprache der <em>Launcher-Oberfläche</em>. Leer heißt „der Spielsprache folgen" — das
+    /// bleibt die Voreinstellung, weil wer das Spiel auf Deutsch stellt, den Launcher selten auf
+    /// Englisch haben will.
+    ///
+    /// <para><b>Warum es die Einstellung überhaupt gibt</b> (Owner-Entscheidung 2026-08-04): bis
+    /// hierhin gab es einen einzigen Wähler für beides, und der stand unten in der Leiste beim
+    /// Client. Die beiden Absichten sind aber nicht dieselbe. Wer den Client auf Englisch spielt,
+    /// weil die Addons und Anleitungen englisch sind, will den Launcher trotzdem in seiner eigenen
+    /// Sprache. Ein Wähler für zwei Dinge zwingt zu einer Wahl, die niemand so gemeint hat.</para>
+    /// </summary>
+    public string LauncherLanguage { get; set; } = "";
+
+    /// <summary>Which addon set is active (one per realm — see <see cref="WowLauncher.Services.AddonProfileService"/>).
+    /// Advisory only: the folder on disk carries its own marker and wins, because a player can move
+    /// folders and a config cannot notice.</summary>
+    public string AddonProfile { get; set; } = "";
 
     /// <summary>
     /// True once the one-time AppImage first-run setup has run (moved the launcher into
@@ -138,4 +156,21 @@ public sealed class LauncherConfig
     /// this field: they always target the path already recorded in <see cref="ClientInstalls"/>.
     /// </summary>
     public string? PreferredInstallRoot { get; set; }
+
+    // ─── Linux: womit gestartet wird ──────────────────────────────────────────
+
+    /// <summary>Which Wine the game is started with on Linux: <c>auto</c> (default) · <c>system</c> ·
+    /// <c>wine-ge</c> · <c>custom</c>. Owner request 2026-08-04, repeated 2026-08-05. Empty and unknown
+    /// values read as <c>auto</c>, which is exactly what every build before this did — so a config from
+    /// an older or newer launcher never changes how the game starts.
+    ///
+    /// <para>Ignored off Linux. Windows starts the client natively and macOS resolves its own Wine
+    /// through GPTK; a setting that appeared to apply there would be a lie in the same class as the one
+    /// this field removes.</para></summary>
+    public string LinuxRuntime { get; set; } = "auto";
+
+    /// <summary>The binary <c>LinuxRuntime = custom</c> points at. Also the way to a Proton build:
+    /// name that build's own <c>wine</c>. See <c>LinuxRuntimeSelection</c> for why Proton has no entry
+    /// of its own.</summary>
+    public string LinuxRuntimeCustomPath { get; set; } = "";
 }

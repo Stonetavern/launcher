@@ -1,0 +1,22 @@
+{
+  "product": "stonetavern-classic",
+  "current_version": "1.12.1",
+  "build_date": "2026-07-27",
+  "serial": 42,
+  "expires": "2099-01-01T00:00:00Z",
+  "channel": "stable",
+  "active_phase": "vanilla",
+  "launcher": {
+    "version": "2.0.0",
+    "url": "https://example.invalid/launcher/WowLauncher-2.0.0.exe",
+    "size": 41943040,
+    "sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+  },
+  "launcher_linux": {
+    "version": "3.0.0",
+    "url": "https://example.invalid/launcher/WowLauncher-3.0.0-linux-x64.tar.xz",
+    "size": 62914560,
+    "sha256": "3333333333333333333333333333333333333333333333333333333333333333"
+  },
+  "phases": []
+}

@@ -30,7 +30,7 @@ public sealed partial class LocalizationCatalogTests
 
     private static Dictionary<string, string> Catalog()
     {
-        var catalog = Loc.Load();
+        var catalog = Loc.Load(Loc.Code);
         Assert.True(catalog is not null,
             "en.json is not embedded in the assembly. Check the EmbeddedResource glob in " +
             "WowLauncher.csproj - without it every label in the UI degrades to its raw key.");
@@ -115,8 +115,10 @@ public sealed partial class LocalizationCatalogTests
             string.Join("\n", dead));
     }
 
-    /// <summary>VOICE.md: player-facing English carries no em dashes, no en dashes and no
-    /// apostrophes (so no contractions either).</summary>
+    /// <summary>VOICE.md: player-facing ENGLISH carries no em dashes, no en dashes and no
+    /// apostrophes (so no contractions either). Scoped to English on purpose - French cannot be
+    /// written without apostrophes, and demanding it there would produce broken French to satisfy a
+    /// rule about English.</summary>
     [Fact]
     public void Catalog_follows_voice_rules()
     {

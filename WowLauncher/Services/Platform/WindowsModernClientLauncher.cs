@@ -116,6 +116,7 @@ public sealed class WindowsModernClientLauncher : IGameLauncher
     private readonly IGameProcessDetector _detector;
     private readonly Func<WindowsModernClientLayout, IGameProxy> _proxyFactory;
     private readonly IGameSession _session;
+    private readonly Func<string?>? _realmAddress;
     private readonly string _expectedRealmHost;
     private readonly Func<string, PeArch> _peArch;
     private readonly Func<int, bool> _isPidAlive;
@@ -141,6 +142,7 @@ public sealed class WindowsModernClientLauncher : IGameLauncher
         IGameProcessDetector detector,
         Func<WindowsModernClientLayout, IGameProxy> proxyFactory,
         IGameSession session,
+        Func<string?>? realmAddress = null,
         Func<string, PeArch>? peArch = null,
         Func<int, bool>? isPidAlive = null,
         string? expectedRealmHost = null,
@@ -154,6 +156,7 @@ public sealed class WindowsModernClientLauncher : IGameLauncher
         _detector = detector;
         _proxyFactory = proxyFactory;
         _session = session;
+        _realmAddress = realmAddress;
         _expectedRealmHost = expectedRealmHost ?? ExpectedRealmHost;
         _peArch = peArch ?? PeArchitecture.Read;
         _isPidAlive = isPidAlive ?? DefaultIsPidAlive;
@@ -363,6 +366,25 @@ public sealed class WindowsModernClientLauncher : IGameLauncher
     private bool ProxyEndpointOk(WindowsModernClientLayout layout, out string error)
     {
         var configPath = Path.Combine(layout.ProxyDir, ProxyConfigName);
+
+        // When the launcher knows which realm this launch is for, the proxy is POINTED at it (written +
+        // read back) rather than merely compared against one hardcoded host — otherwise a player's own
+        // realm is ignored and the client quietly reaches Stonetavern instead. Fail-closed either way.
+        if (_realmAddress is not null)
+        {
+            var raw = _realmAddress();
+            var selected = WowLauncher.Services.RealmAddress.Parse(raw);
+            if (selected is null)
+            {
+                _logger.Error("Refusing the modern launch: {Address} is not a usable realm address", raw);
+                error = UnusableRealmMessage(raw);
+                return false;
+            }
+            if (!RealmBinding.PointProxyAtRealm(configPath, selected, out error)) return false;
+            _logger.Information("Proxy pointed at the selected realm: {Address}", selected.Value);
+            return true;
+        }
+
         var address = ProxyEndpointConfig.ReadServerAddress(configPath);
         if (string.IsNullOrWhiteSpace(address))
         {
@@ -426,6 +448,11 @@ public sealed class WindowsModernClientLauncher : IGameLauncher
         $"Config file: {layout.ConfigWtf}\n" +
         "Check that the client folder is not read-only, then try again.";
 
+    private static string UnusableRealmMessage(string? raw) =>
+        "The launcher cannot start this realm because its address is not usable.\n" +
+        $"Address: {(string.IsNullOrWhiteSpace(raw) ? "(empty)" : raw)}\n" +
+        "Open Settings and correct the realm address (a host name or IP, optionally with :port).";
+
     private static string ProxyEndpointMessage(string configPath, string? actual) =>
         "The realm proxy is not pointed at the expected server, so the launcher did not start it (it " +
         "would otherwise relay to the wrong place).\n" +
@@ -444,6 +471,54 @@ public static class ProxyEndpointConfig
     /// <summary>The <c>ServerAddress</c> value from the proxy config at <paramref name="configPath"/>, or
     /// null when the file is missing, unreadable, or has no such key. Never throws.</summary>
     public static string? ReadServerAddress(string configPath) => ReadKey(configPath, "ServerAddress");
+
+    /// <summary>
+    /// Set <paramref name="values"/> in the proxy config, keeping every other setting untouched (the file
+    /// also carries client build, seed and port settings the launcher has no opinion about). Existing
+    /// keys are rewritten in place; missing ones are appended under <c>appSettings</c>.
+    ///
+    /// <para>Written atomically — temp file, then a same-directory <see cref="File.Move"/> replace — for
+    /// the same reason <c>WtfConfigWriter</c> is: a truncate-in-place write that dies halfway leaves the
+    /// proxy with a config it cannot parse, and the next launch then fails for a reason that has nothing
+    /// to do with what the player did. Returns false on any failure; the caller decides (the realm
+    /// binding refuses the launch, see <c>RealmBinding.PointProxyAtRealm</c>).</para>
+    /// </summary>
+    internal static bool WriteKeys(string configPath, IReadOnlyDictionary<string, string> values)
+    {
+        var tmp = configPath + ".tmp-" + Guid.NewGuid().ToString("N");
+        try
+        {
+            if (!File.Exists(configPath)) return false;
+            var doc = System.Xml.Linq.XDocument.Load(configPath, System.Xml.Linq.LoadOptions.PreserveWhitespace);
+
+            var appSettings = doc.Root?.Element("appSettings");
+            if (appSettings is null) return false;
+
+            foreach (var (key, value) in values)
+            {
+                var existing = doc.Descendants("add").FirstOrDefault(
+                    a => string.Equals((string?)a.Attribute("key"), key, StringComparison.OrdinalIgnoreCase));
+                if (existing is not null)
+                    existing.SetAttributeValue("value", value);
+                else
+                    appSettings.Add(new System.Xml.Linq.XElement("add",
+                        new System.Xml.Linq.XAttribute("key", key),
+                        new System.Xml.Linq.XAttribute("value", value)));
+            }
+
+            doc.Save(tmp, System.Xml.Linq.SaveOptions.DisableFormatting);
+            File.Move(tmp, configPath, overwrite: true);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+        finally
+        {
+            if (File.Exists(tmp)) { try { File.Delete(tmp); } catch { /* best effort */ } }
+        }
+    }
 
     /// <summary>Read an <c>&lt;add key="..." value="..."/&gt;</c> value from the proxy config, or null.</summary>
     internal static string? ReadKey(string configPath, string key)

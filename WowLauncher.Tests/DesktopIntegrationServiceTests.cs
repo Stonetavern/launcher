@@ -82,7 +82,7 @@ public sealed class DesktopIntegrationServiceTests
             var body = await File.ReadAllTextAsync(desktopPath);
 
             Assert.Contains("[Desktop Entry]", body, StringComparison.Ordinal);
-            Assert.Contains("StartupWMClass=WowLauncher", body, StringComparison.Ordinal);
+            Assert.Contains($"StartupWMClass={DesktopIntegration.WmClass}", body, StringComparison.Ordinal);
             Assert.Contains($"Exec={exec}", body, StringComparison.Ordinal);
             Assert.Contains($"Icon={AppId}", body, StringComparison.Ordinal);
             Assert.Contains("Categories=Game;", body, StringComparison.Ordinal);

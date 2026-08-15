@@ -112,6 +112,7 @@ public sealed class MacModernClientLauncher : IGameLauncher
     private readonly IGameProcessDetector _detector;
     private readonly Func<MacModernClientLayout, IGameProxy> _proxyFactory;
     private readonly IGameSession _session;
+    private readonly Func<string?>? _realmAddress;
     private readonly string _expectedRealmHost;
     private readonly TimeSpan _proxyTimeout;
     private readonly TimeSpan _clientAppearTimeout;
@@ -126,6 +127,7 @@ public sealed class MacModernClientLauncher : IGameLauncher
         IGameProcessDetector detector,
         Func<MacModernClientLayout, IGameProxy> proxyFactory,
         IGameSession session,
+        Func<string?>? realmAddress = null,
         string? expectedRealmHost = null,
         TimeSpan? proxyTimeout = null,
         TimeSpan? clientAppearTimeout = null,
@@ -137,6 +139,7 @@ public sealed class MacModernClientLauncher : IGameLauncher
         _detector = detector;
         _proxyFactory = proxyFactory;
         _session = session;
+        _realmAddress = realmAddress;
         _expectedRealmHost = expectedRealmHost ?? ExpectedRealmHost;
         _proxyTimeout = proxyTimeout ?? TimeSpan.FromSeconds(20);
         _clientAppearTimeout = clientAppearTimeout ?? TimeSpan.FromSeconds(60);
@@ -305,6 +308,25 @@ public sealed class MacModernClientLauncher : IGameLauncher
     private bool ProxyEndpointOk(MacModernClientLayout layout, out string error)
     {
         var configPath = Path.Combine(layout.ProxyDir, ProxyConfigName);
+
+        // When the launcher knows which realm this launch is for, the proxy is POINTED at it (written +
+        // read back) rather than merely compared against one hardcoded host — otherwise a player's own
+        // realm is ignored and the client quietly reaches Stonetavern instead. Fail-closed either way.
+        if (_realmAddress is not null)
+        {
+            var raw = _realmAddress();
+            var selected = WowLauncher.Services.RealmAddress.Parse(raw);
+            if (selected is null)
+            {
+                _logger.Error("Refusing the modern launch: {Address} is not a usable realm address", raw);
+                error = UnusableRealmMessage(raw);
+                return false;
+            }
+            if (!RealmBinding.PointProxyAtRealm(configPath, selected, out error)) return false;
+            _logger.Information("Proxy pointed at the selected realm: {Address}", selected.Value);
+            return true;
+        }
+
         var address = ProxyEndpointConfig.ReadServerAddress(configPath);
         if (string.IsNullOrWhiteSpace(address))
         {
@@ -324,6 +346,11 @@ public sealed class MacModernClientLauncher : IGameLauncher
         error = "";
         return true;
     }
+
+    private static string UnusableRealmMessage(string? raw) =>
+        "The launcher cannot start this realm because its address is not usable.\n" +
+        $"Address: {(string.IsNullOrWhiteSpace(raw) ? "(empty)" : raw)}\n" +
+        "Open Settings and correct the realm address (a host name or IP, optionally with :port).";
 
     private static string IncompleteBundleMessage(string exePath) =>
         "This 1.14.2 client cannot be started from where it is. The launcher expects the full macOS " +

@@ -45,8 +45,12 @@ public sealed class ManifestContractTests
             ?? throw new InvalidOperationException($"fixture {name} deserialised to null");
     }
 
-    private static UpdateService Service(LauncherUpdateChannel channel, FakeDownload dl, FakeSwap swap) =>
-        new(dl, Log, swap, channel, Current);
+    /// <summary>A service whose signature gate hands back <paramref name="signed"/> as proven-authentic —
+    /// the "the server published a correctly signed manifest" case. The refusal case (no/bad signature)
+    /// is proven separately in <see cref="ManifestSignatureTests"/>.</summary>
+    private static UpdateService Service(LauncherUpdateChannel channel, FakeDownload dl, FakeSwap swap,
+        ServerManifest signed) =>
+        new(dl, Log, swap, new SignedGate(signed), channel, Current);
 
     // ─── Deserialisation contract ─────────────────────────────────────────
 
@@ -81,8 +85,8 @@ public sealed class ManifestContractTests
     {
         var dl = new FakeDownload();
         var swap = new FakeSwap(isSupported: true);
-        var svc = Service(LauncherUpdateChannel.Windows, dl, swap);
         var m = Load("manifest-old.json");
+        var svc = Service(LauncherUpdateChannel.Windows, dl, swap, m);
 
         var applied = await svc.CheckAndApplyAsync(m);
 
@@ -99,13 +103,12 @@ public sealed class ManifestContractTests
     {
         var dl = new FakeDownload();
         var swap = new FakeSwap(isSupported: false);
-        var svc = Service(LauncherUpdateChannel.Linux, dl, swap);
         var m = Load("manifest-old.json");
-
-        Assert.Null(svc.CheckForNotice(m)); // no launcher_linux → no hint (and no throw)
+        var svc = Service(LauncherUpdateChannel.Linux, dl, swap, m);
 
         var applied = await svc.CheckAndApplyAsync(m);
         Assert.False(applied);
+        Assert.Null(svc.CheckForNotice(m)); // no launcher_linux → no hint (and no throw)
         Assert.Null(dl.LastDownloadUrl); // KEIN Download-Start on Linux
         Assert.False(swap.Applied);      // KEIN Swap
     }
@@ -117,8 +120,8 @@ public sealed class ManifestContractTests
     {
         var dl = new FakeDownload();
         var swap = new FakeSwap(isSupported: true);
-        var svc = Service(LauncherUpdateChannel.Windows, dl, swap);
         var m = Load("manifest-new.json");
+        var svc = Service(LauncherUpdateChannel.Windows, dl, swap, m);
 
         var applied = await svc.CheckAndApplyAsync(m);
 
@@ -135,31 +138,31 @@ public sealed class ManifestContractTests
     {
         var dl = new FakeDownload();
         var swap = new FakeSwap(isSupported: false);
-        var svc = Service(LauncherUpdateChannel.Linux, dl, swap);
         var m = Load("manifest-new.json");
+        var svc = Service(LauncherUpdateChannel.Linux, dl, swap, m);
+
+        // Notify only — never auto-applies (PLAN §1.5 / WP7). This call is also what establishes the
+        // signature-verified manifest the hint is allowed to be derived from.
+        var applied = await svc.CheckAndApplyAsync(m);
+        Assert.False(applied);
+        Assert.Null(dl.LastDownloadUrl);
+        Assert.False(swap.Applied);
 
         var notice = svc.CheckForNotice(m);
 
         Assert.NotNull(notice);
         Assert.Equal("3.0.0", notice!.Version);                 // reads launcher_linux, not launcher (2.0.0)
         Assert.Equal(UpdateService.DownloadPage, notice.DownloadPage);
-
-        // Notify only — never auto-applies (PLAN §1.5 / WP7).
-        var applied = await svc.CheckAndApplyAsync(m);
-        Assert.False(applied);
-        Assert.Null(dl.LastDownloadUrl);
-        Assert.False(swap.Applied);
     }
 
     // ─── A newer-than-current Linux build is required for a notice ─────────
 
     [Fact]
-    public void Notice_IsNull_WhenLauncherLinuxNotNewerThanCurrent()
+    public async Task Notice_IsNull_WhenLauncherLinuxNotNewerThanCurrent()
     {
         var m = Load("manifest-new.json");
         // Pretend the running build already equals the advertised Linux build (3.0.0) → no notice.
-        var svc = new UpdateService(new FakeDownload(), Log, new FakeSwap(false),
-            LauncherUpdateChannel.Linux, new Version(3, 0, 0));
+        var svc = await LinuxServiceAsync(new Version(3, 0, 0), m);
         Assert.Null(svc.CheckForNotice(m));
     }
 
@@ -171,39 +174,68 @@ public sealed class ManifestContractTests
         LauncherLinux = new ManifestFile { Version = version, Url = "https://example.invalid/l" },
     };
 
-    private static UpdateService LinuxService(Version current) =>
-        new(new FakeDownload(), Log, new FakeSwap(false), LauncherUpdateChannel.Linux, current);
-
-    [Fact]
-    public void Notice_IsNull_OnDowngrade() =>
-        Assert.Null(LinuxService(new Version(4, 0, 0)).CheckForNotice(LinuxManifest("3.0.0")));
-
-    [Fact]
-    public void Notice_IsNull_OnGarbageVersion() =>
-        Assert.Null(LinuxService(new Version(1, 0, 0)).CheckForNotice(LinuxManifest("not-a-version")));
-
-    [Fact]
-    public void Notice_IsNull_OnSemVerPrerelease_SchemaIsStrictlyNumeric() =>
-        Assert.Null(LinuxService(new Version(1, 0, 0)).CheckForNotice(LinuxManifest("3.0.0-beta.1")));
-
-    [Fact]
-    public void Notice_Appears_WithToleratedVPrefix()
+    /// <summary>A Linux service that has ALREADY run its signature check against <paramref name="m"/>.
+    /// The passive hint is only reachable after that — an unverified manifest yields no notice at all,
+    /// which is the whole point of the gate and is proven in <see cref="ManifestSignatureTests"/>.</summary>
+    private static async Task<UpdateService> LinuxServiceAsync(Version current, ServerManifest m)
     {
-        var notice = LinuxService(new Version(3, 0, 0)).CheckForNotice(LinuxManifest("v4.0.0"));
+        var svc = new UpdateService(new FakeDownload(), Log, new FakeSwap(false), new SignedGate(m),
+            LauncherUpdateChannel.Linux, current);
+        await svc.CheckAndApplyAsync(m);
+        return svc;
+    }
+
+    private static async Task<LauncherUpdateNotice?> LinuxNoticeAsync(Version current, string version)
+    {
+        var m = LinuxManifest(version);
+        return (await LinuxServiceAsync(current, m)).CheckForNotice(m);
+    }
+
+    [Fact]
+    public async Task Notice_IsNull_OnDowngrade() =>
+        Assert.Null(await LinuxNoticeAsync(new Version(4, 0, 0), "3.0.0"));
+
+    [Fact]
+    public async Task Notice_IsNull_OnGarbageVersion() =>
+        Assert.Null(await LinuxNoticeAsync(new Version(1, 0, 0), "not-a-version"));
+
+    [Fact]
+    public async Task Notice_IsNull_OnSemVerPrerelease_SchemaIsStrictlyNumeric() =>
+        Assert.Null(await LinuxNoticeAsync(new Version(1, 0, 0), "3.0.0-beta.1"));
+
+    [Fact]
+    public async Task Notice_Appears_WithToleratedVPrefix()
+    {
+        var notice = await LinuxNoticeAsync(new Version(3, 0, 0), "v4.0.0");
         Assert.NotNull(notice);
         Assert.Equal("4.0.0", notice!.Version);
     }
 
+    /// <summary>Umgekehrt am 2026-08-01. Vorher galt hier rohe <see cref="Version"/>-Semantik:
+    /// "3.0.0.0" (Revision 0) &gt; <c>new Version(3,0,0)</c> (Revision -1) — also ein Update, obwohl es
+    /// dieselbe Version ist. Abgesichert war das nur durch eine Bitte in MANIFEST-SCHEMA.md, Versionen
+    /// dreigliedrig zu pflegen; ein einziges vierstelliges Feld im Manifest hätte jeden Launcher in eine
+    /// Endlosschleife geschickt (laden, tauschen, wieder dieselbe Version, wieder laden). Genau diese
+    /// Schleifenklasse hat am 2026-08-01 auf Windows echte Spieler getroffen, deshalb bleibt die Regel
+    /// nicht länger eine Konvention: fehlende Komponenten zählen als 0.</summary>
     [Fact]
-    public void FourComponent_IsNewerThanThreeComponent_SystemVersionSemantics()
-    {
-        // System.Version: "3.0.0.0" (Revision 0) > new Version(3,0,0) (Revision -1). Dokumentierte
-        // Konsequenz (MANIFEST-SCHEMA.md): Manifest-Versionen dreigliedrig pflegen.
-        var notice = LinuxService(new Version(3, 0, 0)).CheckForNotice(LinuxManifest("3.0.0.0"));
-        Assert.NotNull(notice);
-    }
+    public async Task FourComponentZero_IsTheSameVersion_NotAnUpdate() =>
+        Assert.Null(await LinuxNoticeAsync(new Version(3, 0, 0), "3.0.0.0"));
+
+    /// <summary>Die Gegenprobe, damit die Regel oben keine Updates verschluckt: ein echter vierter
+    /// Stand (Hotfix 3.0.0.<b>4</b>) ist weiterhin neuer als 3.0.0.</summary>
+    [Fact]
+    public async Task FourthComponentHotfix_IsStillAnUpdate() =>
+        Assert.NotNull(await LinuxNoticeAsync(new Version(3, 0, 0), "3.0.0.4"));
 
     // ─── Test doubles ─────────────────────────────────────────────────────
+
+    /// <summary>Stands in for a server that published a correctly signed manifest.</summary>
+    private sealed class SignedGate(ServerManifest signed) : IManifestSignatureGate
+    {
+        public Task<ServerManifest?> AcquireVerifiedAsync(CancellationToken ct = default) =>
+            Task.FromResult<ServerManifest?>(signed);
+    }
 
     private sealed class FakeDownload : IDownloadService
     {
@@ -231,7 +263,7 @@ public sealed class ManifestContractTests
         public bool IsSupported { get; } = isSupported;
         public bool Applied { get; private set; }
 
-        public bool ApplySwap(string newExePath, string currentExePath, string appDir)
+        public bool ApplySwap(string newExePath, string currentExePath, string appDir, Version? target = null)
         {
             Applied = true;
             return true;

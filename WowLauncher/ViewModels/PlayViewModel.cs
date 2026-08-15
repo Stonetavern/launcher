@@ -35,9 +35,32 @@ public sealed partial class PlayViewModel : ViewModelBase
     private readonly IFolderPickerService _folderPicker;
     private readonly IShellWindowController? _windowController;
     private readonly WowLauncher.Services.Platform.IGameSession? _session;
+    /// <summary>The 1.12.1 language switch. Optional so every existing construction of this view model
+    /// keeps compiling; null simply means the 1.12.1 language menu stays English-only, which is what
+    /// shipped before it existed.</summary>
+    private readonly ILanguagePackService? _languagePacks;
+    /// <summary>Used only to refuse a language switch while a client is up. Optional for the same
+    /// reason as <see cref="_languagePacks"/>.</summary>
+    private readonly WowLauncher.Services.Platform.IGameProcessDetector? _gameDetector;
     private readonly ILogger _log;
 
-    private string _wowPath = "";
+    private string _wowPathBacking = "";
+
+    /// <summary>The resolved client executable for the current pick. A property rather than a plain
+    /// field so the LANGUAGE MENU follows it: which languages exist is a property of the installation
+    /// on disk, not of the launcher, and it changes whenever this path does (era switch, a client
+    /// installed, a different build picked). Every existing assignment keeps working unchanged.</summary>
+    private string _wowPath
+    {
+        get => _wowPathBacking;
+        set
+        {
+            if (_wowPathBacking == value) return;
+            _wowPathBacking = value;
+            RefreshAvailableLocales();
+        }
+    }
+
     private string _downloadUrl = "";
     private string _downloadSha256 = "";
     private long _downloadSize;                    // manifest-declared size, for the pre-download disk-space check
@@ -73,10 +96,44 @@ public sealed partial class PlayViewModel : ViewModelBase
             OnPropertyChanged(nameof(ActionGlyph));
             OnPropertyChanged(nameof(StatusLine));
             OnPropertyChanged(nameof(SubLine));
+            // The hero's second locate block disappears when the main button became that action.
+            OnPropertyChanged(nameof(ShowLocate));
+            // ActionEnabled changed above, so the command behind the button must be told too. The V3
+            // shell binds IsEnabled to the property AND the Command to PlayCommand; without this the
+            // command's own CanExecute stays on the previous answer and a keyboard/automation invoke
+            // disagrees with what the button shows.
+            PlayCommand.NotifyCanExecuteChanged();
         }
     }
     private ProgressionPhase _activePhase = Progression.Default;
-    private ServerManifest? _lastManifest;        // cached for re-eval / check-for-updates / repair
+    private ServerManifest? _lastManifestBacking;   // cached for re-eval / check-for-updates / repair
+
+    /// <summary>
+    /// Das zuletzt geholte Manifest. Eine Eigenschaft und kein blankes Feld aus demselben Grund wie
+    /// bei <see cref="_wowPath"/>: das <b>Sprachmenü hängt daran</b>, und zwar an beiden Eingaben.
+    ///
+    /// <para><b>Der Fehler, den das schließt</b> (Owner-Befund 2026-08-04, von Codex bestätigt).
+    /// Welche Sprachen wählbar sind, ergibt sich aus zwei Quellen: was auf der Platte liegt und was
+    /// der Server an Paketen anbietet. Nachgerechnet wurde bisher nur, wenn sich die <b>erste</b>
+    /// änderte. Nach einer frischen 1.12.1-Installation lief die Rechnung also in dem Moment, in dem
+    /// der Client-Pfad gesetzt wurde — und wenn das Manifest da noch nicht angekommen war, blieb
+    /// „nur Englisch" stehen. Das Manifest traf später ein, niemand rechnete nach, und der Wähler
+    /// blieb verschwunden, obwohl der Server drei Pakete anbot. Kein Fehler, keine Meldung, nur ein
+    /// Bedienelement, das nicht da war.</para>
+    ///
+    /// <para>Auch <c>null</c> löst die Neuberechnung aus: ein fehlgeschlagener Abruf setzt das
+    /// Manifest zurück, und dann muss das Menü ebenfalls stimmen statt Pakete anzubieten, von denen
+    /// wir gerade nichts mehr wissen.</para>
+    /// </summary>
+    private ServerManifest? _lastManifest
+    {
+        get => _lastManifestBacking;
+        set
+        {
+            _lastManifestBacking = value;
+            RefreshAvailableLocales();
+        }
+    }
     private bool _suppressExpansionChange;        // guard programmatic SelectedExpansion sets
     private CancellationTokenSource? _applyCts;   // cancels an in-flight expansion switch when a new one starts
     private CancellationTokenSource? _downloadCts; // cancels an in-flight client download when the player pauses
@@ -86,12 +143,15 @@ public sealed partial class PlayViewModel : ViewModelBase
         INewsService news, WowLauncher.Services.Platform.ILaunchExitPolicy launchExit,
         WowLauncher.Services.Platform.IAppPaths paths, IFolderPickerService folderPicker, ILogger log,
         IShellWindowController? windowController = null,
-        WowLauncher.Services.Platform.IGameSession? session = null)
+        WowLauncher.Services.Platform.IGameSession? session = null,
+        ILanguagePackService? languagePacks = null,
+        WowLauncher.Services.Platform.IGameProcessDetector? gameDetector = null)
     {
         _config = cfg; _manifest = mf; _client = cl; _srv = st; _download = dl; _verify = verify;
         _update = up; _news = news;
         _launchExit = launchExit; _paths = paths; _folderPicker = folderPicker;
-        _windowController = windowController; _session = session;
+        _windowController = windowController; _session = session; _languagePacks = languagePacks;
+        _gameDetector = gameDetector;
         _log = log.ForContext<PlayViewModel>();
         var c = _config.Load();
         _selectedLocale = ClientLocales.FromCode(c.Locale);
@@ -121,7 +181,7 @@ public sealed partial class PlayViewModel : ViewModelBase
         nameof(IsDownloading), nameof(IsError), nameof(IsBusy), nameof(ActionPrimaryText), nameof(ActionGlyph),
         nameof(ActionEnabled), nameof(ShowProgress), nameof(StatusLine), nameof(SubLine),
         nameof(CanRepair), nameof(CanCheckUpdates), nameof(CanSwitchContext), nameof(NeedsOwnClient),
-        nameof(IsPaused), nameof(IsPausable), nameof(ShowLocate))]
+        nameof(IsPaused), nameof(IsPausable), nameof(ShowLocate), nameof(CanLocate))]
     [NotifyCanExecuteChangedFor(nameof(PlayCommand), nameof(UpdateCommand),
         nameof(RepairCommand), nameof(CheckForUpdatesCommand),
         nameof(PauseDownloadCommand), nameof(LocateExistingClientCommand))]
@@ -142,12 +202,22 @@ public sealed partial class PlayViewModel : ViewModelBase
     public bool IsPausable => State == LauncherState.Downloading;
 
     /// <summary>
-    /// Offer "I already have WoW" whenever this build has no usable local client yet (nothing to play,
-    /// or a failed/paused download the player would rather satisfy from an existing copy). Hidden once a
-    /// client is registered and the launcher is Ready/Update — there is nothing to locate then.
+    /// Whether locating an existing install is a sensible thing to ask for at all: no usable local
+    /// client yet (nothing to play, or a failed/paused download the player would rather satisfy from an
+    /// existing copy). Drives the COMMAND, including the copy of it in the settings panel, so it stays
+    /// true even when the hero shows no second button.
     /// </summary>
-    public bool ShowLocate => State is LauncherState.NoClient or LauncherState.EraTransition
+    public bool CanLocate => State is LauncherState.NoClient or LauncherState.EraTransition
         or LauncherState.DownloadError or LauncherState.Paused;
+
+    /// <summary>
+    /// Whether the hero shows the quiet second "I already have WoW" block under the action button.
+    ///
+    /// <para>Not shown when the main button IS that action (<see cref="NeedsOwnClient"/>): the render on
+    /// 2026-08-05 had "FIND MY CLIENT" in ember and "Locate installed WoW" in ghost grey directly
+    /// underneath, two controls for one thing. The tests were all green - only the picture showed it.</para>
+    /// </summary>
+    public bool ShowLocate => CanLocate && !NeedsOwnClient;
 
     // ─── Active progression phase (drives client identity + era-transition UI) ──
     [ObservableProperty]
@@ -398,9 +468,16 @@ public sealed partial class PlayViewModel : ViewModelBase
     {
         LauncherState.Initializing => Loc.T("Play_Status_Connecting") + "…",
         LauncherState.UpdatingLauncher => Loc.T("Play_Status_UpdatingLauncher") + "…",
+        // Without a managed source the launcher cannot fetch this build - say that in a sentence the
+        // player can act on, and name the build. The old line ("No managed download for this client")
+        // described the launcher's plumbing, not the player's situation, and it was the ONLY text on
+        // screen for a self-added realm: the shell renders StatusLine, never SubLine (owner finding
+        // 2026-08-05, a grey button with no reason next to it).
         LauncherState.NoClient => _buildHasManagedSource
             ? Loc.T("Play_Status_NoClient")
-            : Loc.T("Play_Status_BringYourOwn"),
+            // ShortLabel, not PreciseLabel: the precise one carries its own "  ·  Classic Era" separator,
+            // which read as a broken sentence in the middle of one (image check 2026-08-05).
+            : Loc.F("Play_Status_BringYourOwn", SelectedClientChoice.Client.ShortLabel),
         LauncherState.EraTransition => Loc.F("Play_Status_EraTransition", _activePhase.DisplayName),
         LauncherState.Ready => "✓ " + Loc.T("Play_Status_Ready"),
         LauncherState.UpdateAvailable => Loc.T("Play_Status_UpdateAvailable"),
@@ -432,7 +509,11 @@ public sealed partial class PlayViewModel : ViewModelBase
 
     public string ActionPrimaryText => State switch
     {
-        LauncherState.NoClient => _buildHasManagedSource ? Loc.T("Play_Cta_Download") : Loc.T("Play_Cta_BringYourOwn"),
+        // No managed source: the button becomes the way OUT of the dead end instead of naming it.
+        // "UNAVAILABLE" on a disabled button read as "this realm/client is unavailable" and offered
+        // nothing to press - while the one thing that does work here (point the launcher at a client
+        // that is already on the machine) sat further down in ghost grey.
+        LauncherState.NoClient => _buildHasManagedSource ? Loc.T("Play_Cta_Download") : Loc.T("Play_Cta_Locate"),
         LauncherState.EraTransition => Loc.T("Play_Cta_NewEra"),
         LauncherState.UpdateAvailable => Loc.T("Play_Cta_Update"),
         LauncherState.DownloadError => Loc.T("Play_Cta_Retry"),
@@ -443,6 +524,8 @@ public sealed partial class PlayViewModel : ViewModelBase
 
     public string ActionGlyph => State switch
     {
+        // No glyph for the locate case. "⌕" rendered as a cross in the shipped serif face and read like
+        // a cancel button (image check 2026-08-05) - a wrong picture is worse than none.
         LauncherState.NoClient => _buildHasManagedSource ? "⬇" : "",
         LauncherState.EraTransition => "⬇",
         LauncherState.UpdateAvailable => "⬇",
@@ -453,13 +536,18 @@ public sealed partial class PlayViewModel : ViewModelBase
 
     /// <summary>True exactly when the active build has no manifest-backed download - a DOWNLOAD button
     /// here would refuse on an empty URL every time (Codex/owner Finding 4, 2026-07-22: a guaranteed
-    /// dead click is not an honest state). Drives disabling the action AND the status text above.</summary>
+    /// dead click is not an honest state). Drives the action LABEL and the status text above.
+    ///
+    /// <para>It no longer disables the button (owner finding 2026-08-05). A realm someone added
+    /// themselves has no manifest, so it can never download - but pointing the launcher at a client
+    /// that is already installed works perfectly well, and that is what the button now does. A grey
+    /// button reading UNAVAILABLE was a dead end with no reason and no way forward.</para></summary>
     public bool NeedsOwnClient => State == LauncherState.NoClient && !_buildHasManagedSource;
 
     public bool ActionEnabled =>
         State is LauncherState.Ready or LauncherState.EraTransition
             or LauncherState.UpdateAvailable or LauncherState.DownloadError or LauncherState.Paused
-        || (State == LauncherState.NoClient && _buildHasManagedSource);
+            or LauncherState.NoClient;
 
     // The progress bar stays on while paused (frozen at its last percent) so the player sees exactly
     // where a resume will pick up, not a blank slate.
@@ -506,16 +594,458 @@ public sealed partial class PlayViewModel : ViewModelBase
     public bool HasLauncherUpdateHint => !string.IsNullOrEmpty(LauncherUpdateHint);
 
     // ─── Language ─────────────────────────────────────────────────────────
-    public IReadOnlyList<LocaleInfo> AvailableLocales => ClientLocales.SupportedLocales;
 
-    [ObservableProperty] private LocaleInfo _selectedLocale;
+    /// <summary>The languages the INSTALLED client can actually be started in. Not a fixed list: the
+    /// 1.14.2 package carries ten of them, and which ones is written in the installation itself. A
+    /// language the client does not carry must never reach the menu — picking one kills the client on
+    /// ERROR #134 before a window appears, which reads to a player like a broken install.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasLanguageChoice))]
+    private IReadOnlyList<LocaleInfo> _availableLocales = ClientLocales.SupportedLocales;
+
+    /// <summary>Whether there is anything to choose. A picker with one entry is a control that lies
+    /// about being a choice, so the surface hides it entirely for a client that ships one language.</summary>
+    public bool HasLanguageChoice => AvailableLocales.Count > 1;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(SelectedLocaleCode))]
+    private LocaleInfo _selectedLocale;
+
+    /// <summary>
+    /// The picked language as its CODE, which is what the picker binds to.
+    ///
+    /// <para>Binding the object itself does not survive the list being replaced: the control drops a
+    /// selection whose instance is no longer in its ItemsSource and writes the null back, and the box
+    /// then renders empty while this view model still holds the right language. A code is matched by
+    /// value, so a rebuilt list keeps the selection (Linux end-to-end run, 2026-08-04 - the value was
+    /// correct in every log line and the box was blank on screen).</para>
+    /// </summary>
+    public string SelectedLocaleCode
+    {
+        get => SelectedLocale?.Code ?? ClientLocales.Default.Code;
+        set
+        {
+            // The control clears its selection while re-templating; that is not the player choosing
+            // "no language".
+            if (string.IsNullOrEmpty(value) || value == SelectedLocale?.Code) return;
+            SelectedLocale = ClientLocales.FromCode(value);
+        }
+    }
+
+    /// <summary>The saved language, or English when the config cannot be read. Never throws: this runs
+    /// while a property is changing, and a language menu is not worth a crashed view model.</summary>
+    /// <summary>Die eigene Sprache der Oberfläche, oder leer für „der Spielsprache folgen". Fehler
+    /// beim Lesen bedeuten „keine eigene" — dann verhält sich der Launcher wie vor der Trennung.</summary>
+    private string SafeLauncherLanguage()
+    {
+        try { return _config.Load().LauncherLanguage ?? ""; }
+        catch (Exception ex)
+        {
+            _log.Debug(ex, "Launcher-Sprache nicht lesbar — folgt der Spielsprache");
+            return "";
+        }
+    }
+
+    private string SafeConfigLocale()
+    {
+        try { return _config.Load().Locale; }
+        catch (Exception ex)
+        {
+            _log.Debug(ex, "Could not read the saved language; falling back to English");
+            return ClientLocales.Default.Code;
+        }
+    }
+
+    /// <summary>True while a language pack is being fetched or moved into place. Guards re-entry: the
+    /// switch reverts <see cref="SelectedLocale"/> when it fails, and that assignment comes straight
+    /// back through this handler.</summary>
+    private bool _applyingLocale;
+
+    /// <summary>What the language switch is doing right now, or why it did not. Empty when nothing is
+    /// happening — a permanently visible status line about a language nobody is changing is noise.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(LanguageStatus))]
+    private string _languageActivity = "";
+
+    /// <summary>
+    /// Why the language menu is as short as it is. Unlike <see cref="LanguageActivity"/> this is not an
+    /// event but a standing fact about the selected realm, so it stays on screen.
+    ///
+    /// <para><b>The finding it closes</b> (owner, 2026-08-05, same root as the grey UNAVAILABLE button).
+    /// For 1.12.1 a language is a pack the SERVER publishes; a realm the player added has no manifest,
+    /// so there are no packs, and the menu shrank to whatever happened to be installed - two entries
+    /// next to Stonetavern's five, with nothing saying why. Shortening the menu is correct: offering a
+    /// language that cannot be delivered would fail at the moment of picking it. Shortening it in
+    /// silence is not.</para>
+    /// </summary>
+    private string _languageNote = "";
+
+    /// <summary>What the surface shows next to the language picker: whatever is happening right now,
+    /// otherwise the standing reason the menu is short. Bound as <c>Play.LanguageStatus</c>.</summary>
+    public string LanguageStatus =>
+        LanguageActivity.Length > 0 ? LanguageActivity : _languageNote;
+
+    // ─── Ein Sprachpaket, das nachgebessert wurde ─────────────────────────
+    // Ein Paket wird einmal installiert und danach nie wieder angesehen: der Wechsel fragt "liegt die
+    // Datei da" und laedt dann nicht. Fuer einen Wechsel ist das richtig, fuer eine FEHLERBEHEBUNG
+    // falsch. Wer deDE einmal hat, behaelt es fuer immer - kein Fehler, keine Meldung, die Sprache
+    // gilt als installiert, und das ist sie ja auch, nur eben nicht die veroeffentlichte.
+    //
+    // Nichts daran ist eine Zustellung "an die deutschen Clients". Das Manifest ist fuer alle gleich;
+    // jeder Launcher vergleicht nur die Sprachen, die er WIRKLICH auf der Platte hat. Ein englischer
+    // Spieler laedt nichts, und der Server erfaehrt nicht, wer welche Sprache spricht - er muss es
+    // auch nicht wissen.
+
+    /// <summary>Die Sprache, fuer die gerade eine neuere Fassung angeboten wird, oder leer.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasLanguagePackUpdate), nameof(LanguagePackUpdateLabel))]
+    [NotifyCanExecuteChangedFor(nameof(UpdateLanguagePackCommand))]
+    private string _languagePackUpdateLocale = "";
+
+    public bool HasLanguagePackUpdate => LanguagePackUpdateLocale.Length > 0;
+
+    /// <summary>Die Sprache steht IM Knopf, nicht nur daneben: der Knopf sitzt in einer Leiste voller
+    /// anderer Knoepfe, und "Aktualisieren" allein waere dort eine Frage statt einer Ansage.</summary>
+    public string LanguagePackUpdateLabel => HasLanguagePackUpdate
+        ? Loc.F("Language_Update_Button", ClientLocales.FromCode(LanguagePackUpdateLocale).DisplayName)
+        : "";
+
+    private bool CanUpdateLanguagePack => HasLanguagePackUpdate && !_applyingLocale && !IsBusy;
+
+    /// <summary>
+    /// Das installierte Paket durch das veroeffentlichte ersetzen. Nur auf Knopfdruck, nie von allein:
+    /// es sind 90 MB, und eine Datei unter einem laufenden Spiel auszutauschen ist genau der Griff,
+    /// den der Spieler bestimmen soll.
+    /// </summary>
+    [RelayCommand(CanExecute = nameof(CanUpdateLanguagePack))]
+    private async Task UpdateLanguagePack()
+    {
+        var code = LanguagePackUpdateLocale;
+        if (_languagePacks is null || code.Length == 0) return;
+        var dir = Path.GetDirectoryName(_wowPathBacking);
+        if (string.IsNullOrEmpty(dir)) return;
+
+        _applyingLocale = true;
+        try
+        {
+            LanguageActivity = Loc.T("Language_Downloading");
+            var pack = _lastManifest?.LanguagePackFor(code, ClientVersion.Default.Build);
+            var progress = new System.Progress<DownloadProgress>(p =>
+            {
+                DownloadProgress = p.Percentage;
+                LanguageActivity = Loc.F("Language_Downloading_Percent", p.Percentage);
+            });
+
+            var result = await _languagePacks
+                .UpdateAsync(dir, code, pack, GameIsRunning(), progress)
+                .ConfigureAwait(true);
+
+            LanguageActivity = result.Ok ? "" : (result.Error ?? Loc.T("Language_Failed"));
+            if (!result.Ok)
+                _log.Warning("The {Locale} language pack could not be updated: {Error}", code, result.Error);
+        }
+        catch (Exception ex)
+        {
+            _log.Error(ex, "Updating the {Locale} language pack failed", code);
+            LanguageActivity = Loc.T("Language_Failed");
+        }
+        finally
+        {
+            _applyingLocale = false;
+            RefreshAvailableLocales();
+        }
+    }
+
+    /// <summary>
+    /// Nachsehen, ob eine der WIRKLICH installierten Sprachen inzwischen nachgebessert wurde. Reine
+    /// Auskunft aus dem zuletzt geholten Manifest: kein Netz, kein Download.
+    ///
+    /// <para>Unbekannte Herkunft zaehlt ausdruecklich NICHT als veraltet. Ein Paket von vor dem
+    /// Herkunftsmarker ist wahrscheinlich in Ordnung, und jemanden auf Verdacht 90 MB laden zu lassen,
+    /// kostet echte Bandbreite fuer ein Vielleicht.</para>
+    /// </summary>
+    private void RefreshLanguagePackUpdate(string? clientDir)
+    {
+        if (_languagePacks is null || string.IsNullOrEmpty(clientDir))
+        {
+            LanguagePackUpdateLocale = "";
+            return;
+        }
+
+        try
+        {
+            foreach (var code in _languagePacks.Installed(clientDir))
+            {
+                var pack = _lastManifest?.LanguagePackFor(code, ClientVersion.Default.Build);
+                if (_languagePacks.State(clientDir, code, pack) == LanguagePackState.Outdated)
+                {
+                    LanguagePackUpdateLocale = code;
+                    return;
+                }
+            }
+            LanguagePackUpdateLocale = "";
+        }
+        catch (Exception ex)
+        {
+            _log.Debug(ex, "Could not check the installed language packs against the manifest");
+            LanguagePackUpdateLocale = "";
+        }
+    }
 
     partial void OnSelectedLocaleChanged(LocaleInfo value)
     {
+        if (_applyingLocale) return;
+
         var c = _config.Load();
         c.Locale = value.Code;
         _config.Save(c);
+        // The launcher has no language of its own: it follows the game. A player who set the game to
+        // German did not mean "but keep the launcher English", and a second picker for the same
+        // intent is one more control than anybody wants.
+        // Nur mitziehen, wenn der Spieler der Oberflaeche keine eigene Sprache gegeben hat.
+        // Sonst wuerde eine Client-Umstellung eine bewusste Entscheidung stillschweigend ueberschreiben.
+        if (string.IsNullOrWhiteSpace(SafeLauncherLanguage()))
+            Loc.Use(value.Code);
         _log.Information("Locale → {Locale}", value.Code);
+
+        // 1.12.1 carries its language in an MPQ that has to be downloaded and moved into the patch
+        // slot; 1.14.2 carries all ten inside the package and needs nothing but the config key the
+        // launch path writes.
+        if (WholeClientLocales.Contains(value.Code, StringComparer.Ordinal))
+        {
+            // This language is a client of its own. Nothing to move into a patch slot; the surface
+            // has to re-resolve so it offers the download for THAT package instead.
+            LanguageActivity = "";
+            _ = ApplyExpansionAsync(SelectedExpansion, persist: false, NewApplyToken());
+            return;
+        }
+
+        if (_languagePacks is not null && !CurrentClientIsModern)
+            _ = ApplyVanillaLocaleAsync(value.Code);
+    }
+
+    /// <summary>The languages that arrive as a whole client of their own for 1.12.1, not as a pack.
+    /// Russian is one: its localisation was built against a different client, and its interface files
+    /// make our executable refuse to start. Picking such a language is a DOWNLOAD, not a switch.</summary>
+    private IReadOnlyList<string> WholeClientLocales =>
+        _lastManifestBacking?.ClientLocalesForBuild(ClientVersion.Default.Build) ?? [];
+
+    /// <summary>Whether the client behind the current pick is the CASC-based 1.14.2 build. Read off the
+    /// executable name rather than the picker, because the picker can move while the path has not.</summary>
+    private bool CurrentClientIsModern =>
+        !string.IsNullOrEmpty(_wowPathBacking)
+        && ClientVersion.ExeNameNeedsModernRuntime(Path.GetFileName(_wowPathBacking));
+
+    /// <summary>
+    /// Put the picked language onto the 1.12.1 install, downloading its pack when it is not there yet.
+    /// A failure reverts the picker to the language that IS active — leaving the menu showing German
+    /// while the client starts in English is the plausible-but-wrong state this whole path exists to
+    /// avoid.
+    /// </summary>
+    private async Task ApplyVanillaLocaleAsync(string code)
+    {
+        if (_languagePacks is null) return;
+        var dir = Path.GetDirectoryName(_wowPathBacking);
+        if (string.IsNullOrEmpty(dir)) return;
+
+        _applyingLocale = true;
+        try
+        {
+            var installed = _languagePacks.Installed(dir).Contains(code, StringComparer.Ordinal);
+            LanguageActivity = installed
+                ? Loc.T("Language_Switching")
+                : Loc.T("Language_Downloading");
+
+            var pack = _lastManifest?.LanguagePackFor(code, ClientVersion.Default.Build);
+            var progress = new System.Progress<DownloadProgress>(p =>
+            {
+                DownloadProgress = p.Percentage;
+                LanguageActivity = Loc.F("Language_Downloading_Percent", p.Percentage);
+            });
+
+            var result = await _languagePacks
+                .EnsureAsync(dir, code, pack, GameIsRunning(), progress)
+                .ConfigureAwait(true);
+
+            if (result.Ok)
+            {
+                LanguageActivity = "";
+                var cfg = _config.Load();
+                cfg.Locale = result.Locale;
+                _config.Save(cfg);
+            }
+            else
+            {
+                _log.Warning("The language could not be switched to {Locale}: {Error}", code, result.Error);
+                LanguageActivity = result.Error ?? Loc.T("Language_Failed");
+                SelectedLocale = ClientLocales.FromCode(result.Locale);
+                var cfg = _config.Load();
+                cfg.Locale = result.Locale;
+                _config.Save(cfg);
+            }
+
+            RefreshAvailableLocales();
+        }
+        catch (Exception ex)
+        {
+            _log.Error(ex, "Switching the client language to {Locale} failed", code);
+            LanguageActivity = Loc.T("Language_Failed");
+        }
+        finally
+        {
+            _applyingLocale = false;
+        }
+    }
+
+    /// <summary>Whether a client of ours is up right now. Renaming a language MPQ under a running
+    /// client either fails or, worse, succeeds and leaves the game reading a file nobody can find.</summary>
+    private bool GameIsRunning()
+    {
+        try { return _gameDetector?.IsGameRunning(_wowPathBacking) == true; }
+        catch (Exception ex)
+        {
+            _log.Debug(ex, "Could not tell whether the game is running; assuming it is not");
+            return false;
+        }
+    }
+
+    /// <summary>Re-read what the client on disk offers. Both builds are covered, by two different
+    /// truths: the modern (1.14.2, CASC) build carries its languages inside the installation, while
+    /// 1.12.1 takes its language from separately installed MPQ packs — so for that one the menu is what
+    /// is installed plus what the server publishes a pack for.
+    ///
+    /// <para>If the current pick is not in the new list — the player switches from a client with ten
+    /// languages to one with one — the selection falls back to English rather than staying on a
+    /// language this client cannot deliver.</para></summary>
+    private void RefreshAvailableLocales()
+    {
+        try
+        {
+            var path = _wowPathBacking;
+            var dir = string.IsNullOrEmpty(path) ? null : Path.GetDirectoryName(path);
+            IReadOnlyList<LocaleInfo> menu;
+            var localOnly = false;   // the menu is limited to the installation, and nothing can be added
+            if (string.IsNullOrEmpty(path) || dir is null)
+            {
+                menu = ClientLocales.SupportedLocales;
+            }
+            else if (ClientVersion.ExeNameNeedsModernRuntime(Path.GetFileName(path)))
+            {
+                menu = ClientLocales.ForInstalled(
+                    WowLauncher.Services.Platform.InstalledClientLocales.ForClientDir(dir).Text);
+            }
+            else if (_languagePacks is not null)
+            {
+                // 1.12.1: what is on disk, plus what the server has a pack for. The second half is the
+                // point — a language nobody has downloaded yet still belongs in the menu, because
+                // picking it is how it gets downloaded.
+                var offered = _lastManifestBacking?.LanguagePacks
+                    .Where(p => p.Build is null || p.Build == ClientVersion.Default.Build)
+                    .Select(p => p.Locale).ToList() ?? [];
+                var whole = WholeClientLocales;
+                // Nothing on offer at all = a realm the player added themselves (no manifest, so no
+                // language_packs). The menu is then exactly what is installed, which is correct - and
+                // has to be SAID, or it reads as a launcher that lost three languages (owner 2026-08-05).
+                localOnly = offered.Count == 0 && whole.Count == 0;
+                menu = ClientLocales.ForInstalled(
+                    _languagePacks.Installed(dir).Concat(offered).Concat(whole));
+            }
+            else
+            {
+                menu = ClientLocales.SupportedLocales;
+            }
+
+            var note = localOnly ? Loc.T("Play_Language_LocalOnly") : "";
+            if (!string.Equals(note, _languageNote, StringComparison.Ordinal))
+            {
+                _languageNote = note;
+                OnPropertyChanged(nameof(LanguageStatus));
+            }
+
+            // Only when it ACTUALLY differs. Replacing the list makes the picker drop its own
+            // selection, and this method runs more than once per start (client path, then manifest).
+            // The second, identical rebuild was what left the box empty: same languages, new list
+            // object, selection gone - and a view model that was right about every value.
+            // 🔴 Was dabei herauskam, gehoert ins Protokoll. Am 2026-08-04 fehlte der Sprachwaehler
+            // beim Owner, und von aussen war nicht zu unterscheiden, ob das Menue leer blieb, weil
+            // nichts installiert ist, weil das Manifest noch nicht da war, oder weil dieser Aufruf
+            // gar nicht lief. Drei verschiedene Fehler, ein identisches Bild: kein Auswahlfeld.
+            // Der Zwischenstand kostet eine Zeile und beantwortet die Frage beim naechsten Start.
+            _log.Information(
+                "Sprachmenü: {Count} Einträge [{Codes}] · Client {Path} · Manifest {Manifest} · Pakete {Packs}",
+                menu.Count, string.Join(",", menu.Select(l => l.Code)),
+                string.IsNullOrEmpty(path) ? "(keiner)" : path,
+                _lastManifestBacking is null ? "fehlt" : "da",
+                _lastManifestBacking?.LanguagePacks.Count ?? 0);
+
+            // 🔴 Ohne aufgeloesten Client ist `menu` der Platzhalter aus SupportedLocales — Englisch
+            // und sonst nichts. Ihn in die LISTE zu schreiben ist derselbe Fehler wie die gespeicherte
+            // Wahl daran zu reparieren, nur eine Stufe frueher und ueber die Oberflaeche statt ueber
+            // den Code: der Waehler laesst eine Auswahl fallen, die in seiner neuen Liste nicht mehr
+            // vorkommt, und schreibt Englisch zurueck durch die Bindung. Das ist ein echter Wechsel,
+            // also wird er gespeichert — und die Sprache des Spielers ist weg.
+            //
+            // Der Riegel weiter unten deckte nur die Reparatur ab. Eine Seite des Mechanismus geaendert,
+            // die andere stehen gelassen: gruen, unauffaellig, falsch.
+            //
+            // Gemessen am 2026-08-13 auf dem Mac des Owners, 1.14.2, beim Wechsel zwischen zwei Realms:
+            //   11:06:22.624  Locale → deDE                                  (der Spieler waehlt)
+            //   11:06:24.196  Sprachmenü: 1 Einträge [enUS] · Client (keiner) (ApplyExpansionAsync
+            //                 setzt _wowPath = "" als Reset, dieser Aufruf haengt am Setter)
+            //   11:06:24.328  Found build 42597 client · Sprachmenü: 5 Einträge
+            //   11:06:25.902  Locale → enUS                                  (die Wahl ist weg)
+            // Der Reset selbst ist richtig (H3/L2: eine geworfene Anwendung darf den Pfad der alten Ära
+            // nicht stehen lassen). Falsch ist nur, daraus eine Aussage ueber die Sprachen zu machen.
+            if (!string.IsNullOrEmpty(path)
+                && !menu.Select(l => l.Code).SequenceEqual(AvailableLocales.Select(l => l.Code), StringComparer.Ordinal))
+                AvailableLocales = menu;
+
+            // Called here rather than from an OnAvailableLocalesChanged hook: the picker clears a
+            // selection that is not in its list and writes the null back, and that null has to be
+            // repaired from the SAVED language, not merely replaced by English. Doing it inline keeps
+            // it on a path that provably runs.
+            // Bei derselben Gelegenheit nachsehen, ob eine installierte Sprache nachgebessert wurde.
+            // Hier und nicht anderswo: dies ist die Stelle, die nach jedem Wechsel, jedem
+            // Manifest-Abruf und jedem Clientwechsel ohnehin laeuft.
+            RefreshLanguagePackUpdate(dir);
+
+            // 🔴 Ohne aufgeloesten Client ist `menu` KEINE Aussage darueber, was der Spieler haben
+            // kann: es ist der Platzhalter aus SupportedLocales, und der kennt nur enUS. Die
+            // gespeicherte Wahl daran zu "reparieren" loescht sie. Diese Methode laeuft beim Start
+            // zweimal — einmal bevor der Client gefunden ist, 700 ms spaeter mit ihm (live
+            // beobachtet 2026-08-12: "Sprachmenü: 1 Einträge [enUS] · Client (keiner)" gefolgt von
+            // "Locale → enUS", danach das volle Menue mit fuenf Sprachen). Ergebnis war ein Spieler,
+            // der bei JEDEM Start still von Deutsch auf Englisch gesetzt wurde. Solange kein Client
+            // dasteht, wird nichts korrigiert und nichts gespeichert.
+            if (string.IsNullOrEmpty(path)) return;
+
+            var repaired = LocaleSelection.Repair(menu, SelectedLocale?.Code, SafeConfigLocale());
+            if (repaired is null) return;
+
+            if (SelectedLocale?.Code != repaired.Code)
+            {
+                if (SelectedLocale is not null)
+                    _log.Information("This client does not offer {Locale}; falling back to {Fallback}",
+                        SelectedLocale.Code, repaired.Code);
+                SelectedLocale = repaired;      // a real change: save it, switch the interface language
+            }
+            else
+            {
+                // The value did not change, so the generated setter would raise NOTHING - and the
+                // picker has meanwhile dropped its own selection because the list underneath it was
+                // replaced. Without an unconditional notification the box sits there empty while this
+                // view model is entirely correct about which language is picked. Deliberately do not
+                // use the setter: nothing changed, so nothing should be saved or re-applied, only
+                // re-shown.
+                OnPropertyChanged(nameof(SelectedLocale));
+            }
+        }
+        catch (Exception ex)
+        {
+            // A language menu is not worth a crashed view model. English is always right.
+            _log.Debug(ex, "Could not read the installed client languages; offering English only");
+            AvailableLocales = ClientLocales.SupportedLocales;
+        }
     }
 
     // ─── Art loading (cached, WebP/PNG fallback, graceful-missing) ─────────
@@ -557,7 +1087,14 @@ public sealed partial class PlayViewModel : ViewModelBase
         Realm = RealmState.Checking;
 
         // News in parallel — non-critical, never blocks the play path (offline → cache/defaults).
-        _ = LoadNewsAsync();
+        // 🔴 Patch Notes und die News-Leiste fliegen aus dem Launcher (Owner-Entscheid 2026-08-12).
+        // Hier wird der DATENPFAD stillgelegt, nicht nur die Anzeige: ohne diesen Aufruf gibt es
+        // keinen news.json-Abruf mehr, keinen Cache und keine Netzabhaengigkeit fuer etwas, das der
+        // Spieler nicht mehr zu sehen bekommt. Die News-Sammlung bleibt leer, die Leiste rendert
+        // dadurch nichts. Die dann toten Klassen (NewsService, PatchNotesViewModel) und die leere
+        // Spalte in der Ansicht werden in einem eigenen Durchgang ausgebaut — eine stillgelegte
+        // Quelle ist harmlos, ein halb ausgerissener Datenpfad nicht.
+        // _ = LoadNewsAsync();
 
         var cfg = _config.Load();
         var managed = !string.IsNullOrWhiteSpace(cfg.ManifestUrl);
@@ -594,7 +1131,13 @@ public sealed partial class PlayViewModel : ViewModelBase
         _lastManifest = manifest;
 
         // Launcher self-update first: newer, hash-verified build? → swap + relaunch.
-        if (await _update.CheckAndApplyAsync(manifest))
+        //
+        // 🔴 Gegen das STONETAVERN-Manifest, nicht gegen das des gewaehlten Realms (2026-08-05). Bis
+        // dahin bekam ein Spieler, der einen eigenen Realm ausgewaehlt hatte, gar keine
+        // Launcher-Updates mehr - lautlos, ohne Fehler, ohne Meldung. Begruendung ausfuehrlich an
+        // IManifestService.FetchLauncherManifestAsync.
+        var launcherManifest = await _manifest.FetchLauncherManifestAsync();
+        if (await _update.CheckAndApplyAsync(launcherManifest))
         {
             State = LauncherState.UpdatingLauncher;
             await Task.Delay(500);
@@ -604,7 +1147,7 @@ public sealed partial class PlayViewModel : ViewModelBase
 
         // Notify-only platforms (Linux) surface a passive launcher-update hint here — the auto-apply
         // above did nothing for them by design. No-op on Windows (CheckForNotice returns null).
-        ApplyLauncherNotice(manifest);
+        ApplyLauncherNotice(launcherManifest);
 
         // Decide the active expansion: explicit player pick wins; else the server's announced phase.
         Expansion exp;
@@ -669,6 +1212,9 @@ public sealed partial class PlayViewModel : ViewModelBase
         _suppressExpansionChange = false;
 
         _lastManifest = await _manifest.FetchAsync();   // null in simple mode → no managed downloads
+        // The 1.12.1 language menu is partly the manifest's answer (which packs the server publishes),
+        // so it has to be rebuilt whenever a manifest lands — not only when the client path changes.
+        RefreshAvailableLocales();
         await ApplyExpansionAsync(SelectedExpansion, persist: false, NewApplyToken());
     }
 
@@ -708,9 +1254,14 @@ public sealed partial class PlayViewModel : ViewModelBase
 
             // Manifest phase entry for THIS expansion's phase (realm + client coords).
             var phaseEntry = _lastManifest?.Phases.FirstOrDefault(p => p.Phase == _activePhase.Slug);
-            var realmlist = !string.IsNullOrWhiteSpace(phaseEntry?.Realmlist)
-                ? phaseEntry!.Realmlist
-                : cfg.RealmlistAddress;
+            // The realm the PLAYER picked wins. The manifest may only move a preset that still carries
+            // its shipped address (that is how the operator relocates Stonetavern without a new
+            // launcher) — a realm someone added or edited themselves is never overridden, which is
+            // exactly what used to happen: you typed an address, the manifest replaced it, and the
+            // client connected somewhere else without a word. See Services/RealmBinding.cs.
+            var selectedRealm = RealmRegistry.Resolve(cfg);
+            var realmlist = RealmBinding.Effective(
+                selectedRealm, RealmRegistry.ShippedAddress(selectedRealm.Id), phaseEntry?.Realmlist);
             RealmAddress = realmlist;
 
             // Download coordinates for the ACTIVE build, not for the era. A phase publishes its own
@@ -726,7 +1277,12 @@ public sealed partial class PlayViewModel : ViewModelBase
             // source for ANY build - a realm without a manifest cannot download or repair whatever
             // client it names.
             var activeBuild = SelectedClientChoice.Client.Build;
-            var coords = phaseEntry?.ClientForBuild(activeBuild, _activePhase.GameBuild)
+            // The language can pick a different PACKAGE, not just a different config key. Russian
+            // 1.12.1 is its own client (its interface files make our executable refuse to start), so
+            // for that pick the manifest hands out a whole other download. Every other language is an
+            // add-on pack on top of the neutral package and resolves exactly as before.
+            var coords = _lastManifest?.ClientForLocale(activeBuild, cfg.Locale)
+                         ?? phaseEntry?.ClientForBuild(activeBuild, _activePhase.GameBuild)
                          ?? (activeBuild == _activePhase.GameBuild ? _lastManifest?.Base : null);
 
             BuildHasManagedSource = managed && !string.IsNullOrWhiteSpace(coords?.Url);
@@ -774,6 +1330,10 @@ public sealed partial class PlayViewModel : ViewModelBase
             // Only the latest pick commits the action state — a stale call must not clobber it (C2).
             if (ct.IsCancellationRequested) return;
             State = ResolveBuildState(cfg, managed);
+            // Which languages exist depends on the build that is now active and on the install behind
+            // it. The path setter refreshes the menu when the path CHANGES; this covers the case where
+            // it did not (same client, different manifest or a pack installed since).
+            RefreshAvailableLocales();
         }
         catch (System.Exception ex)
         {
@@ -894,6 +1454,12 @@ public sealed partial class PlayViewModel : ViewModelBase
     {
         switch (State)
         {
+            // No manifest behind this realm (or no entry for this build): a download can only fail,
+            // but locating an existing install is exactly the right move - and it is what the button
+            // now says. Same one action, whichever way the player reaches it.
+            case LauncherState.NoClient when !_buildHasManagedSource:
+                await LocateExistingClient();
+                return;
             case LauncherState.NoClient:
             case LauncherState.EraTransition:
             case LauncherState.UpdateAvailable:
@@ -929,7 +1495,7 @@ public sealed partial class PlayViewModel : ViewModelBase
     /// intact → Ready; incomplete or outdated → UpdateAvailable so the player can top it up. No extra
     /// download for recognition — the file manifest is the tiny one Repair already uses.
     /// </summary>
-    [RelayCommand(CanExecute = nameof(ShowLocate))]
+    [RelayCommand(CanExecute = nameof(CanLocate))]
     private async Task LocateExistingClient()
     {
         if (IsBusy)
@@ -1043,18 +1609,27 @@ public sealed partial class PlayViewModel : ViewModelBase
     {
         _log.Information("Manual update check");
         var prev = State;
+        // "No manifest configured" and "the manifest could not be reached" both come back as null, and
+        // treating them the same made this button do NOTHING on a self-added realm (owner finding
+        // 2026-08-05): it bailed out below before re-resolving anything. Simple mode has no server to
+        // ask, but there is still something real to check - whether a client for this build turned up
+        // on disk, and whether the realm answers - so it must fall through to the re-resolve instead
+        // of returning. Only a CONFIGURED manifest that stays silent means offline.
+        var simpleMode = string.IsNullOrWhiteSpace(_config.Load().ManifestUrl);
         State = LauncherState.Initializing;
         _lastManifest = await _manifest.FetchAsync();
-        // Self-update may have appeared since launch.
-        if (await _update.CheckAndApplyAsync(_lastManifest))
+        // Self-update may have appeared since launch. Wieder gegen Stonetavern, nicht gegen den
+        // Realm: sonst tut dieser Knopf auf einem eigenen Realm fuer den Launcher gar nichts.
+        var launcherManifest = await _manifest.FetchLauncherManifestAsync();
+        if (await _update.CheckAndApplyAsync(launcherManifest))
         {
             State = LauncherState.UpdatingLauncher;
             await Task.Delay(500);
             System.Environment.Exit(0);
             return;
         }
-        if (_lastManifest is null) { State = prev; return; } // offline → keep prior state
-        ApplyLauncherNotice(_lastManifest);
+        if (_lastManifest is null && !simpleMode) { State = prev; return; } // offline → keep prior state
+        ApplyLauncherNotice(launcherManifest);
         await ApplyExpansionAsync(SelectedExpansion, persist: false, NewApplyToken());
     }
 
@@ -1322,6 +1897,16 @@ public sealed partial class PlayViewModel : ViewModelBase
 
         var progress = new System.Progress<DownloadProgress>(p =>
         {
+            // Der Launcher hat die Verbindung verloren und holt sie sich selbst zurueck. Der
+            // Fortschrittsbalken bleibt stehen, WO er steht -- die Prozentzahl auf 0 zu setzen waere
+            // die Unwahrheit, die Bytes liegen ja noch da. Nur die Zeile darunter wechselt.
+            if (p.Waiting is { } wait)
+            {
+                DownloadDetail = Loc.F("Play_Detail_Reconnecting",
+                    (int)System.Math.Round(wait.In.TotalSeconds), wait.Attempt, wait.Of);
+                return;
+            }
+
             DownloadProgress = p.Percentage;
             // Groesse und Tempo, sonst nichts. Eine Restzeit stand hier bis 2026-07-21 mit dabei,
             // war aber nur so gut wie die Momentangeschwindigkeit: sie sprang bei jedem Ausreisser
@@ -1335,7 +1920,35 @@ public sealed partial class PlayViewModel : ViewModelBase
 
         try
         {
-            var dl = await _download.DownloadFileAsync(url, zipPath, progress, downloadToken);
+            // 🔴 Erst nachsehen, was schon da ist. Ein Rechner, der waehrend des Entpackens abstuerzt,
+            // hat das vollstaendige, geprueffte Archiv noch im Zwischenspeicher liegen -- bis hier
+            // wurde es trotzdem noch einmal geholt, weil niemand gefragt hat. Bei einem
+            // Mehr-Gigabyte-Client ist das der Unterschied zwischen einer Minute und einem Abend.
+            //
+            // Die Pruefung ist der Beweis, nicht die Existenz der Datei: eine halb geschriebene Datei
+            // liegt genauso da wie eine ganze. Stimmt der Hash nicht, wird sie weggeworfen und normal
+            // geladen -- nie entpackt.
+            var haveZip = false;
+            if (File.Exists(zipPath) && !string.IsNullOrWhiteSpace(sha))
+            {
+                DownloadDetail = Loc.T("Play_Detail_TakingStock");
+                if (await _download.VerifyHashAsync(zipPath, sha, downloadToken))
+                {
+                    _log.Information(
+                        "Das Archiv fuer Build {Build} liegt schon vollstaendig und geprueft im Zwischenspeicher — kein Download",
+                        build);
+                    haveZip = true;
+                    DownloadProgress = 100;
+                }
+                else
+                {
+                    _log.Information("Angefangenes Archiv fuer Build {Build} passt nicht zum Manifest — wird neu geladen", build);
+                    try { File.Delete(zipPath); } catch { /* regenerierbar */ }
+                }
+            }
+
+            var dl = haveZip ? DownloadResult.Success
+                             : await _download.DownloadFileAsync(url, zipPath, progress, downloadToken);
             if (!dl.Ok)
             {
                 if (dl.Failure == DownloadFailure.Cancelled)
@@ -1353,7 +1966,10 @@ public sealed partial class PlayViewModel : ViewModelBase
 
             State = LauncherState.Verifying;
             DownloadDetail = (repair ? Loc.T("Play_Detail_VerifyRepair") : Loc.T("Play_Detail_Verify")) + "…";
-            if (!await _download.VerifyHashAsync(zipPath, sha))
+            // haveZip heisst: GENAU diese Datei wurde eben gegen GENAU diesen Hash geprueft. Ein
+            // zweiter Durchlauf ueber mehrere Gigabyte kostet Minuten und beweist nichts Neues.
+            // Ohne haveZip bleibt die Pruefung das harte Tor -- unverifiziert wird nie entpackt.
+            if (!haveZip && !await _download.VerifyHashAsync(zipPath, sha))
             {
                 _log.Error("SHA256 check failed — download discarded, nothing was overwritten");
                 try { File.Delete(zipPath); } catch { /* regenerable */ }
@@ -1448,9 +2064,41 @@ public sealed partial class PlayViewModel : ViewModelBase
         var wowDir = Path.GetDirectoryName(wow) ?? ".";
         cfg.LastPhase = _activePhase.Slug;
         cfg.ClientInstalls[build] = wowDir;
+        // Freeze the address THIS launch uses into the config, because the launch path has three more
+        // consumers that each have to agree about it and none of them can see this view model: the
+        // client's own realmlist.wtf (written just below), the loader script's REALMLIST, and the 1.14.2
+        // proxy's ServerAddress. One field, one truth — see Services/RealmBinding.cs.
+        cfg.RealmlistAddress = RealmAddress;
         _config.Save(cfg);
 
-        _client.ConfigureClient(wowDir, cfg.Locale, RealmAddress);
+        // For 1.12.1 the language is a file in a patch slot, not a config key, and the slot is the only
+        // thing the client actually reads. Applied here as well as on selection because the two can
+        // drift apart without anyone touching the picker: a client update rewrites Config.wtf, a repair
+        // re-extracts Data/. No download happens here — a pack that is not installed simply leaves the
+        // launch on the language that IS active, rather than holding up the game behind 90 MB.
+        var launchLocale = cfg.Locale;
+        if (_languagePacks is not null
+            && !ClientVersion.ExeNameNeedsModernRuntime(Path.GetFileName(wow))
+            // A language that IS its own client carries its language inside the install. Running it
+            // through the pack machinery would find no pack, report a failure, and start the game in
+            // English while the player picked Russian.
+            && !WholeClientLocales.Contains(cfg.Locale, StringComparer.Ordinal))
+        {
+            var applied = await _languagePacks.EnsureAsync(wowDir, cfg.Locale, pack: null);
+            launchLocale = applied.Locale;
+            if (!applied.Ok)
+            {
+                _log.Warning("Starting in {Locale} instead of {Wanted}: {Error}",
+                    applied.Locale, cfg.Locale, applied.Error);
+                // Auch SAGEN, nicht nur loggen. Der Verzicht auf den Download oben ist gewollt, das
+                // stille Sprachwechseln nicht: sonst startet das Spiel unerklaerlich auf Englisch,
+                // obwohl im Launcher weiter Deutsch steht, und der Spieler haelt es fuer einen Fehler
+                // im Spiel statt fuer ein fehlendes Sprachpaket, das ein Klick nachlaedt (2026-08-12).
+                LanguageActivity = Loc.F("Language_FellBackTo", applied.Locale);
+            }
+        }
+
+        _client.ConfigureClient(wowDir, launchLocale, RealmAddress);
         var result = await _client.LaunchAsync(wow);
 
         // Grace gate (PLAN §4): on Windows the policy confirms immediately. On Linux/Wine a successful

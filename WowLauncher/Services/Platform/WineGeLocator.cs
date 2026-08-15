@@ -37,7 +37,7 @@ public static class WineGeLocator
             candidates = Directory
                 .EnumerateDirectories(runnersDir, "wine-ge-*")
                 .Select(d => Path.Combine(d, "bin", "wine"))
-                .Where(File.Exists)
+                .Where(IsExecutable)
                 .ToList();
         }
         catch (Exception)
@@ -51,6 +51,21 @@ public static class WineGeLocator
         return candidates
             .OrderByDescending(p => VersionKey(RunnerNameOf(p)), VersionKeyComparer.Instance)
             .FirstOrDefault();
+    }
+
+    private static bool IsExecutable(string path)
+    {
+        if (!File.Exists(path) || !OperatingSystem.IsLinux()) return false;
+        try
+        {
+            var mode = File.GetUnixFileMode(path);
+            const UnixFileMode anyExecute = UnixFileMode.UserExecute |
+                                            UnixFileMode.GroupExecute |
+                                            UnixFileMode.OtherExecute;
+            return (mode & anyExecute) != 0;
+        }
+        catch (IOException) { return false; }
+        catch (UnauthorizedAccessException) { return false; }
     }
 
     /// <summary>The newest wine-ge for the current user, or null. Returns null off Linux - the Lutris

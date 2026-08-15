@@ -35,7 +35,7 @@ APPIMGTOOL_VER="1.9.1"
 APPIMGTOOL_SHA="ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0"
 APPIMGTOOL_URL="https://github.com/AppImage/appimagetool/releases/download/${APPIMGTOOL_VER}/appimagetool-x86_64.AppImage"
 
-ROOT="/AI/projects/wow/launcher"
+ROOT="(internal design notes, not published)"
 RID="linux-x64"
 PUBLISH_DEFAULT="${ROOT}/WowLauncher/bin/Release/net10.0/${RID}/publish"
 PUBLISH="${PUBLISH:-$PUBLISH_DEFAULT}"
@@ -61,6 +61,21 @@ VERSION="$(read_version)"; [[ -n "$VERSION" ]] || fail "Version nicht bestimmbar
 [[ -d "$PUBLISH" ]] || fail "Publish fehlt: $PUBLISH"
 [[ -f "$PUBLISH/WowLauncher" ]] || fail "apphost fehlt im Publish"
 [[ -f "$ASSET_ICON" ]] || fail "Icon fehlt: $ASSET_ICON"
+
+# Do not turn an old publish directory into a brand-new-looking AppImage. This happened twice on
+# 2026-08-04: appimagetool succeeded, but the resulting artifact contained an earlier launcher.
+# The tarball path has had this gate since then; the AppImage is the player-facing Linux format and
+# must reject the same two lies: uncommitted source and a publish older than its source commit.
+if git -C "$ROOT" rev-parse --git-dir >/dev/null 2>&1; then
+  if [[ -n "$(git -C "$ROOT" status --porcelain -- WowLauncher/ 2>/dev/null)" ]]; then
+    fail "Working-Tree unter WowLauncher/ ist dirty — uncommittete Quelle wird NICHT verpackt. Erst committen, dann deploy/publish-linux.sh."
+  fi
+  SRC_CT="$(git -C "$ROOT" log -1 --format=%ct -- WowLauncher/ 2>/dev/null || echo '')"
+  APPHOST_MTIME="$(stat -c%Y "$PUBLISH/WowLauncher" 2>/dev/null || echo 0)"
+  if [[ -n "$SRC_CT" ]] && (( APPHOST_MTIME < SRC_CT )); then
+    fail "Publish stale — der Publish ist älter als der jüngste WowLauncher/-Commit. Erst deploy/publish-linux.sh."
+  fi
+fi
 
 mkdir -p "$OUTDIR"
 APPDIR="$(mktemp -d /tmp/${APPID}-AppDir.XXXXXX)/${APPID}.AppDir"
@@ -99,7 +114,7 @@ Icon=${APPID}
 Terminal=false
 Categories=Game;
 StartupNotify=true
-StartupWMClass=WowLauncher
+StartupWMClass=stonetavern-launcher
 DESKTOPEOF
 cp "$APPDIR/usr/share/applications/${APPID}.desktop" "$APPDIR/${APPID}.desktop"
 

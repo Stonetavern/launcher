@@ -1,4 +1,5 @@
 using System;
+using System.Globalization;
 using CommunityToolkit.Mvvm.ComponentModel;
 using WowLauncher.Localization;
 
@@ -54,8 +55,14 @@ public sealed partial class TelemetryViewModel : ViewModelBase
     public string RealmStatusUpper => _play.RealmStatusText.ToUpperInvariant();
 
     // ─── Real, right now ──────────────────────────────────────────────────
-    /// <summary>Server clock. The realm runs on Europe/Vienna, same as the workstation.</summary>
-    public string ServerTime => DateTime.Now.ToString("HH:mm");
+    /// <summary>
+    /// Server clock. The realm runs on Europe/Vienna, same as the workstation.
+    ///
+    /// InvariantCulture for the same reason as <see cref="Models.NewsItem.DateShort"/>: without it
+    /// the time separator comes from whatever culture the OS carries, so a German or Finnish machine
+    /// renders "14.30" on a surface that is English everywhere else.
+    /// </summary>
+    public string ServerTime => DateTime.Now.ToString("HH:mm", CultureInfo.InvariantCulture);
 
     /// <summary>Next weekly reset: Sunday 04:00. Deterministic, so no server round-trip needed.</summary>
     public string NextReset
@@ -66,7 +73,8 @@ public sealed partial class TelemetryViewModel : ViewModelBase
             var days = ((int)DayOfWeek.Sunday - (int)now.DayOfWeek + 7) % 7;
             var reset = now.Date.AddDays(days).AddHours(4);
             if (reset <= now) reset = reset.AddDays(7);
-            return $"{Weekday(reset.DayOfWeek)} {reset:HH:mm}";
+            /* The weekday word comes from Loc; only the clock needs the culture pinned. */
+            return $"{Weekday(reset.DayOfWeek)} {reset.ToString("HH:mm", CultureInfo.InvariantCulture)}";
         }
     }
 

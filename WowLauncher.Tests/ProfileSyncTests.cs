@@ -259,9 +259,9 @@ public sealed class ProfileSyncTests
     public void Union_LocalPickIsReal_Wins()
     {
         var server = new LauncherProfile { SelectedRealmId = "server-choice" };
-        var local = new LauncherProfile { SelectedRealmId = "elwynn" };   // a shipped preset
+        var local = new LauncherProfile { SelectedRealmId = "stonetavern" };   // the shipped preset
 
-        Assert.Equal("elwynn", ProfileMerge.Union(server, local).SelectedRealmId);
+        Assert.Equal("stonetavern", ProfileMerge.Union(server, local).SelectedRealmId);
     }
 
     // ── Two syncs at once must not undo each other ─────────────────────────────────────────────

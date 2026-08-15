@@ -10,16 +10,23 @@
              xmlns:loc="using:WowLauncher.Localization"
              xmlns:vm="using:WowLauncher.ViewModels"
              x:Class="WowLauncher.Views.LoginView"
+             x:Name="Card"
              x:DataType="vm:LoginViewModel">
 
     <Grid RowDefinitions="Auto,*" Margin="16,18">
 
-        <!-- Header: matches the friends header rhythm -->
-        <StackPanel Grid.Row="0" Spacing="2">
+        <!-- Header: matches the friends header rhythm. Only in the sidebar, and only on the sign-in
+             face. The account page brings its own heading, so there the caption read as a second card
+             stacked on the first; and above the create-account form it said "sign in to see friends",
+             which is the wrong sentence next to the wrong button. See ShowFriendsHeader in the
+             code-behind for why the flag sits on the control and not on the view model. -->
+        <StackPanel Grid.Row="0" Spacing="2"
+                    IsVisible="{Binding ShowFriendsHeader, ElementName=Card}">
             <TextBlock Text="{loc:Tr V3_Friends}" FontSize="12" FontWeight="SemiBold" Classes="tracked"
                        Foreground="{StaticResource ParchmentSecondary}"/>
             <TextBlock Text="{loc:Tr Login_SignInToSee}" FontSize="11"
                        FontFamily="{StaticResource FontMono}"
+                       IsVisible="{Binding !IsRegisterMode}"
                        Foreground="{StaticResource ParchmentFaint}" Margin="0,2,0,0"/>
         </StackPanel>
 
@@ -69,6 +76,18 @@
                                    IsVisible="{Binding SignInCommand.IsRunning}"/>
                     </Panel>
                 </Button>
+
+                <!-- "Passwort vergessen". Fuehrt in den Browser, nicht in ein zweites Formular
+                     hier: die Website hat den Reset laengst, vollstaendig und ratenbegrenzt, und ein
+                     eigener Weg an dieselben Kontodaten waere doppelt so viel Angriffsflaeche fuer
+                     null zusaetzliche Faehigkeit. Der Browser hat ausserdem eine Adresszeile - dort
+                     sieht ein Spieler, wem er sein neues Passwort gibt.
+
+                     Steht UNTER dem Anmelden-Knopf und ueber dem Wechsel zum Registrieren: es ist
+                     die Frage, die man sich stellt, nachdem das Anmelden nicht ging. -->
+                <Button Classes="v3signout" Command="{Binding ForgotPasswordCommand}"
+                        HorizontalAlignment="Center" Content="{loc:Tr Login_Forgot}"
+                        AutomationProperties.Name="{loc:Tr Login_Forgot_A11y}"/>
 
                 <!-- Quiet switch to the create-account face -->
                 <Button Classes="v3signout" Command="{Binding ShowRegisterCommand}"

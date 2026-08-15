@@ -34,6 +34,7 @@
          timer. The v3-prefixed flicker/pulse classes exist for exactly this: the unprefixed ones in
          Styles.axaml belong to v1/v2 and are not gated. A launcher must not paint frames nobody is
          looking at. -->
+    <Panel>
     <Border x:Name="Shell" Classes="live"
             BorderBrush="{StaticResource StoneBorder}" BorderThickness="1" ClipToBounds="True">
     <Grid RowDefinitions="48,*,72">
@@ -48,29 +49,48 @@
                      Hidden on Windows/Linux (custom chrome sits at the right instead). -->
                 <Border Grid.Column="0" x:Name="MacSpacer" Width="72" IsVisible="False"/>
 
-                <!-- Brand: hanging lantern + wordmark (the flame is the only moving thing). -->
-                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="10"
+                <!-- Brand: nur die Wortmarke. Die Laterne hing hier zusätzlich, obwohl sie zwei
+                     Zentimeter tiefer schon als Marke des Realms steht — dieselbe Marke zweimal auf
+                     einem Bildschirm macht keine davon stärker. Sie ist jetzt dort, wo sie etwas
+                     unterscheidet: an der Realm-Marke in der Leiste. Hier bleibt der Name. -->
+                <!-- The wordmark IS the way home. Every product with a masthead works this way, and a
+                     separate HOME tab beside a clickable brand is the same destination twice. -->
+                <StackPanel Grid.Column="1" Orientation="Horizontal"
                             VerticalAlignment="Center" Margin="16,0,4,0">
-                    <Image Source="avares://WowLauncher/Assets/lantern.png"
-                           Height="24" VerticalAlignment="Center" Classes="v3flicker"
-                           RenderOptions.BitmapInterpolationMode="HighQuality"/>
-                    <TextBlock Text="{Binding Wordmark}" FontSize="15"
-                               FontFamily="{StaticResource FontDisplay}"
-                               Foreground="{StaticResource ParchmentSecondary}"
-                               VerticalAlignment="Center" Classes="tracked"/>
+                    <Button Classes="v3brand" Command="{Binding GoPlayCommand}"
+                            AutomationProperties.Name="{loc:Tr Nav_Home}">
+                        <TextBlock Text="{Binding Wordmark}" FontSize="15"
+                                   FontFamily="{StaticResource FontDisplay}"
+                                   VerticalAlignment="Center" Classes="tracked"/>
+                    </Button>
                 </StackPanel>
 
-                <!-- TopNav tabs (active = ember underline). No SHOP tab. -->
+                <!-- TopNav tabs (active = ember underline). No SHOP tab, no HOME tab (the wordmark),
+                     and no PATCH NOTES tab: the notes live on the website, which is where they are
+                     written and where they can be linked to. The launcher still shows the newest ones
+                     on the play surface, which is the part a player actually reads. -->
                 <StackPanel Grid.Column="2" Orientation="Horizontal" Margin="20,0,0,0">
-                    <Button Classes="v3tab" Classes.active="{Binding IsPlay}"
-                            Command="{Binding GoPlayCommand}" Content="{loc:Tr Nav_Home}"
-                            AutomationProperties.Name="{loc:Tr Nav_Home}"/>
-                    <Button Classes="v3tab" Classes.active="{Binding IsPatchNotes}"
-                            Command="{Binding GoPatchNotesCommand}" Content="{loc:Tr Nav_PatchNotesUpper}"
-                            AutomationProperties.Name="{loc:Tr Nav_NotesA11y}"/>
                     <Button Classes="v3tab" Classes.active="{Binding IsArmory}"
                             Command="{Binding GoArmoryCommand}" Content="{loc:Tr Nav_Armory}"
                             AutomationProperties.Name="{loc:Tr Nav_ArmoryA11y}"/>
+                    <Button Classes="v3tab" Classes.active="{Binding IsAddons}"
+                            Command="{Binding GoAddonsCommand}" Content="{loc:Tr Nav_Addons}"
+                            AutomationProperties.Name="{loc:Tr Nav_AddonsA11y}"/>
+                    <!-- 🔴 Die Einstellungen waren in dieser Oberflaeche NICHT erreichbar. Der Bereich
+                         weiter unten gibt es, GoSettingsCommand gibt es, und die aeltere Oberflaeche
+                         hatte den Knopf auch, nur hier klickte ihn nichts an. Der Kontoknopf rechts
+                         fuehrt bewusst woandershin (wer ist angemeldet), also war der Weg dorthin
+                         zugemauert: Installationsordner, Realm-Verwaltung und Profil-Abgleich standen
+                         da und waren nicht zu oeffnen (Owner-Befund 2026-08-04). -->
+                    <!-- Eigener Schluessel statt Settings_Title: die Reiter sind Versalien, und
+                         "Settings" zwischen ARMORY und ADDONS las sich wie ein anderer Bedienelement-
+                         Typ statt wie der dritte Reiter (Bildpruefung 2026-08-05). Avalonia kennt
+                         kein text-transform, also ist die Grossschreibung Sache des Katalogs, und
+                         zwar in jeder Sprache: die russische Zeile in lateinischen Versalien waere
+                         genauso falsch wie gar keine. -->
+                    <Button Classes="v3tab" Classes.active="{Binding IsSettings}"
+                            Command="{Binding GoSettingsCommand}" Content="{loc:Tr Nav_Settings}"
+                            AutomationProperties.Name="{loc:Tr Nav_SettingsA11y}"/>
                 </StackPanel>
 
                 <!-- Account. Opens the ACCOUNT panel, not settings: a player pressing this wants to
@@ -93,6 +113,13 @@
                             <TextBlock Text="{Binding AccountButtonText}" VerticalAlignment="Center"/>
                         </StackPanel>
                     </Button>
+
+                    <!-- Hier stand vom 2026-08-04 bis 2026-08-05 ein Zahnrad. Es ist wieder weg, auf
+                         Owner-Anweisung am Bildschirm: "das ist auch redundant". Das Argument dafuer
+                         war, der Reiter sei der Weg zum Suchen und das Zahnrad der zum Greifen - im
+                         laufenden Fenster standen beide nebeneinander in derselben Leiste, sichtbar
+                         zur selben Zeit, und dann ist es keine zweite Tuer, sondern dieselbe Tuer
+                         zweimal. Der SETTINGS-Reiter ist der eine Weg. -->
                 </StackPanel>
 
                 <!-- Custom window chrome (hidden on macOS → native traffic lights). -->
@@ -119,16 +146,31 @@
                                  SelectedItem="{Binding SelectedRealm, Mode=TwoWay}"
                                  IsEnabled="{Binding Play.CanSwitchContext}"
                                  AutomationProperties.Name="{loc:Tr V3_Realm_A11y}">
+                            <!-- Die Leiste trägt MARKEN, keine beschrifteten Kacheln.
+                                 Vorher stand der Realmname als 9px-Zeile mit Letter-Spacing unter der
+                                 Initiale — in 72px Breite lief "Stonetavern" bis an die Kante und war
+                                 unlesbar. Kleiner setzen oder umbrechen hätte das Symptom behandelt:
+                                 der Name gehört hier gar nicht hin. Er steht zwei Zentimeter weiter
+                                 rechts als Überschrift der Seite, in 80px. Zweimal dasselbe Wort auf
+                                 einem Bildschirm, davon einmal unleserlich, ist keine Information.
+                                 Der Name lebt jetzt im Tooltip — sichtbar, wenn jemand ihn braucht,
+                                 nämlich beim Ansteuern eines Realms, den er nicht am Sigel erkennt. -->
                             <ListBox.ItemTemplate>
                                 <DataTemplate x:DataType="m:RealmEntry">
-                                    <StackPanel Spacing="3" VerticalAlignment="Center">
-                                        <TextBlock Text="{Binding ShortTag}" FontSize="22"
-                                                   FontFamily="{StaticResource FontDisplay}"
-                                                   HorizontalAlignment="Center"/>
-                                        <TextBlock Text="{Binding Name}" FontSize="9"
-                                                   Classes="tracked" HorizontalAlignment="Center"
-                                                   Foreground="{StaticResource ParchmentFaint}"/>
-                                    </StackPanel>
+                                    <Border Classes="realmmark" ToolTip.Tip="{Binding Name}">
+                                        <Panel>
+                                            <!-- Stonetavern trägt die Laterne, nicht ein "S". -->
+                                            <Image Source="avares://WowLauncher/Assets/lantern.png"
+                                                   Height="30" IsVisible="{Binding WearsBrandMark}"
+                                                   HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                   RenderOptions.BitmapInterpolationMode="HighQuality"/>
+                                            <!-- Selbst hinzugefügte Realms: die Initiale. -->
+                                            <TextBlock Text="{Binding ShortTag}" FontSize="23"
+                                                       IsVisible="{Binding WearsLetterMark}"
+                                                       FontFamily="{StaticResource FontDisplay}"
+                                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                        </Panel>
+                                    </Border>
                                 </DataTemplate>
                             </ListBox.ItemTemplate>
                         </ListBox>
@@ -337,101 +379,243 @@
                                 </Button>
                                 <!-- "I already have WoW": point the launcher at an existing install instead
                                      of downloading gigabytes. Only shown when there is no usable client yet
-                                     (ShowLocate = NoClient / EraTransition / DownloadError / Paused). -->
-                                <Button Classes="ghost" Content="{loc:Tr Play_Locate}"
-                                        Command="{Binding Play.LocateExistingClientCommand}"
-                                        IsVisible="{Binding Play.ShowLocate}" HorizontalAlignment="Left"
-                                        AutomationProperties.Name="{loc:Tr Play_Locate_A11y}"/>
+                                     (ShowLocate = NoClient / EraTransition / DownloadError / Paused).
+
+                                     Der Knopf stand hier schon, aber allein und in Fluesterlautstaerke,
+                                     und wurde uebersehen (Owner-Befund 2026-08-04). Was fehlte, war
+                                     nicht Groesse, sondern der Satz darunter: "Locate installed WoW"
+                                     sagt, was der Knopf TUT, nicht wofuer man ihn braucht. Derselbe
+                                     Weg steht ausserdem in den Einstellungen, wo man nach Ordnern
+                                     sucht. -->
+                                <StackPanel Spacing="6" IsVisible="{Binding Play.ShowLocate}"
+                                            HorizontalAlignment="Left" MaxWidth="420">
+                                    <!-- Bleibt gedaempft (ghost). Ein zweiter gefuellter Knopf neben
+                                         SPIELEN sah aus wie eine zweite Hauptsache und nahm der
+                                         ersten das Gewicht (Bildpruefung 2026-08-05). Sichtbar macht
+                                         ihn der Satz darunter, nicht die Farbe. -->
+                                    <Button Classes="ghost" Content="{loc:Tr Play_Locate}"
+                                            Command="{Binding Play.LocateExistingClientCommand}"
+                                            HorizontalAlignment="Left"
+                                            AutomationProperties.Name="{loc:Tr Play_Locate_A11y}"/>
+                                    <TextBlock Text="{loc:Tr Play_Locate_Hint}" FontSize="12"
+                                               TextWrapping="Wrap"
+                                               Foreground="{StaticResource ParchmentSecondary}"/>
+                                </StackPanel>
+
+                                <!-- Welcher Addon-Satz gleich geladen wird, an der Stelle, an der man
+                                     gleich SPIELEN drueckt.
+
+                                     🔴 Warum das hier steht und nicht am Spielstart haengt: die Leiste
+                                     links hat EINEN Eintrag (Stonetavern, eine Adresse), und die beiden
+                                     Realms liegen dahinter. Welchen Realm der Spieler nimmt, entscheidet
+                                     er im SPIEL an der Realm-Auswahl, lange nachdem der Launcher weg ist.
+                                     Der Launcher kann es also nicht wissen und nicht automatisch
+                                     umschalten - dieses Menue ist der einzige Moment, in dem die
+                                     Entscheidung ueberhaupt ausgedrueckt werden kann. Sie gehoert dann
+                                     auch dorthin, wo man sie trifft, und nicht in einen Reiter, den man
+                                     vorher besucht haben muss. -->
+                                <StackPanel Spacing="6" IsVisible="{Binding Addons.ShowProfiles}"
+                                            HorizontalAlignment="Left" MaxWidth="420">
+                                    <StackPanel Orientation="Horizontal" Spacing="10">
+                                        <TextBlock Text="{loc:Tr Play_AddonSet}" FontSize="12"
+                                                   VerticalAlignment="Center"
+                                                   Foreground="{StaticResource ParchmentFaint}"/>
+                                        <ComboBox Classes="v3bar"
+                                                  ItemsSource="{Binding Addons.ProfileNames}"
+                                                  SelectedItem="{Binding Addons.ActiveProfile}"
+                                                  AutomationProperties.Name="{loc:Tr Play_AddonSet_A11y}"/>
+                                    </StackPanel>
+                                    <TextBlock Text="{loc:Tr Play_AddonSet_Hint}" FontSize="12"
+                                               TextWrapping="Wrap"
+                                               Foreground="{StaticResource ParchmentSecondary}"/>
+                                </StackPanel>
                             </StackPanel>
                         </StackPanel>
 
-                        <!-- Subordinate patch-notes ticker pinned to the very bottom of the stage. -->
-                        <StackPanel Grid.Row="1" Spacing="9" Classes="reveal3" Margin="0,22,0,0">
-                            <TextBlock Text="{loc:Tr Nav_PatchNotesUpper}" FontSize="10" FontWeight="SemiBold"
-                                       Classes="tracked" Foreground="{StaticResource ParchmentSecondary}"/>
-                            <!-- Ohne Feed stand hier eine nackte Ueberschrift ueber Nichts. Ein Satz ist
-                                 ehrlicher als erfundene Meldungen (der Offline-Fallback erfindet keine mehr). -->
-                            <TextBlock Text="{loc:Tr V3_NoPatchNotes}" FontSize="12"
-                                       Foreground="{StaticResource ParchmentFaint}"
-                                       IsVisible="{Binding !Play.News.Count}"/>
-                            <!-- Die Karten laufen ueber die Buehne hinaus. Ohne Kante sah die letzte Karte
-                                 nach Overflow-Fehler aus (mitten im Wort abgeschnitten); die weiche Kante
-                                 macht daraus ein Weiter-rechts. Reine Deckkraft, keine neue Farbe. -->
-                            <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
-                                <ScrollViewer.OpacityMask>
-                                    <LinearGradientBrush StartPoint="0%,0%" EndPoint="100%,0%">
-                                        <GradientStop Offset="0.0" Color="#FFFFFFFF"/>
-                                        <GradientStop Offset="0.88" Color="#FFFFFFFF"/>
-                                        <GradientStop Offset="1.0" Color="#00FFFFFF"/>
-                                    </LinearGradientBrush>
-                                </ScrollViewer.OpacityMask>
-                            <ItemsControl ItemsSource="{Binding Play.News}">
-                                    <ItemsControl.ItemsPanel>
-                                        <ItemsPanelTemplate>
-                                            <StackPanel Orientation="Horizontal" Spacing="12"/>
-                                        </ItemsPanelTemplate>
-                                    </ItemsControl.ItemsPanel>
-                                    <ItemsControl.ItemTemplate>
-                                        <DataTemplate x:DataType="m:NewsItem">
-                                            <Button Classes="v3patchcard"
-                                                    Command="{Binding $parent[ItemsControl].((vm:ShellViewModel)DataContext).Play.OpenNewsCommand}"
-                                                    CommandParameter="{Binding}">
-                                                <StackPanel Spacing="6">
-                                                    <StackPanel Orientation="Horizontal" Spacing="8">
-                                                        <TextBlock Text="{Binding DateShort}" FontSize="10"
-                                                                   FontFamily="{StaticResource FontMono}"
-                                                                   Foreground="{StaticResource ParchmentFaint}"/>
-                                                        <Border Classes="newstag">
-                                                            <TextBlock Text="{Binding CategoryTag}" FontSize="9" Classes="tracked"/>
-                                                        </Border>
-                                                    </StackPanel>
-                                                    <TextBlock Text="{Binding Title}" FontSize="13" TextWrapping="Wrap"
-                                                               MaxLines="2" TextTrimming="CharacterEllipsis"
-                                                               Foreground="{StaticResource ParchmentPrimary}"/>
-                                                </StackPanel>
-                                            </Button>
-                                        </DataTemplate>
-                                    </ItemsControl.ItemTemplate>
-                                </ItemsControl>
-                            </ScrollViewer>
-                        </StackPanel>
+                        <!-- The patch-notes ticker used to sit here. Removed 2026-08-04 on owner
+                             request: patch notes belong on the website, and a launcher that carries
+                             them has to keep them current or start lying quietly. Play.News still
+                             feeds the notes page; nothing on the play stage reads it. -->
                     </Grid>
                 </Panel>
 
-                <!-- PATCH NOTES (full list) -->
-                <Grid Background="{StaticResource StoneBase}" IsVisible="{Binding IsPatchNotes}"
-                      Classes="xfade" Classes.shown="{Binding IsPatchNotes}">
-                    <!-- Stretch statt Left: die Karten sind auf Stretch gestylt, aber ein linksbuendiges
-                         Raster gab ihnen nur ihre Wunschbreite und liess rechts die halbe Seite schwarz. -->
-                    <Grid Margin="40,30" RowDefinitions="Auto,*" MaxWidth="820" HorizontalAlignment="Stretch">
-                        <TextBlock Grid.Row="0" Text="{loc:Tr Nav_PatchNotesUpper}" FontSize="13" FontWeight="SemiBold"
-                                   Classes="tracked" Foreground="{StaticResource ParchmentSecondary}"
-                                   Margin="0,0,0,16"/>
-                        <TextBlock Grid.Row="1" Text="{loc:Tr V3_NoPatchNotes}" FontSize="13"
-                                   VerticalAlignment="Top" Foreground="{StaticResource ParchmentFaint}"
-                                   IsVisible="{Binding !Play.News.Count}"/>
-                        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
-                            <ItemsControl ItemsSource="{Binding Play.News}">
+
+                <!-- ═══ ADDONS — what the realm mirrors for the client build the play surface is on.
+                     One column of quiet rows, not a grid of cards: an addon is a decision (do I want
+                     this in my game), and a decision reads better as a line than as a tile. The only
+                     ember on the page is the action button of the row you are on. ═══ -->
+                <Grid Background="{StaticResource StoneBase}" IsVisible="{Binding IsAddons}"
+                      Classes="xfade" Classes.shown="{Binding IsAddons}">
+                    <Grid Margin="40,30" RowDefinitions="Auto,Auto,Auto,*" MaxWidth="860"
+                          HorizontalAlignment="Stretch">
+
+                        <!-- Title, and beside it which realm these addons belong to. Both realms share
+                             one client directory, so without this the page could not say whose addons
+                             it is showing - and installing on one realm quietly changed the other. -->
+                        <Grid Grid.Row="0" ColumnDefinitions="Auto,*,Auto" RowDefinitions="Auto,Auto">
+                            <TextBlock Grid.Column="0" Text="{loc:Tr Addons_Title}" FontSize="13" FontWeight="SemiBold"
+                                       Classes="tracked" Foreground="{StaticResource ParchmentSecondary}"
+                                       VerticalAlignment="Top" Margin="0,6,0,0"/>
+
+                            <!-- Der Erklaersatz sitzt UNTER dem Auswahlfeld, nicht am linken Rand.
+                                 Erst stand er dort, unter dem Einleitungstext - und damit rund 800 px
+                                 von dem Ding entfernt, das er erklaert, in derselben Farbe wie der
+                                 Satz darueber. Eine Erklaerung, die nicht neben ihrer Sache steht,
+                                 wird als Fortsetzung des vorigen Absatzes gelesen und beantwortet die
+                                 Frage nicht, die jemand VOR dem Auswahlfeld hat. -->
+                            <StackPanel Grid.Column="2" Spacing="6" HorizontalAlignment="Right"
+                                        MaxWidth="330" IsVisible="{Binding Addons.ShowProfiles}">
+                                <StackPanel Orientation="Horizontal" Spacing="10" HorizontalAlignment="Right">
+                                    <TextBlock Text="{loc:Tr Addons_Profile}" FontSize="12"
+                                               Foreground="{StaticResource ParchmentFaint}"
+                                               VerticalAlignment="Center"/>
+                                    <ComboBox Classes="v3bar"
+                                              ItemsSource="{Binding Addons.ProfileNames}"
+                                              SelectedItem="{Binding Addons.ActiveProfile}"
+                                              AutomationProperties.Name="{loc:Tr Addons_Profile}"/>
+                                </StackPanel>
+                                <TextBlock Text="{loc:Tr Addons_Profile_Hint}" FontSize="11" TextWrapping="Wrap"
+                                           TextAlignment="Right" LineHeight="16"
+                                           Foreground="{StaticResource ParchmentFaint}"/>
+                            </StackPanel>
+
+                            <!-- Einen eigenen Satz anlegen (Owner-Wunsch 2 vom 2026-08-04). Steht in
+                                 derselben Spalte wie der Waehler, aber in einer eigenen Zeile, weil
+                                 es keine Auswahl ist, sondern eine Handlung.
+
+                                 Das Feld ist nicht immer da: eine leere Eingabe neben einem Waehler
+                                 laedt dazu ein, in die falsche zu tippen. -->
+                            <StackPanel Grid.Column="2" Grid.Row="1" Spacing="6" Margin="0,10,0,0"
+                                        HorizontalAlignment="Right" MaxWidth="330"
+                                        IsVisible="{Binding Addons.ShowCreateProfile}">
+                                <Button Classes="ghost" Content="{loc:Tr Addons_NewSet}"
+                                        Command="{Binding Addons.StartCreateProfileCommand}"
+                                        IsVisible="{Binding !Addons.IsCreatingProfile}"
+                                        HorizontalAlignment="Right"
+                                        AutomationProperties.Name="{loc:Tr Addons_NewSet_A11y}"/>
+                                <StackPanel Spacing="6" IsVisible="{Binding Addons.IsCreatingProfile}">
+                                    <TextBox Text="{Binding Addons.NewProfileName}"
+                                             PlaceholderText="{loc:Tr Addons_NewSet_Placeholder}"
+                                             AutomationProperties.Name="{loc:Tr Addons_NewSet_A11y}"/>
+                                    <StackPanel Orientation="Horizontal" Spacing="8"
+                                                HorizontalAlignment="Right">
+                                        <Button Classes="ghost" Content="{loc:Tr Common_Cancel}"
+                                                Command="{Binding Addons.CancelCreateProfileCommand}"/>
+                                        <Button Classes="action" Content="{loc:Tr Addons_NewSet_Create}"
+                                                Command="{Binding Addons.CreateProfileCommand}"
+                                                IsEnabled="{Binding Addons.CanCreateProfile}"/>
+                                    </StackPanel>
+                                    <!-- Warum der Knopf grau ist, wenn er grau ist. Ein deaktivierter
+                                         Knopf ohne Grund ist eine Sackgasse. -->
+                                    <TextBlock Text="{Binding Addons.CreateProfileHint}" FontSize="11"
+                                               TextWrapping="Wrap" TextAlignment="Right"
+                                               Foreground="{StaticResource ParchmentFaint}"
+                                               IsVisible="{Binding Addons.CreateProfileHint,
+                                                           Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
+                                    <TextBlock Text="{loc:Tr Addons_NewSet_Hint}" FontSize="11"
+                                               TextWrapping="Wrap" TextAlignment="Right"
+                                               Foreground="{StaticResource ParchmentFaint}"/>
+                                </StackPanel>
+                            </StackPanel>
+                        </Grid>
+
+                        <!-- Says plainly whose code this is and why it comes from us. -->
+                        <TextBlock Grid.Row="1" Text="{loc:Tr Addons_Intro}" FontSize="12" TextWrapping="Wrap"
+                                   MaxWidth="520" HorizontalAlignment="Left"
+                                   Foreground="{StaticResource ParchmentFaint}" Margin="0,10,0,0"/>
+
+                        <!-- One status line for the whole page: what just happened, or why nothing can. -->
+                        <TextBlock Grid.Row="2" Text="{Binding Addons.Status}" FontSize="12" TextWrapping="Wrap"
+                                   Foreground="{StaticResource ParchmentSecondary}" Margin="0,12,0,0"
+                                   IsVisible="{Binding Addons.Status, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
+
+                        <!-- Abgemeldet: kein Katalog. Owner 2026-08-05 ("addons soll auch gated sein
+                             durch login"). Der Reiter bleibt sichtbar - wer nicht weiss, dass es
+                             Addons gibt, meldet sich auch nicht dafuer an -, aber statt einer leeren
+                             Liste steht hier, was fehlt und ein Weg dorthin.
+
+                             🔴 Die Sperre steht NICHT hier. Sie steht am Endpunkt und im Dienst, der
+                             abgemeldet gar nicht erst fragt und auch den Plattencache nicht mehr
+                             ausliefert. Ein verstecktes Fenster ist keine Zugangsbeschraenkung.
+
+                             Was ein Abgemeldeter behaelt: alles, was schon installiert ist. Addons
+                             liegen im Spielordner und laufen weiter - gesperrt ist der Katalog, nicht
+                             das Spiel. -->
+                        <StackPanel Grid.Row="3" Spacing="12" VerticalAlignment="Top" Margin="0,24,0,0"
+                                    MaxWidth="460" HorizontalAlignment="Left"
+                                    IsVisible="{Binding !IsLoggedIn}">
+                            <TextBlock Text="{loc:Tr Addons_SignedOut_Lead}" FontSize="13" TextWrapping="Wrap"
+                                       Foreground="{StaticResource ParchmentSecondary}"/>
+                            <TextBlock Text="{loc:Tr Addons_SignedOut_Keep}" FontSize="12" TextWrapping="Wrap"
+                                       Foreground="{StaticResource ParchmentFaint}"/>
+                            <Button Classes="action" Command="{Binding GoAccountCommand}"
+                                    Content="{loc:Tr Addons_SignedOut_Button}" HorizontalAlignment="Left"
+                                    AutomationProperties.Name="{loc:Tr Addons_SignedOut_Button_A11y}"/>
+                        </StackPanel>
+
+                        <TextBlock Grid.Row="3" Text="{loc:Tr Addons_NeedsClient}" FontSize="13" TextWrapping="Wrap"
+                                   VerticalAlignment="Top" Margin="0,18,0,0"
+                                   Foreground="{StaticResource ParchmentFaint}"
+                                   IsVisible="{Binding Addons.ShowNeedsClient}"/>
+
+                        <TextBlock Grid.Row="3" Text="{loc:Tr Addons_Empty}" FontSize="13"
+                                   VerticalAlignment="Top" Margin="0,18,0,0"
+                                   Foreground="{StaticResource ParchmentFaint}"
+                                   IsVisible="{Binding Addons.ShowEmpty}"/>
+
+                        <!-- Abgemeldet ist die Liste immer leer, und "keine Addons angeboten" waere
+                             dann die falsche Erklaerung fuer den richtigen Zustand. -->
+                        <ScrollViewer Grid.Row="3" VerticalScrollBarVisibility="Auto" Margin="0,18,0,0"
+                                      IsVisible="{Binding IsLoggedIn}">
+                            <ItemsControl ItemsSource="{Binding Addons.Addons}">
                                 <ItemsControl.ItemTemplate>
-                                    <DataTemplate x:DataType="m:NewsItem">
-                                        <Button Classes="newscard"
-                                                Command="{Binding $parent[ItemsControl].((vm:ShellViewModel)DataContext).Play.OpenNewsCommand}"
-                                                CommandParameter="{Binding}">
-                                            <StackPanel Spacing="5">
-                                                <StackPanel Orientation="Horizontal" Spacing="8">
-                                                    <TextBlock Text="{Binding DateShort}" FontSize="11"
+                                    <DataTemplate x:DataType="vm:AddonRow">
+                                        <Border Classes="v3addonrow">
+                                            <Grid ColumnDefinitions="*,Auto" >
+                                                <StackPanel Grid.Column="0" Spacing="4" Margin="0,0,20,0">
+                                                    <TextBlock Text="{Binding Name}" FontSize="15"
+                                                               FontFamily="{StaticResource FontDisplay}"
+                                                               Foreground="{StaticResource ParchmentPrimary}"/>
+                                                    <TextBlock Text="{Binding Summary}" FontSize="12" TextWrapping="Wrap"
+                                                               Foreground="{StaticResource ParchmentSecondary}"/>
+                                                    <TextBlock Text="{Binding VersionLine}" FontSize="11"
                                                                FontFamily="{StaticResource FontMono}"
+                                                               TextWrapping="Wrap"
                                                                Foreground="{StaticResource ParchmentFaint}"/>
-                                                    <Border Classes="newstag">
-                                                        <TextBlock Text="{Binding CategoryTag}" FontSize="9" Classes="tracked"/>
-                                                    </Border>
+                                                    <StackPanel Orientation="Horizontal" Spacing="10">
+                                                        <TextBlock Text="{Binding Credit}" FontSize="11"
+                                                                   VerticalAlignment="Center"
+                                                                   Foreground="{StaticResource ParchmentFaint}"/>
+                                                        <TextBlock Text="{Binding Released}" FontSize="11"
+                                                                   VerticalAlignment="Center"
+                                                                   IsVisible="{Binding HasReleased}"
+                                                                   FontFamily="{StaticResource FontMono}"
+                                                                   Foreground="{StaticResource ParchmentFaint}"/>
+                                                        <Button Classes="v3linkquiet"
+                                                                Content="{loc:Tr Addons_Homepage}"
+                                                                IsVisible="{Binding HasHomepage}"
+                                                                Command="{Binding $parent[ItemsControl].((vm:ShellViewModel)DataContext).Addons.OpenHomepageCommand}"
+                                                                CommandParameter="{Binding}"/>
+                                                    </StackPanel>
                                                 </StackPanel>
-                                                <TextBlock Text="{Binding Title}" FontSize="14" TextWrapping="Wrap"
-                                                           Foreground="{StaticResource ParchmentPrimary}"/>
-                                                <TextBlock Text="{Binding Summary}" FontSize="12" TextWrapping="Wrap"
-                                                           Foreground="{StaticResource ParchmentSecondary}"/>
-                                            </StackPanel>
-                                        </Button>
+
+                                                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8"
+                                                            VerticalAlignment="Center">
+                                                    <Button Classes="v3addonaction"
+                                                            Content="{Binding ActionLabel}"
+                                                            IsEnabled="{Binding CanInstall}"
+                                                            IsVisible="{Binding CanInstall}"
+                                                            Command="{Binding $parent[ItemsControl].((vm:ShellViewModel)DataContext).Addons.InstallCommand}"
+                                                            CommandParameter="{Binding}"/>
+                                                    <Button Classes="v3addonremove"
+                                                            Content="{loc:Tr Addons_Remove}"
+                                                            IsEnabled="{Binding CanRemove}"
+                                                            IsVisible="{Binding CanRemove}"
+                                                            Command="{Binding $parent[ItemsControl].((vm:ShellViewModel)DataContext).Addons.RemoveCommand}"
+                                                            CommandParameter="{Binding}"/>
+                                                </StackPanel>
+                                            </Grid>
+                                        </Border>
                                     </DataTemplate>
                                 </ItemsControl.ItemTemplate>
                             </ItemsControl>
@@ -453,10 +637,29 @@
                         <!-- ── Character chooser ── -->
                         <Border Grid.Column="0" BorderBrush="{StaticResource BorderHairline}"
                                 BorderThickness="0,0,1,0">
-                            <Grid RowDefinitions="Auto,*" Margin="16,26,12,16">
+                            <Grid RowDefinitions="Auto,Auto,Auto,*" Margin="16,26,12,16">
                                 <TextBlock Grid.Row="0" Text="{loc:Tr Armory_Characters}"
                                            Classes="v3caption tracked" Margin="4,0,0,12"/>
-                                <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+                                <!-- Woher diese Namen kommen. Eine Liste ohne diesen Satz laesst
+                                     offen, warum ein Charakter fehlt, den es auf einem anderen
+                                     Server gibt (Owner-Wunsch 2026-08-04). -->
+                                <TextBlock Grid.Row="1" Text="{loc:Tr Armory_ScopeNote}" FontSize="11"
+                                           TextWrapping="Wrap" Margin="4,0,0,12"
+                                           Foreground="{StaticResource ParchmentFaint}"/>
+                                <!-- What each realm answered. With two realms behind one address, a
+                                     roster without this cannot say whether a realm is empty or silent. -->
+                                <ItemsControl Grid.Row="2" ItemsSource="{Binding Armory.RealmSummaries}"
+                                              IsVisible="{Binding Armory.ShowRealmSummaries}"
+                                              Margin="4,0,0,12">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate x:DataType="vm:ArmoryRealmSummary">
+                                            <TextBlock Text="{Binding Line}" FontSize="11" Margin="0,2"
+                                                       FontFamily="{StaticResource FontMono}"
+                                                       Foreground="{StaticResource ParchmentFaint}"/>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                                <ScrollViewer Grid.Row="3" VerticalScrollBarVisibility="Auto">
                                     <ListBox Classes="v3chars" ItemsSource="{Binding Armory.Characters}"
                                              SelectedItem="{Binding Armory.Selected, Mode=TwoWay}"
                                              AutomationProperties.Name="{loc:Tr Armory_Characters_A11y}">
@@ -574,10 +777,54 @@
                     <!-- Empty state: one calm sentence, centred. Signed out, nothing here yet, or the
                          service could not answer - never an error box, never a retry button that
                          would only fail again. -->
-                    <TextBlock Text="{Binding Armory.EmptyMessage}" FontSize="13"
-                               IsVisible="{Binding Armory.ShowEmpty}"
-                               Foreground="{StaticResource ParchmentFaint}"
-                               HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    <!-- The empty state, and underneath it what each realm actually said. One sentence
+                         for two realms was the whole problem: "not available right now" covered a realm
+                         that does not exist, a server that is down and a session that expired, and the
+                         one realm that DID answer disappeared behind the one that did not. -->
+                    <StackPanel IsVisible="{Binding Armory.ShowEmpty}" Spacing="14" MaxWidth="440"
+                                HorizontalAlignment="Center" VerticalAlignment="Center">
+                        <TextBlock Text="{Binding Armory.EmptyMessage}" FontSize="13"
+                                   Foreground="{StaticResource ParchmentFaint}"
+                                   HorizontalAlignment="Center"/>
+                        <ItemsControl ItemsSource="{Binding Armory.RealmSummaries}"
+                                      IsVisible="{Binding Armory.ShowRealmSummaries}"
+                                      HorizontalAlignment="Center">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="vm:ArmoryRealmSummary">
+                                    <TextBlock Text="{Binding Line}" FontSize="12" Margin="0,3"
+                                               FontFamily="{StaticResource FontMono}"
+                                               Foreground="{StaticResource ParchmentFaint}"
+                                               HorizontalAlignment="Center"/>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+
+                        <!-- Der Weg hinein, an der einzigen Stelle, an der ein Besucher ohne Konto
+                             garantiert steht: fuer ihn kann diese Seite gar nichts anderes zeigen als
+                             leer (Owner-Wunsch 2026-08-04). Vorher stand hier ein Satz und sonst
+                             nichts, und der Weg zum Konto war ein kleiner Textlink unter dem
+                             Anmeldefeld auf einer anderen Seite.
+
+                             Der wichtigere Satz ist der zweite: EIN Konto fuer Launcher und Spiel.
+                             Wer von anderen privaten Servern kommt, rechnet mit zweien und legt sich
+                             sonst zwei an. -->
+                        <StackPanel Spacing="12" IsVisible="{Binding !IsLoggedIn}" Margin="0,10,0,0">
+                            <Border BorderBrush="{StaticResource BorderHairline}" BorderThickness="0,1,0,0"/>
+                            <TextBlock Text="{loc:Tr Armory_Join_Lead}" FontSize="13" TextWrapping="Wrap"
+                                       Foreground="{StaticResource ParchmentSecondary}"
+                                       TextAlignment="Center"/>
+                            <Button Classes="action" Command="{Binding GoRegisterCommand}"
+                                    Content="{loc:Tr Armory_Join_Button}" HorizontalAlignment="Center"
+                                    AutomationProperties.Name="{loc:Tr Armory_Join_Button_A11y}"/>
+                        </StackPanel>
+
+                        <!-- Was diese Seite zeigt und was nicht. Steht auch fuer Angemeldete da: ein
+                             leeres Arsenal liest sich sonst wie ein Fehler, obwohl es nur bedeutet,
+                             dass die Charaktere auf einem anderen Server liegen. -->
+                        <TextBlock Text="{loc:Tr Armory_ScopeNote}" FontSize="12" TextWrapping="Wrap"
+                                   Margin="0,6,0,0" TextAlignment="Center"
+                                   Foreground="{StaticResource ParchmentFaint}"/>
+                    </StackPanel>
                 </Grid>
 
                 <!-- ═══ SETTINGS — the account cog (top bar) navigates here (GoSettingsCommand
@@ -634,15 +881,21 @@
                                 </StackPanel>
                             </StackPanel>
 
-                            <!-- Signed out: say what it is for, then the same card as the sidebar. -->
+                            <!-- Signed out: say what it is for, then the same card as the sidebar.
+                                 Ohne FRIENDS-Ueberschrift: die Seite hat schon eine, und darunter
+                                 stand sonst eine zweite Karte im Bild. Der Vorspann spricht vom
+                                 Anmelden und weicht dem Formular, wenn jemand hier gerade ein Konto
+                                 anlegt (der Weg aus dem Arsenal fuehrt genau dorthin). -->
                             <StackPanel Spacing="14" IsVisible="{Binding !IsLoggedIn}">
                                 <TextBlock Text="{loc:Tr V3_Account_SignedOutLead}" FontSize="14"
                                            TextWrapping="Wrap" MaxWidth="460"
+                                           IsVisible="{Binding !Login.IsRegisterMode}"
                                            Foreground="{StaticResource ParchmentSecondary}"/>
                                 <Border Width="300" HorizontalAlignment="Left"
                                         Background="{StaticResource StoneSurface}"
                                         BorderBrush="{StaticResource BorderHairline}" BorderThickness="1">
-                                    <views:LoginView DataContext="{Binding Login}"/>
+                                    <views:LoginView DataContext="{Binding Login}"
+                                                     ShowFriendsHeader="False"/>
                                 </Border>
                             </StackPanel>
                         </StackPanel>
@@ -846,6 +1099,66 @@
                                 AutomationProperties.Name="{loc:Tr V3_AddRealm_Close_A11y}"/>
                     </Grid>
 
+                    <!-- Vorhandene Realms: auswaehlen und dem Realm seinen Client zuordnen. Stand bis
+                         2026-08-04 auf der Optionen-Seite, zwischen Installationsordner und
+                         Profil-Abgleich — also mitten in Dingen, die den Launcher betreffen und nicht
+                         einen einzelnen Realm. Realm-Sachen gehoeren an EINE Stelle, und das ist
+                         diese: die Leiste links und ihr Plus. -->
+                    <StackPanel Spacing="6">
+                        <TextBlock Text="{loc:Tr Settings_Realm}" FontSize="12"
+                                   Foreground="{StaticResource ParchmentSecondary}"/>
+                        <ComboBox Classes="v3overlayfield" ItemsSource="{Binding Realms}"
+                                  SelectedItem="{Binding SelectedRealm, Mode=TwoWay}"
+                                  AutomationProperties.Name="{loc:Tr Settings_Realm_A11y}">
+                            <ComboBox.ItemTemplate>
+                                <DataTemplate x:DataType="m:RealmEntry">
+                                    <TextBlock Text="{Binding Name}"/>
+                                </DataTemplate>
+                            </ComboBox.ItemTemplate>
+                        </ComboBox>
+                        <TextBlock Text="{Binding SelectedRealmAddress}" FontSize="11"
+                                   FontFamily="{StaticResource FontMono}"
+                                   Foreground="{StaticResource ParchmentFaint}"/>
+                        <TextBlock Text="{loc:Tr Settings_Client}" FontSize="12" Margin="0,6,0,0"
+                                   Foreground="{StaticResource ParchmentSecondary}"/>
+                        <ComboBox Classes="v3overlayfield" ItemsSource="{Binding ClientVersions}"
+                                  SelectedItem="{Binding SelectedRealmClient, Mode=TwoWay}"
+                                  AutomationProperties.Name="{loc:Tr Settings_Client_A11y}">
+                            <ComboBox.ItemTemplate>
+                                <DataTemplate x:DataType="m:ClientVersion">
+                                    <StackPanel Spacing="1" Margin="0,2">
+                                        <TextBlock Text="{Binding Era}" FontSize="13"/>
+                                        <TextBlock Text="{Binding PreciseLabel}" FontSize="11"
+                                                   FontFamily="{StaticResource FontMono}"
+                                                   Foreground="{StaticResource ParchmentSecondary}"/>
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ComboBox.ItemTemplate>
+                        </ComboBox>
+                        <TextBlock Text="{loc:Tr Settings_Client_Hint}" FontSize="11" TextWrapping="Wrap"
+                                   Foreground="{StaticResource ParchmentFaint}"/>
+
+                        <!-- Beide Clients auf einem eigenen Realm (Owner-Befund 2026-08-05: er hat
+                             denselben Realm zweimal angelegt, nur um an den zweiten Client zu
+                             kommen). Nur fuer selbst angelegte Realms - Presets tragen ihre Builds
+                             als Stammdaten. -->
+                        <StackPanel Spacing="4" Margin="0,8,0,0"
+                                    IsVisible="{Binding ShowRealmBothClients}">
+                            <CheckBox Content="{loc:Tr Settings_BothClients}"
+                                      IsChecked="{Binding RealmOffersBothClients, Mode=TwoWay}"
+                                      AutomationProperties.Name="{loc:Tr Settings_BothClients_A11y}"/>
+                            <TextBlock Text="{loc:Tr Settings_BothClients_Hint}" FontSize="11"
+                                       TextWrapping="Wrap" Margin="26,0,0,0"
+                                       Foreground="{StaticResource ParchmentFaint}"/>
+                        </StackPanel>
+                    </StackPanel>
+
+                    <Border BorderBrush="{StaticResource BorderHairline}" BorderThickness="0,1,0,0"
+                            Padding="0,12,0,0">
+                        <TextBlock Text="{loc:Tr Settings_AddRealm}" FontSize="12"
+                                   Foreground="{StaticResource ParchmentSecondary}"/>
+                    </Border>
+
                     <StackPanel Spacing="6">
                         <TextBox Classes="v3overlayfield" Text="{Binding NewRealmName}"
                                  PlaceholderText="{loc:Tr Settings_Name_Placeholder}"
@@ -903,6 +1216,50 @@
                                    Foreground="{StaticResource ParchmentFaint}"/>
                     </StackPanel>
                     <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                        <!-- The game's language. Only here when the installed client carries more than
+                             one — the 1.14.2 package ships ten, the 1.12.1 one ships English, and a
+                             picker with a single entry is a control that lies about being a choice.
+                             The list itself is read from the installation: a language it does not carry
+                             kills the client on startup rather than falling back (see
+                             InstalledClientLocales). Names are in their own language, because the
+                             players who need this cannot read the current one. -->
+                        <ComboBox Classes="v3bar"
+                                  IsVisible="{Binding Play.HasLanguageChoice}"
+                                  ItemsSource="{Binding Play.AvailableLocales}"
+                                  SelectedValue="{Binding Play.SelectedLocaleCode}"
+                                  SelectedValueBinding="{Binding Code}"
+                                  AutomationProperties.Name="{loc:Tr Play_Language_A11y}">
+                            <!-- Spelled out rather than left to the default template: without it the
+                                 selection box rendered EMPTY for every language except the one the
+                                 launcher happened to start in, while the view model held the right
+                                 value throughout (Linux end-to-end run, 2026-08-04). -->
+                            <ComboBox.ItemTemplate>
+                                <DataTemplate x:DataType="m:LocaleInfo">
+                                    <TextBlock Text="{Binding DisplayName}"/>
+                                </DataTemplate>
+                            </ComboBox.ItemTemplate>
+                        </ComboBox>
+                        <!-- Only for 1.12.1, and only while something is happening: that language is a
+                             90 MB pack the launcher has to fetch and move into place, so a silent
+                             picker would look frozen for a minute. Empty text hides the line. -->
+                        <TextBlock Text="{Binding Play.LanguageStatus}" FontSize="12"
+                                   VerticalAlignment="Center" TextWrapping="NoWrap"
+                                   Foreground="{StaticResource ParchmentSecondary}"
+                                   IsVisible="{Binding Play.LanguageStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
+                        <!-- Erscheint nur, wenn eine WIRKLICH installierte Sprache nachgebessert
+                             wurde. Ein Paket wird sonst einmal installiert und nie wieder angesehen:
+                             der Wechsel fragt "liegt die Datei da" und laedt dann nicht mehr. Wer
+                             deDE einmal hat, behielte eine korrigierte Fassung nie zu sehen. -->
+                        <Button Classes="ghost" Content="{Binding Play.LanguagePackUpdateLabel}"
+                                IsVisible="{Binding Play.HasLanguagePackUpdate}"
+                                Command="{Binding Play.UpdateLanguagePackCommand}"
+                                AutomationProperties.Name="{loc:Tr Language_Update_A11y}"/>
+                        <!-- Always enabled, unlike its neighbours: the moment a player most needs to
+                             report something is the moment the launcher is in a state where nothing
+                             else works. -->
+                        <Button Classes="ghost" Content="{loc:Tr Play_ReportProblem}"
+                                Click="OnReportProblemClick"
+                                AutomationProperties.Name="{loc:Tr Play_ReportProblem_A11y}"/>
                         <Button Classes="ghost" Content="{loc:Tr Play_Repair}" Command="{Binding Play.RepairCommand}"
                                 AutomationProperties.Name="{loc:Tr Play_Repair_A11y}"/>
                         <Button Classes="ghost" Content="{loc:Tr Play_CheckUpdates}"
@@ -946,4 +1303,41 @@
 
     </Grid>
     </Border>
+
+    <!-- ═══════════ Anfasser zum Groesse-Aendern ═══════════
+         Dieses Fenster zeichnet seine eigene Titelleiste (WindowDecorations="None"), und damit ist
+         auch der Rand weg, den das Betriebssystem sonst zum Ziehen anbietet: das Fenster liess sich
+         als einziges auf dem Schreibtisch nicht groesser oder kleiner machen (Owner-Befund
+         2026-08-04). Wer seinen Rahmen selbst zeichnet, muss die Anfasser mitliefern.
+
+         Unsichtbar, aber nicht ungreifbar: Background muss gesetzt sein, sonst nimmt Avalonia keine
+         Zeigereignisse an, denn ein Rahmen ohne Fuellung ist fuer die Maus nicht da. Sechs Pixel an
+         den Kanten, vierzehn in den Ecken; das ist ungefaehr das, was die Fensterverwaltung selbst
+         anbietet, und schmal genug, dass darunterliegende Bedienelemente erreichbar bleiben. -->
+    <!-- 🔴 KEIN Background auf diesem Gitter. Es liegt ueber dem ganzen Fenster; mit Fuellung faengt
+         es jeden Zeiger ab, auch das Ziehen an der Titelleiste - das Fenster stand danach wie ein
+         Stein (Owner-Befund, 2026-08-04, mein Fehler eine Stunde vorher). Ohne Fuellung ist das
+         Gitter fuer die Maus nicht da und nur die acht Streifen unten sind es. -->
+    <Grid RowDefinitions="14,6,*,6,14" ColumnDefinitions="14,6,*,6,14">
+        <Border Grid.Row="0" Grid.Column="0" Background="Transparent" Cursor="TopLeftCorner"
+                Tag="NorthWest" PointerPressed="OnResizePressed"/>
+        <Border Grid.Row="0" Grid.Column="2" Background="Transparent" Cursor="TopSide"
+                Tag="North" PointerPressed="OnResizePressed"/>
+        <Border Grid.Row="0" Grid.Column="4" Background="Transparent" Cursor="TopRightCorner"
+                Tag="NorthEast" PointerPressed="OnResizePressed"/>
+        <Border Grid.Row="2" Grid.Column="0" Background="Transparent" Cursor="LeftSide"
+                Tag="West" PointerPressed="OnResizePressed"/>
+        <Border Grid.Row="2" Grid.Column="4" Background="Transparent" Cursor="RightSide"
+                Tag="East" PointerPressed="OnResizePressed"/>
+        <Border Grid.Row="4" Grid.Column="0" Background="Transparent" Cursor="BottomLeftCorner"
+                Tag="SouthWest" PointerPressed="OnResizePressed"/>
+        <Border Grid.Row="4" Grid.Column="2" Background="Transparent" Cursor="BottomSide"
+                Tag="South" PointerPressed="OnResizePressed"/>
+        <Border Grid.Row="4" Grid.Column="4" Background="Transparent" Cursor="BottomRightCorner"
+                Tag="SouthEast" PointerPressed="OnResizePressed"/>
+
+        <!-- Die Mitte und die Luecken zwischen Ecke und Kante bleiben leer: ein Element ohne
+             Fuellung existiert fuer den Zeiger nicht, und alles darunter bleibt bedienbar. -->
+    </Grid>
+    </Panel>
 </Window>

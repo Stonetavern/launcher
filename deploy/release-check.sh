@@ -27,7 +27,7 @@
 set -uo pipefail
 export LC_ALL=C TZ=UTC
 
-ROOT="/AI/projects/wow/launcher"
+ROOT="(internal design notes, not published)"
 DISTDIR="${OUTDIR:-${ROOT}/deploy/dist}"
 PACKAGER="${ROOT}/deploy/package-linux.sh"
 
@@ -189,7 +189,7 @@ if [[ -n "$secret_hits" ]]; then
   printf '%s\n' "$secret_hits"
   fail_add "Secrets/Build-Pfade" "Fund im Baum:${secret_hits}"
 else
-  add "Secrets/Build-Pfade" "PASS" "kein /AI/-Pfad, kein PRIVATE KEY/OPENSSH, keine .env-Datei"
+  add "Secrets/Build-Pfade" "PASS" "kein (internal design notes, not published), kein PRIVATE KEY/OPENSSH, keine .env-Datei"
 fi
 
 # ---------------------------------------------------------------------------

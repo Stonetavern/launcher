@@ -28,6 +28,10 @@ public sealed partial class ShellViewModel : ViewModelBase
     /// <summary>v3 armory section: the characters of the signed-in account on the selected realm.</summary>
     public ArmoryViewModel Armory { get; }
 
+    /// <summary>Addons section: what the realm offers for the selected client build, and what of it is
+    /// already in that client's <c>Interface/AddOns</c>.</summary>
+    public AddonsViewModel Addons { get; }
+
     /// <summary>Feeds the v2 skin's telemetry column. Unused by v1 — additive, nothing to break.</summary>
     public TelemetryViewModel Telemetry { get; }
 
@@ -62,14 +66,30 @@ public sealed partial class ShellViewModel : ViewModelBase
         catch (Exception) { /* the local config is untouched; nothing to tell the player */ }
     }
 
+    /// <summary>Diagnostics for the report dialog. Optional for the same reason addons are: the rail
+    /// and armory tests build this view model directly and have no business wiring a report sender.
+    /// The dialog is only reachable from the shell window, which production always builds fully.</summary>
+    public Services.ProblemReport Report { get; }
+
+    /// <summary>Where a report goes. See <see cref="Report"/> for why it is optional.</summary>
+    public Services.IProblemReportSender ReportSender { get; }
+
     public ShellViewModel(PlayViewModel play, PatchNotesViewModel patchNotes, SettingsViewModel settings,
         IFriendsPresenceService friends, ILauncherAuthService auth, LoginViewModel login,
-        IConfigService config, ArmoryViewModel armory, IProfileSyncService? profileSync = null)
+        IConfigService config, ArmoryViewModel armory, AddonsViewModel? addons = null,
+        IProfileSyncService? profileSync = null,
+        Services.ProblemReport? report = null, Services.IProblemReportSender? reportSender = null)
     {
+        Report = report ?? new Services.ProblemReport(Services.Platform.AppPaths.ForCurrentOs(), config);
+        ReportSender = reportSender ?? new NullProblemReportSender();
         Play = play;
         PatchNotes = patchNotes;
         Settings = settings;
         Armory = armory;
+        // Optional for the same reason profileSync is: the rail/armory tests build this VM directly and
+        // have no business wiring an addon catalog. Production always passes one.
+        Addons = addons ?? new AddonsViewModel(
+            new NullAddonService(), config, new AddonProfileService(Serilog.Log.Logger), Serilog.Log.Logger);
         _friends = friends;
         _auth = auth;
         // Optional on purpose: the tests build this VM directly and a realm-rail test has no business
@@ -102,18 +122,55 @@ public sealed partial class ShellViewModel : ViewModelBase
         // needs no teardown.
         _isLoggedIn = _auth.IsLoggedIn;
         Login.SignedIn += OnSignedIn;
+
+        // "Ich habe das Spiel schon" gehoert auch in die Einstellungen, nicht nur unter den
+        // Spielen-Knopf. Der Befehl wird durchgereicht statt nachgebaut, damit es EINE Erkennung
+        // gibt (Name gegen Build, dann Hashes gegen das Datei-Manifest) und nicht zwei, die
+        // irgendwann verschieden urteilen. Nur die Shell kennt beide Seiten, also verdrahtet sie es.
+        Settings.LocateClientCommand = Play.LocateExistingClientCommand;
+
+        // Welcher Addon-Satz aktiv ist, muss die Spielflaeche wissen, bevor jemand den Addon-Reiter
+        // oeffnet - dort steht seit 2026-08-05 die Auswahl, weil dort gespielt wird. Kein Netz, nur
+        // Config und zwei Verzeichnisse, also unbedenklich auf dem Startweg.
+        Addons.RefreshProfilesOnly(Play.SelectedClientChoice.Client.Build);
+        // Der Addon-Katalog haengt seit 2026-08-05 am Login (Owner). Die Seite muss die DREI leeren
+        // Zustaende auseinanderhalten koennen - kein Client, nichts angeboten, nicht angemeldet -,
+        // also bekommt sie den einen mitgeteilt, den sie selbst nicht kennt.
+        Addons.SignedOut = !_auth.IsLoggedIn;
+        // Und erneut, wenn der Spieler den Client wechselt: 1.12.1 und 1.14.2 sind getrennte
+        // Installationen mit getrennten Addon-Ordnern, der Satz des einen sagt nichts ueber den anderen.
+        Play.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(PlayViewModel.SelectedClientChoice))
+                Addons.RefreshProfilesOnly(Play.SelectedClientChoice.Client.Build);
+        };
     }
 
     public string Wordmark => "STONETAVERN";
-    // Echte Assembly-Version statt hardcoded.
-    public string VersionText =>
-        "v" + (System.Reflection.Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "0.0.0");
 
-    public enum Section { Play, PatchNotes, Armory, Settings, Account }
+    /// <summary>Die Version, die der Spieler unten in der Hülle liest — dieselbe Zahl, die der
+    /// Self-Update vergleicht (<see cref="Services.UpdateService.RunningVersion"/>), also die
+    /// PRODUKT-Version. Vorher stand hier <c>GetName().Version</c>, die im Auslieferungsbuild bei
+    /// 1.1.0.0 eingefroren war: der Launcher zeigte allen Spielern „v1.1.0", während 1.5.1 lief. Das
+    /// hat die Update-Schleife vom 2026-08-01 nicht verursacht, aber sie unsichtbar gemacht — wer die
+    /// Version abliest, um zu prüfen ob das Update ankam, bekommt eine Zahl, die sich nie ändert.</summary>
+    public string VersionText
+    {
+        get
+        {
+            // Komponentenweise, nicht ToString(3): eine zweigliedrige Version ("1.6") hat Build = -1,
+            // und ToString(3) wirft darauf eine ArgumentException — in einem Getter, den die Hülle beim
+            // Zeichnen aufruft. Eine Versionsanzeige darf das Fenster nicht mitreissen.
+            var v = Services.UpdateService.RunningVersion(System.Reflection.Assembly.GetExecutingAssembly());
+            return $"v{v.Major}.{v.Minor}.{Math.Max(v.Build, 0)}";
+        }
+    }
+
+    public enum Section { Play, PatchNotes, Armory, Addons, Settings, Account }
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(Current), nameof(IsPlay), nameof(IsPatchNotes), nameof(IsArmory),
-                              nameof(IsSettings), nameof(IsAccount))]
+                              nameof(IsAddons), nameof(IsSettings), nameof(IsAccount))]
     private Section _selected = Section.Play;
 
     [ObservableProperty]
@@ -122,6 +179,7 @@ public sealed partial class ShellViewModel : ViewModelBase
     public bool IsPlay => Selected == Section.Play;
     public bool IsPatchNotes => Selected == Section.PatchNotes;
     public bool IsArmory => Selected == Section.Armory;
+    public bool IsAddons => Selected == Section.Addons;
     public bool IsSettings => Selected == Section.Settings;
     public bool IsAccount => Selected == Section.Account;
 
@@ -131,6 +189,7 @@ public sealed partial class ShellViewModel : ViewModelBase
         {
             Section.PatchNotes => PatchNotes,
             Section.Armory => Armory,
+            Section.Addons => Addons,
             Section.Settings => Settings,
             // Account has no view model of its own yet: the panel is shell-bound (sign-in card or
             // identity), so Current stays on Play and the panel visibility does the work.
@@ -140,17 +199,57 @@ public sealed partial class ShellViewModel : ViewModelBase
         // The armory is fetched when it is looked at, not on a timer: it is a page a player opens
         // occasionally, and polling it would put a request on the wire every 18s for nothing.
         if (value == Section.Armory) _ = SafeLoadArmoryAsync();
+        // Same rule for the addons: read the catalog and the disk when the page is opened, not on a
+        // timer. Which build matters is whatever the play surface is pointed at right now.
+        if (value == Section.Addons) _ = SafeLoadAddonsAsync();
+        // Und dieselbe Regel fuer die Einstellungen: Fassungsstand und Startbericht beschreiben einen
+        // Zustand, der sich waehrend der Sitzung aendert (eine Update-Pruefung, ein gewechselter
+        // Realm, ein neu eingetragener Client). Die Ansichten sind Singletons und wuerden sonst den
+        // Stand vom Programmstart zeigen - eine Anzeige, die stillsteht, waehrend sie Aktualitaet
+        // behauptet, ist genau die Fehlerform, gegen die beide gebaut sind.
+        if (value == Section.Settings) Settings.RefreshLiveFacts();
     }
 
     [RelayCommand] private void GoPlay() => Selected = Section.Play;
     [RelayCommand] private void GoPatchNotes() => Selected = Section.PatchNotes;
     [RelayCommand] private void GoArmory() => Selected = Section.Armory;
+    [RelayCommand] private void GoAddons() => Selected = Section.Addons;
     [RelayCommand] private void GoSettings() => Selected = Section.Settings;
 
     /// <summary>The Account button in the titlebar. It used to open SETTINGS, which is where a player
     /// looking for "am I signed in, and as whom" would never think to look and would not find an
     /// answer either (owner finding 2026-07-22). Identity now has its own place.</summary>
     [RelayCommand] private void GoAccount() => Selected = Section.Account;
+
+    /// <summary>
+    /// Straight to the sign-up form, not merely to the account page. Used by the armory, which is
+    /// the one place a visitor without an account is guaranteed to stand: it can only ever be empty
+    /// for them (owner request 2026-08-04, point 5).
+    ///
+    /// <para>Order matters. The register mode is set BEFORE the section flips, so the panel is
+    /// already showing the form when it fades in. The other way round the player watches a sign-in
+    /// card turn into a sign-up card, which reads like a misclick.</para>
+    /// </summary>
+    [RelayCommand]
+    private void GoRegister()
+    {
+        Login.ShowRegisterCommand.Execute(null);
+        Selected = Section.Account;
+    }
+
+    // ─── Addons ───────────────────────────────────────────────────────────
+    // Bound to the client build the play surface is on, because addons live inside ONE client folder
+    // (1.12.1 and 1.14.2 have separate installs and separate Interface/AddOns).
+
+    /// <summary>Fire-and-forget entry point; nothing may escape into UnobservedTaskException.</summary>
+    internal async Task SafeLoadAddonsAsync()
+    {
+        try { await Addons.LoadAsync(Play.SelectedClientChoice.Client.Build); }
+        catch (Exception ex)
+        {
+            Serilog.Log.Warning(ex, "Addon list refresh failed - keeping the previous list");
+        }
+    }
 
     // ─── Armory (v3) ──────────────────────────────────────────────────────
     // Account scoped and realm scoped: the bearer decides WHOSE characters, the rail decides WHICH
@@ -160,7 +259,10 @@ public sealed partial class ShellViewModel : ViewModelBase
     /// into TaskScheduler.UnobservedTaskException, because no caller awaits it.</summary>
     internal async Task SafeLoadArmoryAsync()
     {
-        try { await Armory.LoadAsync(SelectedRealm?.Id ?? ""); }
+        // The GAME realms behind the selected entry, not the entry id: one rail entry can stand for more
+        // than one realm the account has characters on (Stonetavern = Elwynn + Barrens), and the web API
+        // answers 404 unknown_realm for anything that is not a real realm slug.
+        try { await Armory.LoadAsync(SelectedRealm?.AccountRealms ?? []); }
         catch (Exception ex)
         {
             Serilog.Log.Warning(ex, "Armory refresh failed - keeping the previous list");
@@ -598,7 +700,12 @@ public sealed partial class ShellViewModel : ViewModelBase
 
     public Task InitAsync()
     {
-        _ = PatchNotes.LoadAsync(); // shares the NewsService cache → cheap, non-blocking
+        // 🔴 Die ZWEITE Abrufquelle. Der Abruf im PlayViewModel allein stillzulegen hat nichts
+        // bewirkt: dieser hier lief weiter, und im Log stand nach dem Umbau unveraendert
+        // "Fetching news from .../news.json" (gemessen 2026-08-12 am laufenden 1.7.8). Genau der
+        // Fall, in dem ein halber Umbau wie ein ganzer aussieht — wer eine Seite eines Mechanismus
+        // abschaltet, prueft die andere.
+        // _ = PatchNotes.LoadAsync();
         if (IsLoggedIn)             // v3 friends rail — only when a session is already restored
         {
             _ = SafeLoadFriendsAsync(); // non-blocking, like News

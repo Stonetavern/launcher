@@ -44,6 +44,16 @@ public sealed partial class ArmoryViewModel : ViewModelBase
     [NotifyPropertyChangedFor(nameof(EmptyMessage), nameof(ShowEmpty))]
     private ArmoryStatus _status = ArmoryStatus.SignedOut;
 
+    /// <summary>One line per realm behind this account: how many characters it returned, or why it
+    /// returned none. Stonetavern has TWO realms behind one address, and until now their rosters were
+    /// poured into one list with one shared status — so a realm that failed was invisible behind the
+    /// one that worked, and "not available" could mean either of them (or both). Shown whenever more
+    /// than one realm was asked, or when a single realm has something to explain.</summary>
+    public ObservableCollection<ArmoryRealmSummary> RealmSummaries { get; } = new();
+
+    public bool ShowRealmSummaries =>
+        RealmSummaries.Count > 1 || RealmSummaries.Any(s => s.Status != ArmoryStatus.Ok);
+
     public bool HasCharacters => Characters.Count > 0;
     public bool HasSelection => Selected is not null;
 
@@ -77,7 +87,19 @@ public sealed partial class ArmoryViewModel : ViewModelBase
     /// service is free to ignore its token, an answer that arrives after it was superseded is dropped
     /// on the floor instead of assigned.</para>
     /// </summary>
-    public async Task LoadAsync(string realmId, CancellationToken ct = default)
+    /// <summary>Convenience overload for a single realm (tests, callers that hold one id).</summary>
+    public Task LoadAsync(string realmId, CancellationToken ct = default) =>
+        LoadAsync(string.IsNullOrWhiteSpace(realmId) ? [] : new[] { realmId }, ct);
+
+    /// <inheritdoc cref="LoadAsync(string, CancellationToken)"/>
+    /// <remarks>
+    /// Takes a LIST because one rail entry can stand for more than one game realm (Stonetavern is one
+    /// address, two realms — see <c>RealmEntry.AccountRealms</c>). The rosters are concatenated in the
+    /// given order. Status is the friendliest true answer: <c>Ok</c> when any realm answered, otherwise
+    /// the first realm's status — so one realm being unreachable does not hide the characters on
+    /// another, and a signed-out account still says so rather than showing a bare empty list.
+    /// </remarks>
+    public async Task LoadAsync(IReadOnlyList<string> realmIds, CancellationToken ct = default)
     {
         var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         var previous = Interlocked.Exchange(ref _load, cts);
@@ -90,14 +112,28 @@ public sealed partial class ArmoryViewModel : ViewModelBase
         IsLoading = true;
         try
         {
-            var roster = await _armory.GetCharactersAsync(realmId, cts.Token);
+            var rosters = new List<ArmoryRoster>(realmIds.Count);
+            foreach (var realmId in realmIds)
+            {
+                if (string.IsNullOrWhiteSpace(realmId)) continue;
+                rosters.Add(await _armory.GetCharactersAsync(realmId, cts.Token));
+            }
             if (!ReferenceEquals(Volatile.Read(ref _load), cts)) return; // superseded mid-flight
 
             var keep = Selected?.Guid;
 
             Characters.Clear();
-            foreach (var c in roster.Characters) Characters.Add(c);
-            Status = roster.Status;
+            foreach (var c in rosters.SelectMany(r => r.Characters)) Characters.Add(c);
+
+            // Per realm, so a realm that failed says so instead of hiding behind one that worked.
+            RealmSummaries.Clear();
+            foreach (var r in rosters)
+                RealmSummaries.Add(new ArmoryRealmSummary(r.RealmId, r.Status, r.Characters.Count, r.Detail));
+            OnPropertyChanged(nameof(ShowRealmSummaries));
+
+            Status = rosters.Count == 0
+                ? ArmoryStatus.Unavailable
+                : rosters.FirstOrDefault(r => r.Status == ArmoryStatus.Ok)?.Status ?? rosters[0].Status;
 
             Selected = Characters.FirstOrDefault(c => c.Guid == keep) ?? Characters.FirstOrDefault();
             OnPropertyChanged(nameof(HasCharacters));
@@ -137,10 +173,40 @@ public sealed partial class ArmoryViewModel : ViewModelBase
         running?.Dispose();
 
         Characters.Clear();
+        RealmSummaries.Clear();
         Selected = null;
         IsLoading = false; // the cancelled load will not reach its own reset, so do it here
         Status = ArmoryStatus.SignedOut;
         OnPropertyChanged(nameof(HasCharacters));
         OnPropertyChanged(nameof(ShowEmpty));
+        OnPropertyChanged(nameof(ShowRealmSummaries));
     }
+}
+
+/// <summary>What one realm answered, in one line a player can read: the realm by name, and either how
+/// many characters it holds or why it holds none. The reason is short and non-secret ("HTTP 404", "no
+/// answer in time") — enough to tell a realm that does not exist from a server that is down, which a
+/// single "not available right now" could not.</summary>
+public sealed record ArmoryRealmSummary(string RealmId, ArmoryStatus Status, int Count, string? Detail)
+{
+    /// <summary>Realm name for display. The shipped realms have proper names; anything else shows the
+    /// id it was asked with, which is what a hand-added realm wants anyway.</summary>
+    public string DisplayName => RealmId switch
+    {
+        "elwynn" => "Elwynn",
+        "barrens" => "Barrens",
+        "" => Loc.T("Armory_Realm_Unknown"),
+        _ => RealmId,
+    };
+
+    public string Line => Status switch
+    {
+        ArmoryStatus.Ok => Loc.F("Armory_Realm_Count", DisplayName, Count),
+        ArmoryStatus.SignedOut => Loc.F("Armory_Realm_SignedOut", DisplayName),
+        _ => string.IsNullOrEmpty(Detail)
+            ? Loc.F("Armory_Realm_Unavailable", DisplayName)
+            : Loc.F("Armory_Realm_UnavailableWhy", DisplayName, Detail),
+    };
+
+    public bool IsOk => Status == ArmoryStatus.Ok;
 }

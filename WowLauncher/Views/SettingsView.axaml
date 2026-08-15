@@ -1,3 +1,17 @@
+<!--
+  OPTIONEN = was der LAUNCHER macht. Nichts von Realms.
+
+  Warum getrennt (Owner-Entscheidung 2026-08-04, zweiter Anlauf — beim ersten hatte ich es genau
+  andersherum gebaut): auf einer Seite standen zwei Dinge, die nichts miteinander zu tun haben.
+  „Welchen Realm spiele ich, welchen lege ich an" ist eine Frage ans Spiel. „Wohin installiert der
+  Launcher, wo liegt die exe, gleicht er mein Profil ab" ist eine Frage ans Programm und gilt fuer
+  alle Realms zugleich. Untereinander in einer Spalte las sich das so, als gehoere der
+  Installationsordner zum gerade gewaehlten Realm — was falsch ist.
+
+  Realms leben an der Leiste links: die Lampen sind die Realms, das Plus oeffnet ihre Verwaltung
+  (auswaehlen, Client zuordnen, anlegen, entfernen). Unten steht der Weg dorthin, damit niemand sie
+  hier sucht.
+-->
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:loc="using:WowLauncher.Localization"
@@ -8,93 +22,36 @@
     <Border Background="{StaticResource StoneBase}">
         <ScrollViewer>
             <StackPanel Margin="40,32" Spacing="20" MaxWidth="520" HorizontalAlignment="Left">
-                <TextBlock Text="{Binding Title}" FontSize="24" FontFamily="{StaticResource FontDisplay}"
+                <TextBlock Text="{loc:Tr Settings_LauncherTitle}" FontSize="24"
+                           FontFamily="{StaticResource FontDisplay}"
                            Foreground="{StaticResource ParchmentPrimary}"/>
 
-                <!-- Settings are shown as applied even when the config file cannot be written. This says so. -->
+                <!-- Einstellungen werden als angewendet gezeigt, auch wenn die Konfigurationsdatei
+                     nicht schreibbar ist. Diese Zeile sagt es. -->
                 <Border IsVisible="{Binding HasSaveWarning}" Background="{StaticResource StoneSurface}"
                         BorderBrush="{StaticResource ParchmentSecondary}" BorderThickness="1" Padding="12,10">
                     <TextBlock Text="{Binding SaveWarning}" FontSize="12" TextWrapping="Wrap"
                                Foreground="{StaticResource ParchmentPrimary}"/>
                 </Border>
 
-                <!-- Realm-Auswahl. Stonetavern-Presets stehen in derselben Liste wie eigene Realms —
-                     Presets sind Daten, keine Verdrahtung. Löschen geht nur bei eigenen. -->
+                <!-- Die Sprache der OBERFLAECHE. Der Waehler unten in der Leiste ist die Sprache
+                     des SPIELS — bis 2026-08-04 war das ein einziger Waehler fuer beides, und wer
+                     den Client englisch spielt (wegen Addons und Anleitungen), bekam damit
+                     zwangsweise auch einen englischen Launcher. -->
                 <StackPanel Spacing="6">
-                    <TextBlock Text="{loc:Tr Settings_Realm}" FontSize="13"
+                    <TextBlock Text="{loc:Tr Settings_Language}" FontSize="13"
                                Foreground="{StaticResource ParchmentSecondary}"/>
-                    <ComboBox ItemsSource="{Binding Realms}" SelectedItem="{Binding SelectedRealm, Mode=TwoWay}"
-                              HorizontalAlignment="Stretch" AutomationProperties.Name="{loc:Tr Settings_Realm_A11y}">
-                        <ComboBox.ItemTemplate>
-                            <DataTemplate x:DataType="m:RealmEntry">
-                                <TextBlock Text="{Binding Name}"/>
-                            </DataTemplate>
-                        </ComboBox.ItemTemplate>
-                    </ComboBox>
-                    <TextBlock Text="{Binding SelectedRealmAddress}" FontSize="12"
-                               FontFamily="{StaticResource FontMono}"
-                               Foreground="{StaticResource ParchmentSecondary}"/>
-                    <Button Content="{loc:Tr Settings_RemoveRealm}" Command="{Binding RemoveSelectedRealmCommand}"
-                            IsEnabled="{Binding CanRemoveSelected}" HorizontalAlignment="Left"/>
-                </StackPanel>
-
-                <!-- Client-Zuordnung: welcher heruntergeladene Client gehört zu diesem Realm.
-                     Immer mit exakter Version + Build beschriftet — „Vanilla" allein ist seit 1.14.2
-                     zweideutig und würde Spieler in einen stummen Verbindungsversuch laufen lassen. -->
-                <StackPanel Spacing="6">
-                    <TextBlock Text="{loc:Tr Settings_Client}" FontSize="13"
-                               Foreground="{StaticResource ParchmentSecondary}"/>
-                    <ComboBox ItemsSource="{Binding ClientVersions}"
-                              SelectedItem="{Binding SelectedRealmClient, Mode=TwoWay}"
+                    <ComboBox ItemsSource="{Binding LauncherLanguages}"
+                              SelectedItem="{Binding SelectedLauncherLanguage, Mode=TwoWay}"
                               HorizontalAlignment="Stretch"
-                              AutomationProperties.Name="{loc:Tr Settings_Client_A11y}">
+                              AutomationProperties.Name="{loc:Tr Settings_Language}">
                         <ComboBox.ItemTemplate>
-                            <DataTemplate x:DataType="m:ClientVersion">
-                                <StackPanel Spacing="1" Margin="0,2">
-                                    <TextBlock Text="{Binding Era}" FontSize="13"/>
-                                    <TextBlock Text="{Binding PreciseLabel}" FontSize="11"
-                                               FontFamily="{StaticResource FontMono}"
-                                               Foreground="{StaticResource ParchmentSecondary}"/>
-                                </StackPanel>
+                            <DataTemplate x:DataType="m:LauncherLanguageChoice">
+                                <TextBlock Text="{Binding DisplayName}"/>
                             </DataTemplate>
                         </ComboBox.ItemTemplate>
                     </ComboBox>
-                    <TextBlock Text="{loc:Tr Settings_Client_Hint}" FontSize="12" TextWrapping="Wrap"
-                               Foreground="{StaticResource ParchmentFaint}"/>
                 </StackPanel>
-
-                <!-- Eigenen Realm anlegen (vom Nutzer eingegeben; keine Fremdserver-Liste ausgeliefert) -->
-                <Border Background="{StaticResource StoneBase}" BorderBrush="{StaticResource ParchmentSecondary}"
-                        BorderThickness="0,1,0,0" Padding="0,16,0,0">
-                    <StackPanel Spacing="8">
-                        <TextBlock Text="{loc:Tr Settings_AddRealm}" FontSize="13"
-                                   Foreground="{StaticResource ParchmentSecondary}"/>
-                        <TextBox Text="{Binding NewRealmName}" PlaceholderText="{loc:Tr Settings_Name_Placeholder}"
-                                 AutomationProperties.Name="{loc:Tr Settings_Name_A11y}"/>
-                        <TextBox Text="{Binding NewRealmAddress}" FontFamily="{StaticResource FontMono}"
-                                 PlaceholderText="{loc:Tr Settings_Realmlist_Placeholder}"
-                                 AutomationProperties.Name="{loc:Tr Settings_Realmlist_A11y}"/>
-                        <ComboBox ItemsSource="{Binding AddableClientVersions}"
-                                  SelectedItem="{Binding NewRealmClient, Mode=TwoWay}"
-                                  HorizontalAlignment="Stretch"
-                                  AutomationProperties.Name="{loc:Tr Settings_Client_A11y}">
-                            <ComboBox.ItemTemplate>
-                                <DataTemplate x:DataType="m:ClientVersion">
-                                    <TextBlock Text="{Binding DisplayName}"/>
-                                </DataTemplate>
-                            </ComboBox.ItemTemplate>
-                        </ComboBox>
-                        <TextBox Text="{Binding NewRealmManifestUrl}" FontFamily="{StaticResource FontMono}"
-                                 PlaceholderText="{loc:Tr Settings_Manifest_Placeholder}"
-                                 AutomationProperties.Name="{loc:Tr Settings_Manifest_A11y}"/>
-                        <Button Content="{loc:Tr Settings_Add}" Command="{Binding AddRealmCommand}"
-                                HorizontalAlignment="Left"/>
-                        <!-- Rejection line: an address that cannot be written into realmlist.wtf -->
-                        <TextBlock Text="{Binding AddRealmError}" IsVisible="{Binding HasAddRealmError}"
-                                   FontSize="12" TextWrapping="Wrap"
-                                   Foreground="{StaticResource ParchmentSecondary}"/>
-                    </StackPanel>
-                </Border>
 
                 <StackPanel Spacing="6">
                     <TextBlock Text="{loc:Tr Settings_WowPath}" FontSize="13"
@@ -118,6 +75,57 @@
                                Foreground="{StaticResource ParchmentSecondary}"/>
                 </StackPanel>
 
+                <!-- "Ich habe das Spiel schon." Die Funktion gab es laengst, aber nur als gedaempfte
+                     Zeile unter dem Spielen-Knopf, und die steht dort nur, solange kein Client
+                     eingetragen ist. Wer sie einmal ueberliest, laedt Gigabytes neu, die auf der
+                     Platte liegen (Owner-Befund 2026-08-04: "locaten feature des installed ordners").
+                     Der Knopf ist derselbe Befehl wie dort, nicht ein zweiter. -->
+                <StackPanel Spacing="6" IsVisible="{Binding ShowLocateClient}">
+                    <TextBlock Text="{loc:Tr Settings_LocateClient}" FontSize="13"
+                               Foreground="{StaticResource ParchmentSecondary}"/>
+                    <Button Content="{loc:Tr Play_Locate}" Command="{Binding LocateClientCommand}"
+                            IsEnabled="{Binding CanLocateClient}" HorizontalAlignment="Left"
+                            AutomationProperties.Name="{loc:Tr Play_Locate_A11y}"/>
+                    <TextBlock Text="{loc:Tr Settings_LocateClient_Hint}" FontSize="12" TextWrapping="Wrap"
+                               IsVisible="{Binding CanLocateClient}"
+                               Foreground="{StaticResource ParchmentSecondary}"/>
+                    <!-- Der Knopf ist grau, weil fuer diesen Realm schon ein Client eingetragen ist.
+                         Ein grauer Knopf ohne Grund ist eine Sackgasse, also steht der Grund da. -->
+                    <TextBlock Text="{loc:Tr Settings_LocateClient_Done}" FontSize="12" TextWrapping="Wrap"
+                               IsVisible="{Binding !CanLocateClient}"
+                               Foreground="{StaticResource ParchmentFaint}"/>
+                </StackPanel>
+
+                <!-- Womit gestartet wird (Owner 2026-08-04, wiederholt 2026-08-05). Nur unter Linux:
+                     Windows startet nativ, macOS loest ueber GPTK auf.
+
+                     Die Statuszeile ist hier NICHT Beiwerk, sondern der eigentliche Punkt. Die Wahl
+                     allein waere ein Knopf, dessen Wirkung man nicht sieht; was gefehlt hat, war
+                     nicht die Auswahl, sondern dass der Launcher verschweigt, womit er startet - und
+                     erst recht, wenn er auf etwas anderes zurueckfaellt als gewuenscht. -->
+                <StackPanel Spacing="6" IsVisible="{Binding ShowLinuxRuntime}">
+                    <TextBlock Text="{loc:Tr Settings_Runtime}" FontSize="13"
+                               Foreground="{StaticResource ParchmentSecondary}"/>
+                    <ComboBox ItemsSource="{Binding LinuxRuntimeOptions}"
+                              SelectedItem="{Binding SelectedLinuxRuntimeOption}"
+                              HorizontalAlignment="Left" MinWidth="240"
+                              AutomationProperties.Name="{loc:Tr Settings_Runtime_A11y}">
+                        <ComboBox.ItemTemplate>
+                            <DataTemplate>
+                                <TextBlock Text="{Binding DisplayName}"/>
+                            </DataTemplate>
+                        </ComboBox.ItemTemplate>
+                    </ComboBox>
+                    <TextBox Text="{Binding LinuxRuntimeCustomPath}"
+                             IsVisible="{Binding ShowLinuxRuntimeCustomPath}"
+                             PlaceholderText="{loc:Tr Settings_Runtime_CustomPlaceholder}"
+                             AutomationProperties.Name="{loc:Tr Settings_Runtime_CustomPath_A11y}"/>
+                    <TextBlock Text="{Binding LinuxRuntimeStatus}" FontSize="12" TextWrapping="Wrap"
+                               Foreground="{StaticResource ParchmentPrimary}"/>
+                    <TextBlock Text="{loc:Tr Settings_Runtime_Hint}" FontSize="12" TextWrapping="Wrap"
+                               Foreground="{StaticResource ParchmentFaint}"/>
+                </StackPanel>
+
                 <StackPanel Spacing="6">
                     <CheckBox Content="{loc:Tr Settings_ProfileSync}"
                               IsChecked="{Binding ProfileSyncEnabled}"/>
@@ -126,9 +134,8 @@
                                Foreground="{StaticResource ParchmentSecondary}"/>
                 </StackPanel>
 
-                <!-- Opt-in desktop integration (Linux only; hidden elsewhere). Installs the .desktop +
-                     lantern icon so the menu entry and the running window carry our mark. Never runs
-                     on its own — only on this button. -->
+                <!-- Nur unter Linux, und nur auf Knopfdruck: legt Menueeintrag und Symbol an.
+                     Laeuft nie von allein. -->
                 <StackPanel Spacing="6" IsVisible="{Binding ShowDesktopIntegration}">
                     <TextBlock Text="{loc:Tr Settings_DesktopIntegration}" FontSize="13"
                                Foreground="{StaticResource ParchmentSecondary}"/>
@@ -137,11 +144,54 @@
                             AutomationProperties.Name="{loc:Tr Settings_AddToMenu_A11y}"/>
                     <TextBlock Text="{loc:Tr Settings_DesktopIntegration_Hint}" FontSize="12" TextWrapping="Wrap"
                                Foreground="{StaticResource ParchmentFaint}"/>
-                    <!-- Shown only when an install attempt failed; quiet, no modal. -->
                     <TextBlock Text="{Binding DesktopIntegrationError}" IsVisible="{Binding HasDesktopIntegrationError}"
                                FontSize="12" TextWrapping="Wrap"
                                Foreground="{StaticResource ParchmentSecondary}"/>
                 </StackPanel>
+
+                <!-- Welche Fassung, und wann das zuletzt jemand erfahren hat. Steht ueber dem
+                     Startbericht, weil es die haeufigere Frage beantwortet und weil der Bericht
+                     dieselbe Zeile mitnimmt. -->
+                <StackPanel Spacing="4" IsVisible="{Binding ShowReleaseStatus}">
+                    <TextBlock Text="{loc:Tr Settings_Release}" FontSize="13"
+                               Foreground="{StaticResource ParchmentSecondary}"/>
+                    <TextBlock Text="{Binding ReleaseStatusLine}" FontSize="12" TextWrapping="Wrap"
+                               Foreground="{StaticResource ParchmentPrimary}"/>
+                    <TextBlock Text="{Binding ReleaseCheckLine}" FontSize="12" TextWrapping="Wrap"
+                               Foreground="{StaticResource ParchmentFaint}"/>
+                </StackPanel>
+
+                <!-- Startbericht zum Kopieren. Steht bewusst UNTER der Laufzeit-Wahl: was dort
+                     entschieden wird, ist die haeufigste Zeile, die im Bericht gebraucht wird.
+                     Der Text steht sichtbar da, nicht nur hinter dem Knopf - wer etwas weitergeben
+                     soll, darf vorher hineinsehen. -->
+                <StackPanel Spacing="6" IsVisible="{Binding ShowStartReport}">
+                    <TextBlock Text="{loc:Tr Settings_StartReport}" FontSize="13"
+                               Foreground="{StaticResource ParchmentSecondary}"/>
+                    <TextBlock Text="{loc:Tr Settings_StartReport_Hint}" FontSize="12" TextWrapping="Wrap"
+                               Foreground="{StaticResource ParchmentFaint}"/>
+                    <Border Background="#1A000000" CornerRadius="4" Padding="10,8">
+                        <SelectableTextBlock Text="{Binding StartReportText}"
+                                             FontFamily="monospace" FontSize="11"
+                                             TextWrapping="Wrap"
+                                             Foreground="{StaticResource ParchmentSecondary}"/>
+                    </Border>
+                    <StackPanel Orientation="Horizontal" Spacing="10">
+                        <Button Content="{loc:Tr Settings_StartReport_Copy}"
+                                Command="{Binding CopyStartReportCommand}"
+                                AutomationProperties.Name="{loc:Tr Settings_StartReport_Copy_A11y}"/>
+                        <TextBlock Text="{Binding StartReportNote}" IsVisible="{Binding HasStartReportNote}"
+                                   FontSize="12" VerticalAlignment="Center" TextWrapping="Wrap"
+                                   Foreground="{StaticResource ParchmentPrimary}"/>
+                    </StackPanel>
+                </StackPanel>
+
+                <!-- Der Weg zu den Realms, damit niemand sie hier sucht. -->
+                <Border BorderBrush="{StaticResource ParchmentSecondary}" BorderThickness="0,1,0,0"
+                        Padding="0,16,0,0">
+                    <TextBlock Text="{loc:Tr Settings_RealmsElsewhere}" FontSize="12" TextWrapping="Wrap"
+                               Foreground="{StaticResource ParchmentFaint}"/>
+                </Border>
             </StackPanel>
         </ScrollViewer>
     </Border>

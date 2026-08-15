@@ -21,6 +21,26 @@ public interface IGameLauncher
     /// <summary>Start the client at <paramref name="exePath"/> with <paramref name="workingDirectory"/>
     /// as its cwd. Returns a <see cref="GameLaunchResult"/>; never throws.</summary>
     Task<GameLaunchResult> LaunchAsync(string exePath, string workingDirectory);
+
+    /// <summary>
+    /// Ob ein Start hier ueberhaupt gelingen kann - null heisst ja, sonst steht hier der Satz, den
+    /// ein Spieler zu lesen bekaeme.
+    ///
+    /// <para><b>Warum getrennt vom Start.</b> Auf Linux entscheidet sich das an Dingen, die der
+    /// Launcher nicht mitliefert: ob Wine da ist, ob es 32-Bit kann, ob der Grafiktreiber Vulkan in
+    /// der noetigen Fassung meldet. Bis hierher erfuhr man das erst NACH dem Druck auf Spielen, und
+    /// nur dann. Es war damit auch von aussen nicht messbar: der erste Lauf in einer nackten VM am
+    /// 2026-08-05 konnte genau diese Meldung nicht pruefen, weil sie ohne Klick nicht entsteht - und
+    /// der Klick war in der VM nicht ausloesbar.</para>
+    ///
+    /// <para>Die Vorgabe meldet „bereit". Windows und macOS bringen ihre Laufzeit mit; eine Pruefung,
+    /// die dort etwas behauptet, waere eine Meldung ueber einen Zustand, den es nicht gibt.</para>
+    /// </summary>
+    /// <param name="exeName">Der Dateiname des Clients, der gestartet wuerde. Notwendig, weil unter
+    /// Linux zwei sehr verschiedene Wege dahinterstehen: 1.12.1 laeuft auf System-Wine, 1.14.2
+    /// braucht eine Wine mit D3D12 und einen Proxy. Ohne diese Angabe muesste die Weiche raten - und
+    /// eine Bereitschaftspruefung, die den falschen Zweig prueft, ist schlimmer als keine.</param>
+    Task<string?> CheckReadyAsync(string exeName) => Task.FromResult<string?>(null);
 }
 
 /// <summary>

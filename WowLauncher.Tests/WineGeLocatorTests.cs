@@ -22,6 +22,8 @@ public sealed class WineGeLocatorTests : IDisposable
         Directory.CreateDirectory(bin);
         var wine = Path.Combine(bin, "wine");
         File.WriteAllText(wine, "#!/bin/sh\n");
+        File.SetUnixFileMode(wine,
+            UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
         return wine;
     }
 
@@ -90,6 +92,16 @@ public sealed class WineGeLocatorTests : IDisposable
         MakeRunner("wine-staging-9-0");
 
         Assert.Null(WineGeLocator.FindLatest(_root));
+    }
+
+    [Fact]
+    public void NewerRunnerWithoutExecutePermission_IsIgnored()
+    {
+        var usable = MakeRunner("wine-ge-8-26-x86_64");
+        var unusable = MakeRunner("wine-ge-9-99-x86_64");
+        File.SetUnixFileMode(unusable, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+
+        Assert.Equal(usable, WineGeLocator.FindLatest(_root));
     }
 
     [Theory]

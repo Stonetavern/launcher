@@ -106,10 +106,38 @@ public sealed class WineGameLauncher : IGameLauncher, IWineHost
     private readonly SemaphoreSlim _probeGate = new(1, 1);
     private WineReadiness? _cachedReady;
 
-    public WineGameLauncher(Serilog.ILogger logger, WineOptions options)
+    /// <summary>
+    /// Welche Wine JETZT gilt, bei jedem Start neu gefragt.
+    ///
+    /// <para>🔴 Warum das eine Funktion ist und kein Wert (Befund einer Zweitinstanz, 2026-08-05).
+    /// Dieser Launcher ist ein Singleton, und die Laufzeit wurde beim Aufbau der Anwendung
+    /// <b>einmal</b> aus der Konfiguration gelesen. Die Einstellungsseite speichert dagegen sofort
+    /// und rechnete ihre Statuszeile sofort neu aus. Ergebnis: ein Spieler stellt abends „eigener
+    /// Pfad" ein, liest darunter „In Benutzung: /opt/proton/…/wine", drückt SPIELEN — und startet mit
+    /// dem Runner vom Programmstart. Kein Fehler, keine Logzeile, kein roter Test.</para>
+    ///
+    /// <para>Das ist exakt die Fehlerform, gegen die diese Einstellung überhaupt gebaut wurde: ein
+    /// plausibler Zustand, der falsch ist. Deshalb wird die Wahl jetzt beim Start aufgelöst, und die
+    /// Bereitschaftsprüfung merkt sich, FÜR WELCHE Binärdatei sie galt.</para>
+    /// </summary>
+    private readonly Func<string>? _binaryNow;
+
+    public WineGameLauncher(Serilog.ILogger logger, WineOptions options, Func<string>? binaryNow = null)
     {
         _logger = logger;
         _options = options;
+        _binaryNow = binaryNow;
+    }
+
+    /// <summary>Die Binärdatei für diesen Start. Ein leeres Ergebnis des Auflösers zählt als „nichts
+    /// gefunden" und fällt auf die gebaute Option zurück, statt einen leeren Pfad zu starten.</summary>
+    private string CurrentBinary
+    {
+        get
+        {
+            var now = _binaryNow?.Invoke();
+            return string.IsNullOrWhiteSpace(now) ? _options.WineBinary : now;
+        }
     }
 
     public Task<GameLaunchResult> LaunchAsync(string exePath, string workingDirectory) =>
@@ -190,15 +218,26 @@ public sealed class WineGameLauncher : IGameLauncher, IWineHost
     }
 
     /// <summary>Run (or reuse) the one-time functional readiness probe for this prefix.</summary>
+    /// <inheritdoc/>
+    public async Task<string?> CheckReadyAsync(string exeName)
+    {
+        var ready = await EnsureReadyAsync().ConfigureAwait(false);
+        return ready.Ok ? null : (ready.Error ?? "The game cannot be started on this machine.");
+    }
+
     private async Task<WineReadiness> EnsureReadyAsync()
     {
-        if (_cachedReady is { Ok: true } cached)
+        // Der Cache gilt nur fuer die Binaerdatei, mit der er entstanden ist. Ohne diesen Vergleich
+        // haette die neue Einstellung erst nach einem Neustart gewirkt - und die Statuszeile haette
+        // in der Zwischenzeit das Gegenteil behauptet.
+        var wanted = CurrentBinary;
+        if (_cachedReady is { Ok: true } cached && cached.WineBinary == wanted)
             return cached;
 
         await _probeGate.WaitAsync().ConfigureAwait(false);
         try
         {
-            if (_cachedReady is { Ok: true } again)
+            if (_cachedReady is { Ok: true } again && again.WineBinary == wanted)
                 return again;
 
             var probed = await ProbeAsync().ConfigureAwait(false);
@@ -218,7 +257,7 @@ public sealed class WineGameLauncher : IGameLauncher, IWineHost
     {
         // (1) Detection: resolve wine + confirm it actually answers. `wine --version` failing with a
         // Win32Exception (ENOENT) means wine isn't installed → actionable distro hint.
-        string wineBinary = _options.WineBinary;
+        string wineBinary = CurrentBinary;
         try
         {
             var (exit, stdout) = await RunCapturedAsync(

@@ -72,16 +72,22 @@ public sealed class SettingsRealmValidationTests
         Assert.DoesNotContain(vm.Realms, r => r.Name == "My realm");
     }
 
+    // Plain http is refused since 2026-07-27: the manifest carries the SHA-256 that every download is
+    // checked against, so hash and payload share one channel. Anyone who can replace the file over
+    // plain http replaces the hash with it and the check passes on their bytes. Loopback is exempt —
+    // there is no network path to intercept, and a local test server should not need a certificate.
     [Theory]
     [InlineData("https://downloads.example.invalid/manifest.json", true)]
-    [InlineData("http://downloads.example.invalid/manifest.json", true)]
+    [InlineData("http://downloads.example.invalid/manifest.json", false)]  // hash and payload one channel
+    [InlineData("http://127.0.0.1:8080/manifest.json", true)]              // loopback: nothing to intercept
+    [InlineData("http://localhost:8080/manifest.json", true)]
     [InlineData("downloads.example.invalid/manifest.json", false)]  // no scheme -> relative Uri
     [InlineData("/manifest.json", false)]
     [InlineData("ftp://downloads.example.invalid/manifest.json", false)]
     [InlineData("file:///etc/passwd", false)]
     [InlineData("", false)]
     [InlineData("   ", false)]
-    public void ManifestUrlValidation_AcceptsOnlyAbsoluteHttpAddresses(string url, bool expected)
+    public void ManifestUrlValidation_AcceptsOnlyHttpsOrLoopbackHttp(string url, bool expected)
         => Assert.Equal(expected, ManifestService.IsValidManifestUrl(url));
 
     // ── The accepting case, so the guards above cannot pass by refusing everything ───────────────

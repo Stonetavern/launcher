@@ -97,6 +97,30 @@ public partial class ShellV3Window : Window
             BeginMoveDrag(e);
     }
 
+    /// <summary>
+    /// Die Griffe am Fensterrand. Sie liegen als unsichtbare Streifen ueber dem Rand, weil dieses
+    /// Fenster seine Titelleiste selbst zeichnet und damit auch der Rand fehlt, den die
+    /// Fensterverwaltung sonst zum Ziehen anbietet.
+    ///
+    /// <para><b>Warum von Hand und nicht deklarativ.</b> Der erste Versuch setzte
+    /// <c>WindowDecorationProperties.ElementRole="ResizeSE"</c> und so weiter. Das Ergebnis sah
+    /// richtig aus -- der Mauszeiger wechselte an allen Kanten -- und tat nichts: ziehen bewegte
+    /// keinen Pixel (Owner-Befund 2026-08-04). Der richtige Zeiger ist eben kein Beweis dafuer, dass
+    /// dahinter etwas passiert. <see cref="Window.BeginResizeDrag"/> ist derselbe Weg, den das
+    /// Verschieben ueber <see cref="Window.BeginMoveDrag"/> schon nachweislich geht.</para>
+    /// </summary>
+    private void OnResizePressed(object? sender, PointerPressedEventArgs e)
+    {
+        if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed) return;
+
+        // Ein maximiertes Fenster hat keine Kante zum Ziehen; der Griff wuerde es nur in einen
+        // halben Zustand zerren.
+        if (WindowState != WindowState.Normal) return;
+
+        if (sender is Control { Tag: string edge } && System.Enum.TryParse<WindowEdge>(edge, out var which))
+            BeginResizeDrag(which, e);
+    }
+
     private void OnMinimizeClick(object? sender, RoutedEventArgs e)
         => WindowState = WindowState.Minimized;
 
@@ -106,4 +130,23 @@ public partial class ShellV3Window : Window
             : WindowState.Maximized;
 
     private void OnCloseClick(object? sender, RoutedEventArgs e) => Close();
+
+    /// <summary>
+    /// Opens the report dialog. View-only mechanics: it builds the window, hands it the view model
+    /// resolved from the container, and shows it over this shell. Everything the dialog does lives in
+    /// <see cref="ViewModels.ProblemReportViewModel"/>.
+    ///
+    /// <para>Not a command on the shell view model, on purpose: showing a window is a view concern,
+    /// and the view model stays free of <c>Avalonia.Controls</c> so it can be tested headlessly.</para>
+    /// </summary>
+    private void OnReportProblemClick(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is not ViewModels.ShellViewModel shell) return;
+
+        var dialog = new ProblemReportWindow
+        {
+            DataContext = new ViewModels.ProblemReportViewModel(shell.Report, shell.ReportSender),
+        };
+        dialog.ShowDialog(this);
+    }
 }

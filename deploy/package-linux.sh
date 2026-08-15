@@ -22,7 +22,7 @@
 set -euo pipefail
 export LC_ALL=C TZ=UTC
 
-ROOT="/AI/projects/wow/launcher"
+ROOT="(internal design notes, not published)"
 RID="linux-x64"
 PUBLISH_DEFAULT="${ROOT}/WowLauncher/bin/Release/net10.0/${RID}/publish"
 PUBLISH="${PUBLISH:-$PUBLISH_DEFAULT}"
@@ -230,7 +230,7 @@ Icon=stonetavern-launcher
 Terminal=false
 Categories=Game;
 StartupNotify=true
-StartupWMClass=WowLauncher
+StartupWMClass=stonetavern-launcher
 DESKTOPEOF
 
 # BUILDINFO — Provenienz im Tarball (Codex F4). Deterministisch: build_time = SOURCE_DATE_EPOCH

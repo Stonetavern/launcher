@@ -18,9 +18,21 @@ public enum ArmoryStatus
 }
 
 /// <summary>The roster for one realm, plus why it looks the way it does.</summary>
-public sealed record ArmoryRoster(IReadOnlyList<ArmoryCharacter> Characters, ArmoryStatus Status)
+/// <param name="RealmId">Which realm this roster is for. Stonetavern is one place to connect and TWO
+/// realms behind it, so a roster without its realm cannot be shown honestly — a player with the same
+/// name on both would see two identical rows, and a realm that fails would vanish into a single
+/// "unavailable" covering the other one too.</param>
+/// <param name="Detail">Short, non-secret reason when <see cref="Status"/> is not Ok (e.g.
+/// "HTTP 404"). Shown to the player beside the realm: "not available" alone made every cause look
+/// the same and left nothing to act on.</param>
+public sealed record ArmoryRoster(
+    IReadOnlyList<ArmoryCharacter> Characters,
+    ArmoryStatus Status,
+    string RealmId = "",
+    string? Detail = null)
 {
-    public static ArmoryRoster Empty(ArmoryStatus status) => new(Array.Empty<ArmoryCharacter>(), status);
+    public static ArmoryRoster Empty(ArmoryStatus status, string realmId = "", string? detail = null) =>
+        new(Array.Empty<ArmoryCharacter>(), status, realmId, detail);
 }
 
 /// <summary>

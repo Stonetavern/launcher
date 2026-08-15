@@ -1,5 +1,7 @@
+using System.Collections.Generic;
 using System.IO;
 using System.Threading.Tasks;
+using WowLauncher.Services;
 using WowLauncher.Services.Platform;
 using Xunit;
 
@@ -60,7 +62,7 @@ public sealed class WindowsLoaderScriptLauncherTests
         var inner = new RecordingLauncher();
         string? ran = null;
         var launcher = new WindowsLoaderScriptLauncher(inner, Serilog.Log.Logger,
-            runScript: s => { ran = s; return GameLaunchResult.Ok(4242); });
+            runScript: (s, _) => { ran = s; return GameLaunchResult.Ok(4242); });
 
         using var t = new TempClient(withLoader: true);
         var result = await launcher.LaunchAsync(Path.Combine(t.Dir, "WoW.exe"), t.Dir);
@@ -72,11 +74,14 @@ public sealed class WindowsLoaderScriptLauncherTests
     }
 
     [Fact]
-    public async Task Launch_DelegatesToInner_WhenNoLoader()
+    public async Task Launch_DelegatesToInner_WhenNoLoader_AndNoRealmIsWired()
     {
+        // Standalone case only (no realm resolver): the STARTER falls back to the plain native start.
+        // What this test used to also cover — a wired realm taking the same fallback untouched — moved
+        // to the three tests below, because it was the fail-open Codex found (2026-08-09, finding 2).
         var inner = new RecordingLauncher();
         var launcher = new WindowsLoaderScriptLauncher(inner, Serilog.Log.Logger,
-            runScript: _ => GameLaunchResult.Ok(1)); // must not be used
+            runScript: (_, _) => GameLaunchResult.Ok(1)); // must not be used
 
         using var t = new TempClient(withLoader: false);
         var result = await launcher.LaunchAsync(Path.Combine(t.Dir, "WoW.exe"), t.Dir);
@@ -84,6 +89,221 @@ public sealed class WindowsLoaderScriptLauncherTests
         Assert.True(inner.WasCalled);                 // fell back to the plain native start
         Assert.Equal(t.Dir, inner.LastWorkingDir);
         Assert.True(result.Started);
+    }
+
+    // --- No launch.bat is not a licence to skip the realm binding ---------------------------------
+    // Codex review 2026-08-09, finding 2. The "no loader batch" branch used to return into the inner
+    // launcher immediately — before RealmAddress.Parse, before WriteClientRealm. A player using the
+    // supported "Locate installed WoW" on a 1.12.1 install without a batch therefore started on
+    // whatever realm the files carried, while the launcher showed another one. ConfigureClient does not
+    // cover this: it logs-and-returns on an invalid address and swallows write failures.
+    //
+    // The expectation these three encode is deliberately the OPPOSITE of what the old
+    // Launch_DelegatesToInner_WhenNoLoader asserted for a wired realm: fail-closed, not fail-open.
+
+    [Fact]
+    public async Task Launch_WithoutALoader_StillWritesTheRealm_BeforeTheNativeStart()
+    {
+        var inner = new RecordingLauncher();
+        var launcher = new WindowsLoaderScriptLauncher(
+            inner, Serilog.Log.Logger,
+            realmAddress: () => "play.example.invalid:3725",
+            runScript: (_, _) => GameLaunchResult.Ok(1)); // no batch, so this must not be used
+
+        using var t = new TempClient(withLoader: false);
+        Directory.CreateDirectory(Path.Combine(t.Dir, "WTF"));
+        File.WriteAllText(Path.Combine(t.Dir, "WTF", "Config.wtf"),
+            "SET realmList \"play.stonetavern.app\"\n");
+
+        var result = await launcher.LaunchAsync(Path.Combine(t.Dir, "WoW.exe"), t.Dir);
+
+        Assert.True(result.Started);
+        Assert.True(inner.WasCalled);   // still the plain native start…
+        var config = File.ReadAllText(Path.Combine(t.Dir, "WTF", "Config.wtf"));
+        Assert.Contains("SET realmList \"play.example.invalid:3725\"", config, System.StringComparison.Ordinal);
+        Assert.DoesNotContain("stonetavern", config, System.StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("set realmlist play.example.invalid:3725\n",
+            File.ReadAllText(Path.Combine(t.Dir, "realmlist.wtf")));  // …but pointed at the right realm
+    }
+
+    [Fact]
+    public async Task Launch_WithoutALoader_RefusesAnInvalidRealm_InsteadOfStartingNatively()
+    {
+        var inner = new RecordingLauncher();
+        var launcher = new WindowsLoaderScriptLauncher(
+            inner, Serilog.Log.Logger,
+            realmAddress: () => "play.example.invalid\nSET portal \"evil\"");
+
+        using var t = new TempClient(withLoader: false);
+        File.WriteAllText(Path.Combine(t.Dir, "realmlist.wtf"), "set realmlist play.stonetavern.app\n");
+
+        var result = await launcher.LaunchAsync(Path.Combine(t.Dir, "WoW.exe"), t.Dir);
+
+        Assert.False(result.Started);
+        Assert.False(inner.WasCalled);
+        Assert.Contains("realm address", result.Error, System.StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("set realmlist play.stonetavern.app\n",
+            File.ReadAllText(Path.Combine(t.Dir, "realmlist.wtf")));  // nothing written before the refusal
+    }
+
+    [Fact]
+    public async Task Launch_WithoutALoader_RefusesWhenTheRealmCannotBeWritten()
+    {
+        var inner = new RecordingLauncher();
+        var launcher = new WindowsLoaderScriptLauncher(
+            inner, Serilog.Log.Logger,
+            realmAddress: () => "realm.example.invalid");
+
+        using var t = new TempClient(withLoader: false);
+        // A directory where realmlist.wtf must go: the write cannot land, so the launch must not happen.
+        Directory.CreateDirectory(Path.Combine(t.Dir, "realmlist.wtf"));
+
+        var result = await launcher.LaunchAsync(Path.Combine(t.Dir, "WoW.exe"), t.Dir);
+
+        Assert.False(result.Started);
+        Assert.False(inner.WasCalled);
+        Assert.Contains(t.Dir, result.Error, System.StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Launch_PassesTheSelectedRealmToTheLoader()
+    {
+        var inner = new RecordingLauncher();
+        IReadOnlyDictionary<string, string>? passed = null;
+        var launcher = new WindowsLoaderScriptLauncher(
+            inner, Serilog.Log.Logger,
+            realmAddress: () => "play.example.invalid:3725",
+            runScript: (_, environment) => { passed = environment; return GameLaunchResult.Ok(4242); });
+
+        using var t = new TempClient(withLoader: true);
+        var result = await launcher.LaunchAsync(Path.Combine(t.Dir, "WoW.exe"), t.Dir);
+
+        Assert.True(result.Started);
+        Assert.NotNull(passed);
+        Assert.Equal("play.example.invalid:3725", passed![RealmBinding.RealmlistEnvVar]);
+    }
+
+    [Fact]
+    public async Task Launch_RefusesAnInvalidRealmInsteadOfUsingTheLoaderDefault()
+    {
+        var inner = new RecordingLauncher();
+        var called = false;
+        var launcher = new WindowsLoaderScriptLauncher(
+            inner, Serilog.Log.Logger,
+            realmAddress: () => "play.example.invalid\nSET portal \"evil\"",
+            runScript: (_, _) => { called = true; return GameLaunchResult.Ok(4242); });
+
+        using var t = new TempClient(withLoader: true);
+        var result = await launcher.LaunchAsync(Path.Combine(t.Dir, "WoW.exe"), t.Dir);
+
+        Assert.False(result.Started);
+        Assert.False(called);
+        Assert.False(inner.WasCalled);
+        Assert.Contains("realm address", result.Error, System.StringComparison.OrdinalIgnoreCase);
+    }
+
+    // --- The launcher writes the realm into the client itself -------------------------------------
+    // The packaged launch.bat reads REALMLIST nowhere (verified 2026-08-09 against
+    // /mnt/data/wow/clients/1.12.1-vanilla-enhanced/launch.bat), so the environment alone proves
+    // nothing. These tests hold the FILES against the selected realm, not the exit code.
+
+    [Fact]
+    public async Task Launch_WritesTheSelectedRealmIntoTheClientFiles()
+    {
+        var launcher = new WindowsLoaderScriptLauncher(
+            new RecordingLauncher(), Serilog.Log.Logger,
+            realmAddress: () => "play.example.invalid:3725",
+            runScript: (_, _) => GameLaunchResult.Ok(4242));
+
+        using var t = new TempClient(withLoader: true);
+        // Stale values from a previously shipped package — these are exactly what would silently win.
+        Directory.CreateDirectory(Path.Combine(t.Dir, "WTF"));
+        File.WriteAllText(Path.Combine(t.Dir, "WTF", "Config.wtf"),
+            "SET locale \"deDE\"\nSET realmList \"play.stonetavern.app\"\n");
+        File.WriteAllText(Path.Combine(t.Dir, "realmlist.wtf"), "set realmlist play.stonetavern.app\n");
+
+        var result = await launcher.LaunchAsync(Path.Combine(t.Dir, "WoW.exe"), t.Dir);
+
+        Assert.True(result.Started);
+        // Same semantics as launch.sh: quoted SET line in Config.wtf, bare line in realmlist.wtf, LF.
+        var config = File.ReadAllText(Path.Combine(t.Dir, "WTF", "Config.wtf"));
+        Assert.Contains("SET realmList \"play.example.invalid:3725\"", config, System.StringComparison.Ordinal);
+        Assert.DoesNotContain("stonetavern", config, System.StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("SET locale \"deDE\"", config, System.StringComparison.Ordinal); // rest preserved
+        Assert.Equal("set realmlist play.example.invalid:3725\n",
+            File.ReadAllText(Path.Combine(t.Dir, "realmlist.wtf")));
+    }
+
+    [Fact]
+    public async Task Launch_CreatesTheWtfConfig_WhenTheClientHasNone()
+    {
+        var launcher = new WindowsLoaderScriptLauncher(
+            new RecordingLauncher(), Serilog.Log.Logger,
+            realmAddress: () => "realm.example.invalid",
+            runScript: (_, _) => GameLaunchResult.Ok(7));
+
+        using var t = new TempClient(withLoader: true);
+        var result = await launcher.LaunchAsync(Path.Combine(t.Dir, "WoW.exe"), t.Dir);
+
+        Assert.True(result.Started);
+        Assert.Equal("SET realmList \"realm.example.invalid\"\n",
+            File.ReadAllText(Path.Combine(t.Dir, "WTF", "Config.wtf")));
+    }
+
+    [Fact]
+    public async Task Launch_WritesNothing_WhenTheRealmIsInvalid()
+    {
+        var launcher = new WindowsLoaderScriptLauncher(
+            new RecordingLauncher(), Serilog.Log.Logger,
+            realmAddress: () => "play.example.invalid\nSET portal \"evil\"",
+            runScript: (_, _) => GameLaunchResult.Ok(1));
+
+        using var t = new TempClient(withLoader: true);
+        File.WriteAllText(Path.Combine(t.Dir, "realmlist.wtf"), "set realmlist play.stonetavern.app\n");
+
+        var result = await launcher.LaunchAsync(Path.Combine(t.Dir, "WoW.exe"), t.Dir);
+
+        Assert.False(result.Started);
+        // Refusal comes BEFORE any write: the old file is untouched and no WTF/ was created.
+        Assert.Equal("set realmlist play.stonetavern.app\n",
+            File.ReadAllText(Path.Combine(t.Dir, "realmlist.wtf")));
+        Assert.False(Directory.Exists(Path.Combine(t.Dir, "WTF")));
+    }
+
+    [Fact]
+    public async Task Launch_RefusesReadably_WhenTheClientCannotBeWritten()
+    {
+        var launcher = new WindowsLoaderScriptLauncher(
+            new RecordingLauncher(), Serilog.Log.Logger,
+            realmAddress: () => "realm.example.invalid",
+            runScript: (_, _) => GameLaunchResult.Ok(1));
+
+        using var t = new TempClient(withLoader: true);
+        // A directory where realmlist.wtf must go: the write fails, and a failed write must never
+        // become a silent start on whatever realm the client already carried.
+        Directory.CreateDirectory(Path.Combine(t.Dir, "realmlist.wtf"));
+
+        var result = await launcher.LaunchAsync(Path.Combine(t.Dir, "WoW.exe"), t.Dir);
+
+        Assert.False(result.Started);
+        Assert.Contains("realm address", result.Error, System.StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(t.Dir, result.Error, System.StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Launch_LeavesTheClientAlone_WhenNoRealmResolverIsWired()
+    {
+        // Standalone-client behaviour (no resolver): unchanged, the launcher writes nothing.
+        var launcher = new WindowsLoaderScriptLauncher(
+            new RecordingLauncher(), Serilog.Log.Logger,
+            runScript: (_, _) => GameLaunchResult.Ok(5));
+
+        using var t = new TempClient(withLoader: true);
+        var result = await launcher.LaunchAsync(Path.Combine(t.Dir, "WoW.exe"), t.Dir);
+
+        Assert.True(result.Started);
+        Assert.False(File.Exists(Path.Combine(t.Dir, "realmlist.wtf")));
+        Assert.False(Directory.Exists(Path.Combine(t.Dir, "WTF")));
     }
 
     private sealed class RecordingLauncher : IGameLauncher

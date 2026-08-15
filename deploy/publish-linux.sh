@@ -9,7 +9,7 @@
 # Output: WowLauncher/bin/Release/net10.0/linux-x64/publish/
 set -euo pipefail
 
-ROOT="/AI/projects/wow/launcher"
+ROOT="(internal design notes, not published)"
 PROJ="${ROOT}/WowLauncher/WowLauncher.csproj"
 RID="linux-x64"
 

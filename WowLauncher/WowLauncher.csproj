@@ -5,9 +5,15 @@
     <Nullable>enable</Nullable>
     <!-- v1.0.1 (Polish-Run 2026-07-17): explizite Version, sonst default 1.0.0.
          package-linux.sh liest primär <Version> aus dieser csproj (read_version). -->
-    <Version>1.5.1</Version>
-    <AssemblyVersion>1.1.0.0</AssemblyVersion>
-    <FileVersion>1.1.0.0</FileVersion>
+    <Version>1.8.0</Version>
+    <!-- 🔴 Diese drei Nummern MÜSSEN zusammen wandern. Bis 2026-08-01 stand hier AssemblyVersion
+         1.1.0.0 fest, während <Version> bis 1.6.0 hochgezählt wurde — und der Self-Update verglich
+         das Manifest gegen AssemblyVersion. Jeder ausgelieferte Build meldete sich als 1.1.0.0, das
+         Manifest sagte 1.5.1, also war IMMER ein Update fällig: laden, tauschen, neu starten, wieder
+         1.1.0.0 — eine Endlosschleife beim Spieler. Version anheben und AssemblyVersion stehen lassen
+         ist deshalb kein Schönheitsfehler, sondern reaktiviert genau diesen Bug. -->
+    <AssemblyVersion>1.8.0.0</AssemblyVersion>
+    <FileVersion>1.8.0.0</FileVersion>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <!-- Marke auf der Exe: ohne das trägt WowLauncher.exe das generische .NET-Konsolen-Icon, im
          Explorer, in der Taskleiste und im Download-Ordner. Multi-Resolution (16..256), aus

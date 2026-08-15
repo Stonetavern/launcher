@@ -6,7 +6,7 @@ using WowLauncher.Models;
 /// In-memory armory feed for the v3 shell under <c>--demo</c>. No IO, no backend, no HTTP client -
 /// a fixed roster per realm returned via <see cref="Task.FromResult{T}"/>. This is what the armory
 /// surface is judged against until <c>GET /api/launcher/characters</c> exists
-/// (see /AI/projects/wow/launcher/HANDOFF-armory.md).
+/// (see (internal design notes, not published)).
 ///
 /// <para><b>Every name here is invented.</b> No real player, account or character from any live realm
 /// appears in this file, and none ever may: demo data ships in the binary.</para>

@@ -59,6 +59,11 @@ public sealed record ArmoryCharacter(
     string? ScoreTier,
     IReadOnlyList<ArmoryLockout> Lockouts)
 {
+    /// <summary>Which realm this character lives on. Stonetavern is one address and two realms, so a
+    /// character without its realm is ambiguous the moment the same name exists on both. Set by the
+    /// service from the realm it asked; empty for a source that does not know (the demo mock).</summary>
+    public string RealmId { get; init; } = "";
+
     /// <summary>"60 Human Rogue" - the identity line under the name.</summary>
     public string Subtitle => Loc.F("Armory_Fmt_Subtitle", Level, RaceName, ClassName);
 

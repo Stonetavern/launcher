@@ -34,9 +34,12 @@ public interface IGameProxy
 
     /// <summary>Re-verify, right before the client is started, that THIS proxy still owns the listener on
     /// <paramref name="port"/> (our process alive, port open, owner is our PID) — narrows the
-    /// check-to-use gap between "proxy ready" and "start the client" (Codex Finding 1). Default is
-    /// <c>true</c>: proxies that do not (yet) implement an ownership re-check keep their existing
-    /// behaviour, so this is additive. The native-Windows <see cref="JimsProxyRunner"/> overrides it.</summary>
+    /// check-to-use gap between "proxy ready" and "start the client" (Codex Finding 1).
+    ///
+    /// <para>Both shipped runners implement this for real — <see cref="JimsProxyRunner"/> on Windows,
+    /// <see cref="HermesProxyRunner"/> on Linux and macOS. The <c>true</c> here is what a test double or
+    /// a future runner inherits, and it is a claim, not a check: anything that keeps it is saying "I do
+    /// not verify ownership". Do not leave it in place on something a player launches through.</para></summary>
     Task<bool> VerifyStillListeningAsync(int port, CancellationToken ct = default) => Task.FromResult(true);
 }
 
@@ -67,6 +70,7 @@ public sealed class HermesProxyRunner : IGameProxy
     private readonly IReadOnlyList<string> _args;
     private readonly string _pidFilePath;
     private readonly Func<int, CancellationToken, Task<bool>> _portProbe;
+    private readonly Func<int, CancellationToken, Task<int?>> _portOwnerProbe;
     private readonly IReadOnlyDictionary<string, string>? _environmentOverrides;
     private readonly Func<int, bool> _sigterm;   // graceful stop; true when the signal was delivered
     private readonly Action<Process> _hardKill;  // SIGKILL fallback (own seam so a test can observe it)
@@ -88,13 +92,15 @@ public sealed class HermesProxyRunner : IGameProxy
     internal HermesProxyRunner(Serilog.ILogger logger, string exePath, IReadOnlyList<string> args,
         string pidFilePath, Func<int, CancellationToken, Task<bool>> portProbe,
         IReadOnlyDictionary<string, string>? environmentOverrides = null, Func<int, bool>? sigterm = null,
-        Action<Process>? hardKill = null, TimeSpan? stopGrace = null)
+        Action<Process>? hardKill = null, TimeSpan? stopGrace = null,
+        Func<int, CancellationToken, Task<int?>>? portOwnerProbe = null)
     {
         _logger = logger;
         _exePath = exePath;
         _args = args;
         _pidFilePath = pidFilePath;
         _portProbe = portProbe;
+        _portOwnerProbe = portOwnerProbe ?? ListenerOwnerAsync;
         _environmentOverrides = environmentOverrides;
         _sigterm = sigterm ?? PosixSigterm;
         _hardKill = hardKill ?? (static p => p.Kill(entireProcessTree: true));
@@ -203,26 +209,200 @@ public sealed class HermesProxyRunner : IGameProxy
         return GameProxyResult.Ok(process.Id);
     }
 
+    /// <summary>
+    /// Prove, right before the client is started, that the proxy this instance started is still the one
+    /// on <paramref name="port"/>. Three questions, cheapest first: is our process still alive, is the
+    /// port still open, and does the listener belong to our PID.
+    ///
+    /// <para><b>What this refuses and what it lets through.</b> A listener that demonstrably belongs to
+    /// someone else is a refusal — that is the whole failure this closes, and it happened for real on
+    /// 2026-07-22. An owner that cannot be determined at all (no <c>/proc</c>, no <c>lsof</c>) is NOT a
+    /// refusal here: it logs and falls back to alive-and-listening. That is a deliberate difference from
+    /// <see cref="JimsProxyRunner"/>, which is fail-closed because its Windows probe is reliable. On the
+    /// platforms this runner serves, turning an unreadable probe into "you cannot play" would take the
+    /// game away from players whose setup is fine.</para>
+    /// </summary>
+    public async Task<bool> VerifyStillListeningAsync(int port, CancellationToken ct = default)
+    {
+        var process = _process;
+        if (process is null || process.HasExited)
+        {
+            _logger.Error("The proxy is no longer running when the client was about to start");
+            return false;
+        }
+        if (!await _portProbe(port, ct).ConfigureAwait(false))
+        {
+            _logger.Error("Port {Port} is no longer open when the client was about to start", port);
+            return false;
+        }
+
+        var owner = await _portOwnerProbe(port, ct).ConfigureAwait(false);
+        if (owner is null)
+        {
+            _logger.Warning(
+                "Could not determine which process owns port {Port}; proceeding on process-alive and " +
+                "port-open alone", port);
+            return true;
+        }
+        if (owner != process.Id)
+        {
+            _logger.Error(
+                "Port {Port} is owned by PID {Owner}, not by our proxy (PID={Pid}) — aborting the launch",
+                port, owner, process.Id);
+            return false;
+        }
+        return true;
+    }
+
+    /// <summary>Which PID holds the listener on <paramref name="port"/>, or null when it cannot be
+    /// told. Linux reads <c>/proc</c> directly (the socket inode of the listener, then the file
+    /// descriptors of our own child — no external command, no parsing of localised output); macOS
+    /// shells out to <c>lsof</c>, which is present in the base system. Anything else returns null,
+    /// which the caller treats as "unknown", not as "foreign".</summary>
+    private static async Task<int?> ListenerOwnerAsync(int port, CancellationToken ct)
+    {
+        if (OperatingSystem.IsLinux()) return LinuxListenerOwner(port);
+        if (OperatingSystem.IsMacOS()) return await MacListenerOwnerAsync(port, ct).ConfigureAwait(false);
+        return null;
+    }
+
+    /// <summary>The listening socket's inode from <c>/proc/net/tcp</c>, then whichever process has that
+    /// inode open. Only processes we may read are searched, which for a child of ours is enough.</summary>
+    private static int? LinuxListenerOwner(int port)
+    {
+        try
+        {
+            var inodes = ListeningInodes("/proc/net/tcp", port);
+            foreach (var i in ListeningInodes("/proc/net/tcp6", port)) inodes.Add(i);
+            if (inodes.Count == 0) return null;
+
+            foreach (var procDir in Directory.EnumerateDirectories("/proc"))
+            {
+                var name = Path.GetFileName(procDir);
+                if (!int.TryParse(name, out var pid)) continue;
+                string[] fds;
+                try { fds = Directory.GetFiles(Path.Combine(procDir, "fd")); }
+                catch { continue; }   // not ours to read — skip, do not conclude
+
+                foreach (var fd in fds)
+                {
+                    string? target;
+                    try { target = new FileInfo(fd).LinkTarget; }
+                    catch { continue; }
+                    if (target is null || !target.StartsWith("socket:[", StringComparison.Ordinal)) continue;
+                    var inode = target[8..].TrimEnd(']');
+                    if (inodes.Contains(inode)) return pid;
+                }
+            }
+            return null;
+        }
+        catch { return null; }
+    }
+
+    /// <summary>The socket inodes of every LISTEN entry on <paramref name="port"/> in a
+    /// <c>/proc/net/tcp</c>-shaped table. The local address column is <c>HEX_IP:HEX_PORT</c> and state
+    /// <c>0A</c> is LISTEN.</summary>
+    private static HashSet<string> ListeningInodes(string table, int port)
+    {
+        var found = new HashSet<string>(StringComparer.Ordinal);
+        string[] lines;
+        try { lines = File.ReadAllLines(table); }
+        catch { return found; }
+
+        var wanted = ":" + port.ToString("X4");
+        foreach (var line in lines.Skip(1))
+        {
+            var cols = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            if (cols.Length < 10) continue;
+            if (!cols[1].EndsWith(wanted, StringComparison.OrdinalIgnoreCase)) continue;
+            if (!string.Equals(cols[3], "0A", StringComparison.OrdinalIgnoreCase)) continue;
+            found.Add(cols[9]);
+        }
+        return found;
+    }
+
+    private static async Task<int?> MacListenerOwnerAsync(int port, CancellationToken ct)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo("/usr/sbin/lsof")
+            {
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true,
+            };
+            foreach (var a in new[] { "-nP", $"-iTCP:{port}", "-sTCP:LISTEN", "-t" }) psi.ArgumentList.Add(a);
+
+            using var p = Process.Start(psi);
+            if (p is null) return null;
+            var output = await p.StandardOutput.ReadToEndAsync(ct).ConfigureAwait(false);
+            await p.WaitForExitAsync(ct).ConfigureAwait(false);
+
+            var first = output.Split('\n', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
+            return int.TryParse(first?.Trim(), out var pid) ? pid : null;
+        }
+        catch { return null; }
+    }
+
+    /// <summary>
+    /// Stop the proxy and only then forget it. The order matters: until 2026-08-03 this method cleared
+    /// <c>_process</c> and deleted the PID file FIRST and threw the kill's result away, so a kill that
+    /// did not work left a live proxy on <see cref="ProxyPort"/> that nothing pointed at any more —
+    /// neither this instance nor the next start's stale-PID sweep, which reads exactly that file. The
+    /// launcher reported a clean stop and the player got "port already in use" on the next Play.
+    ///
+    /// <para>So: measure against the world (did the process actually exit), not against the fact that a
+    /// kill was issued. A failed stop keeps both the handle and the PID file, which is what makes the
+    /// corpse findable. Idempotent either way — a second call on an already-stopped runner is a no-op.</para>
+    /// </summary>
     public async Task StopAsync()
     {
         var process = _process;
-        _process = null;
-        DeletePidFile();
+        if (process is null)
+        {
+            DeletePidFile();
+            return;
+        }
 
-        if (process is null) return;
+        var stopped = false;
         try
         {
-            if (!process.HasExited)
-                await GracefulThenHardStopAsync(process).ConfigureAwait(false);
+            stopped = process.HasExited || await GracefulThenHardStopAsync(process).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
             _logger.Debug(ex, "Stopping the proxy failed (best effort)");
         }
-        finally
+
+        if (!stopped)
         {
-            process.Dispose();
+            _logger.Error(
+                "The proxy (PID={Pid}) is STILL RUNNING after the stop attempt; keeping {PidFile} and the "
+                + "handle so the next start can reap it instead of hitting a busy port",
+                SafePid(process), _pidFilePath);
+            return;
         }
+
+        _process = null;
+        DeletePidFile();
+        process.Dispose();
+    }
+
+    /// <summary>The PID for a log line, or -1 when the handle can no longer tell us. Never throws:
+    /// a failed stop must still produce a readable log line.</summary>
+    private static int SafePid(Process process)
+    {
+        try { return process.Id; }
+        catch { return -1; }
+    }
+
+    /// <summary>Has this process really exited? Any handle that can no longer answer counts as "no",
+    /// because the safe direction here is to keep the corpse findable.</summary>
+    private static bool HasExitedSafe(Process process)
+    {
+        try { return process.HasExited; }
+        catch { return false; }
     }
 
     /// <summary>
@@ -234,7 +414,7 @@ public sealed class HermesProxyRunner : IGameProxy
     /// <see cref="_sigterm"/> returns false there and we go straight to the hard kill, which is the
     /// shipped Windows behaviour unchanged.
     /// </summary>
-    private async Task GracefulThenHardStopAsync(Process process)
+    private async Task<bool> GracefulThenHardStopAsync(Process process)
     {
         var pid = process.Id;
         var termed = false;
@@ -249,7 +429,7 @@ public sealed class HermesProxyRunner : IGameProxy
             if (await WaitForExitAsync(process, _stopGrace).ConfigureAwait(false))
             {
                 _logger.Information("Proxy (PID={Pid}) exited cleanly after SIGTERM", pid);
-                return;
+                return true;
             }
             _logger.Warning(
                 "Proxy (PID={Pid}) did not exit within {Grace:F0}s of SIGTERM — escalating to SIGKILL",
@@ -258,6 +438,8 @@ public sealed class HermesProxyRunner : IGameProxy
 
         _hardKill(process);
         try { process.WaitForExit(5000); } catch { /* best effort */ }
+        // The answer this returns is read from the process, not from the fact that a kill was issued.
+        return HasExitedSafe(process);
     }
 
     /// <summary>Wait up to <paramref name="grace"/> for the process to exit; returns whether it did.</summary>

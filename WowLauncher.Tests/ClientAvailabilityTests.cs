@@ -121,6 +121,11 @@ public sealed class ClientAvailabilityTests
     {
         public Task<ServerManifest?> FetchAsync(CancellationToken ct = default) =>
             Task.FromResult<ServerManifest?>(null);
+        /// <summary>Kein Launcher-Manifest in diesem Double: der Selbst-Update-Pfad ist hier
+        /// nicht der Prüfgegenstand, und "keins" heißt "kein Update", nie "irgendeins".</summary>
+        public Task<ServerManifest?> FetchLauncherManifestAsync(CancellationToken ct = default) =>
+            Task.FromResult<ServerManifest?>(null);
+
         public Task<ClientFileManifest?> FetchFileManifestAsync(string url, CancellationToken ct = default) =>
             Task.FromResult<ClientFileManifest?>(null);
     }
@@ -160,6 +165,9 @@ public sealed class ClientAvailabilityTests
 
     private sealed class NoUpdate : IUpdateService
     {
+        // Never raised here: these doubles model "there is no update", so nothing announces one.
+        public event System.EventHandler? LauncherUpdateStarting { add { } remove { } }
+
         public Task<bool> CheckAndApplyAsync(ServerManifest? m, CancellationToken ct = default) => Task.FromResult(false);
         public LauncherUpdateNotice? CheckForNotice(ServerManifest? m) => null;
     }

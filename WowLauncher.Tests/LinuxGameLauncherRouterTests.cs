@@ -34,7 +34,7 @@ public sealed class LinuxGameLauncherRouterTests
         var legacy = new RecordingLauncher();
         var wineGe = new RecordingLauncher();
         var proton = new RecordingLauncher();
-        var router = new LinuxGameLauncherRouter(legacy, wineGe, proton, Logger());
+        var router = new LinuxGameLauncherRouter(legacy, wineGe, Logger());
 
         await router.LaunchAsync("/some/dir/WowClassic.exe", "/some/dir");
 
@@ -43,17 +43,48 @@ public sealed class LinuxGameLauncherRouterTests
         Assert.Equal(0, legacy.CallCount);
     }
 
+    /// <summary>
+    /// This test used to pin the opposite: without wine-ge, fall back to umu/Proton. That fallback
+    /// starts the client exe on its own, and the modern client only reaches this realm THROUGH the
+    /// local proxy the wine-ge path owns. So the player got a window, a login screen, and a realm that
+    /// was never contacted — a launch that succeeds and arrives nowhere, with nothing red anywhere.
+    /// A real player hit exactly this (Discord 2026-07-26): the launcher "failed" for them while the
+    /// shipped shell script started the same client fine, because the script brought the proxy.
+    ///
+    /// <para><b>Narrowed 2026-08-03.</b> The refusal used to cover "no wine-ge", which was too wide:
+    /// measured on Fedora with the plain system wine 11.0, the whole chain works (proxy on 1119, Arctium
+    /// patches, the client comes up) — and the bundle's own script had been falling back to it all along.
+    /// The refusal now means what it says: no Wine at all. What is refused is a launch with no proxy,
+    /// never a launch without Lutris.</para>
+    /// </summary>
     [Fact]
-    public async Task ModernClient_WithoutWineGe_FallsBackToProton()
+    public async Task ModernClient_WithNoWineAtAll_IsRefused_NotStartedWithoutItsProxy()
     {
         var legacy = new RecordingLauncher();
-        var proton = new RecordingLauncher();
-        var router = new LinuxGameLauncherRouter(legacy, modernWine: null, proton, Logger());
+        var router = new LinuxGameLauncherRouter(legacy, modernWine: null, Logger());
 
-        await router.LaunchAsync("/some/dir/WowClassic.exe", "/some/dir");
+        var result = await router.LaunchAsync("/some/dir/WowClassic.exe", "/some/dir");
 
-        Assert.Equal(1, proton.CallCount);
+        Assert.False(result.Started);
         Assert.Equal(0, legacy.CallCount);
+        // The message has to name the way out, or "not supported" leaves the player with nothing to do.
+        // Both ways out, now that either one works.
+        Assert.Contains("wine", result.Error, System.StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Lutris", result.Error, System.StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>The legacy 1.12 client is untouched by all of this: it needs no proxy, it is the
+    /// proven path, and it must keep starting on a machine with no wine-ge at all.</summary>
+    [Fact]
+    public async Task LegacyClient_StillStarts_WhenThereIsNoWineGeAtAll()
+    {
+        var legacy = new RecordingLauncher();
+        var router = new LinuxGameLauncherRouter(legacy, modernWine: null, Logger());
+
+        var result = await router.LaunchAsync("/some/dir/WoW.exe", "/some/dir");
+
+        Assert.True(result.Started);
+        Assert.Equal(1, legacy.CallCount);
     }
 
     [Fact]
@@ -62,7 +93,7 @@ public sealed class LinuxGameLauncherRouterTests
         var legacy = new RecordingLauncher();
         var wineGe = new RecordingLauncher();
         var proton = new RecordingLauncher();
-        var router = new LinuxGameLauncherRouter(legacy, wineGe, proton, Logger());
+        var router = new LinuxGameLauncherRouter(legacy, wineGe, Logger());
 
         await router.LaunchAsync("/some/dir/WoW.exe", "/some/dir");
 

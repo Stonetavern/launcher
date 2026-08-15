@@ -23,5 +23,13 @@
        assembly so the deserialisation + behaviour tests read the exact on-wire shape WP6 will serve. -->
   <ItemGroup>
     <None Include="fixtures\*.json" CopyToOutputDirectory="PreserveNewest" />
+    <!-- The detached manifest signature is the cross-language interop fixture (python signs, the
+         launcher verifies) — it has to travel next to its manifest or the proof cannot run. -->
+    <None Include="fixtures\*.sig" CopyToOutputDirectory="PreserveNewest" />
+    <!-- Not a fixture: the actual manifest that gets uploaded, LINKED rather than copied. A copy
+         would drift, and the drift would be invisible — the tests would keep proving a shape the
+         published file no longer has. -->
+    <None Include="..\deploy\manifest-1.6.4-candidate.json"
+          Link="fixtures\manifest-release-candidate.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

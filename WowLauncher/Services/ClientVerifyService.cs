@@ -2,6 +2,7 @@ namespace WowLauncher.Services;
 
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Security.Cryptography;
 using System.Threading;
 using System.Threading.Tasks;
@@ -60,6 +61,14 @@ public sealed class ClientVerifyService : IClientVerifyService
         var report = new VerifyReport { Total = manifest.Files.Count };
         var checkedCount = 0;
 
+        // The manifest is rooted at the PACKAGE root, while installDir is the folder the executable
+        // lives in — one or two levels deeper for the modern client (ContentRoot explains why).
+        // Measuring against installDir reported all 1123 files of an intact install as missing and
+        // triggered a full 8.5 GB re-download on every Repair (measured 2026-08-12).
+        var root = ContentRoot.Resolve(installDir, manifest.Files.Select(f => f.Path));
+        if (!string.Equals(root, installDir, StringComparison.Ordinal))
+            _log.Information("Verify: manifest paths resolve against {Root}, not {InstallDir}", root, installDir);
+
         foreach (var entry in manifest.Files)
         {
             ct.ThrowIfCancellationRequested();
@@ -74,10 +83,20 @@ public sealed class ClientVerifyService : IClientVerifyService
                 continue;
             }
 
+            // Zustand, den der Client selbst fortschreibt (CASC-Indexgenerationen, lru_status,
+            // shmem, .build.info). Er steht im Paket, kann aber nach dem ersten Spielstart nicht mehr
+            // zum Manifest passen — als Defekt gezaehlt wuerde er jeden Repair in einen
+            // Voll-Download zwingen.
+            if (DownloadService.IsVolatileRuntimeState(entry.Path))
+            {
+                report.Ok++;
+                continue;
+            }
+
             // entry.Path is always "/"-separated on the wire (MANIFEST-SCHEMA.md); Path.Combine on
             // Linux would otherwise treat a literal "\" as part of the file name instead of a separator.
             var relative = entry.Path.Replace('/', Path.DirectorySeparatorChar);
-            var fullPath = Path.Combine(installDir, relative);
+            var fullPath = Path.Combine(root, relative);
 
             // Stage 1 - existence. Cheapest possible check, no I/O beyond a stat.
             if (!File.Exists(fullPath))

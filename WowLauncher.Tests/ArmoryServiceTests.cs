@@ -18,7 +18,7 @@ namespace WowLauncher.Tests;
 ///
 /// <para>🔴 <b>Read this before trusting the mapping tests.</b> The JSON below is NOT a captured
 /// response. <c>GET /api/launcher/characters</c> did not exist when these tests were written
-/// (2026-07-21) - the contract lives in /AI/projects/wow/launcher/HANDOFF-armory.md and this fixture
+/// (2026-07-21) - the contract lives in (internal design notes, not published) and this fixture
 /// is that contract written twice. That is exactly the shape of the failure this project already paid
 /// for once: the login fixture invented <c>expiresAt</c> as a string, the API sent a number, every
 /// test was green and every sign-in was broken. So these tests prove that the mapper does what the

@@ -67,6 +67,24 @@ public sealed class RealmEntry
     /// player cannot end up with an empty rail and no way back.</summary>
     public bool IsPreset { get; set; }
 
+    /// <summary>
+    /// The GAME realms behind this entry, for the account-scoped web APIs (armory character lists).
+    /// Usually the entry's own id — one rail entry, one realm — but not always: Stonetavern is ONE place
+    /// to connect (a single auth address, which is all <see cref="RealmlistAddress"/> can express) while
+    /// the account's characters live on two named realms behind it. Splitting the rail into one entry per
+    /// game realm was the older shape and was wrong: both entries carried the same address, so the choice
+    /// changed nothing about where the client connected (owner 2026-07-27).
+    ///
+    /// <para>Shipped data, not player-editable — null on a config written before this field existed, and
+    /// <see cref="AccountRealms"/> then falls back to the id, which is what a custom realm wants anyway.</para>
+    /// </summary>
+    public List<string>? ArmoryRealms { get; set; }
+
+    /// <summary>Resolved game realms for the account APIs: <see cref="ArmoryRealms"/> when set, else the
+    /// entry's own id.</summary>
+    public IReadOnlyList<string> AccountRealms =>
+        ArmoryRealms is { Count: > 0 } realms ? realms : [Id];
+
     /// <summary>False marks a realm that is announced but not playable yet (rail shows it dimmed).</summary>
     public bool IsLive { get; set; } = true;
 
@@ -96,6 +114,17 @@ public sealed class RealmEntry
     /// <summary>Rail glyph: first letter of the name. Brand-safe, no Blizzard mark.</summary>
     public string ShortTag => string.IsNullOrEmpty(Name) ? "?" : Name[..1].ToUpperInvariant();
 
+    /// <summary>True for the one shipped realm, which wears the lantern instead of a letter.
+    /// <para>An initial is what you show when you have nothing better. Stonetavern HAS something
+    /// better — the lantern is its mark, and a mark that identifies a place at a glance is exactly
+    /// what a 52px tile is for. Realms a player adds themselves keep the letter: inventing a crest
+    /// for someone else's server would claim an identity that is not ours to give.</para></summary>
+    public bool WearsBrandMark =>
+        string.Equals(Id, RealmRegistry.StonetavernId, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Inverse of <see cref="WearsBrandMark"/> — compiled bindings cannot negate.</summary>
+    public bool WearsLetterMark => !WearsBrandMark;
+
     /// <summary>Upper-cased name for the hero headline (compiled bindings cannot call ToUpper).</summary>
     public string NameUpper => Name.ToUpperInvariant();
 
@@ -111,34 +140,100 @@ public sealed class RealmEntry
 /// </summary>
 public static class RealmRegistry
 {
+    /// <summary>The one shipped realm. Stonetavern is a single place to connect.</summary>
+    public const string StonetavernId = "stonetavern";
+
+    /// <summary>The two GAME realms behind that one entry — ids the web APIs know, not rail entries.</summary>
     public const string ElwynnId = "elwynn";
     public const string BarrensId = "barrens";
 
-    private const string StonetavernManifest = "https://downloads.stonetavern.app/manifest.json";
+    /// <summary>The shipped address of the one preset, so the manifest can move it but a player's edit
+    /// is never overwritten (see <c>RealmBinding.Effective</c>).</summary>
+    public const string StonetavernAddress = "play.stonetavern.app";
 
-    /// <summary>The shipped presets. Fresh instances each call - never hand out the canon for editing.</summary>
+    /// <summary>Wo das Manifest von Stonetavern liegt.
+    ///
+    /// <para>Öffentlich seit 2026-08-05, weil das **Selbst-Update des Launchers** es braucht und
+    /// eben NICHT das Manifest des gewählten Realms nehmen darf — siehe
+    /// <c>IManifestService.FetchLauncherManifestAsync</c>.</para></summary>
+    public const string StonetavernManifest = "https://downloads.stonetavern.app/manifest.json";
+
+    /// <summary>
+    /// The shipped presets — ONE entry (owner 2026-07-27). There used to be two, Elwynn and Barrens,
+    /// carrying the identical <c>play.stonetavern.app</c> address: the rail offered a choice that changed
+    /// nothing about where the client connected, while the thing it really selects — the realm address —
+    /// was the same either way. The account's characters on both game realms are still reachable through
+    /// <see cref="RealmEntry.AccountRealms"/>.
+    ///
+    /// <para>Fresh instances each call - never hand out the canon for editing.</para>
+    /// </summary>
     public static List<RealmEntry> Presets() =>
     [
         new()
         {
-            Id = ElwynnId, Name = "Elwynn", RealmlistAddress = "play.stonetavern.app",
+            Id = StonetavernId, Name = "Stonetavern", RealmlistAddress = StonetavernAddress,
             ClientKey = "1.12.1", ClientKeys = ["1.12.1", "1.14.2"],
+            ArmoryRealms = [ElwynnId, BarrensId],
             ManifestUrl = StonetavernManifest, IsPreset = true, IsLive = true,
         },
-        new()
-        {
-            Id = BarrensId, Name = "Barrens", RealmlistAddress = "play.stonetavern.app",
-            // Both Vanilla realms speak the same two clients, so Barrens offers 1.14.2 too (Owner
-            // 2026-07-23). The client is installed once per BUILD (ClientInstalls is keyed by gamebuild,
-            // not by realm), so a 1.14.2 install done on Elwynn is found here with no second download.
-            ClientKey = "1.12.1", ClientKeys = ["1.12.1", "1.14.2"],
-            ManifestUrl = StonetavernManifest, IsPreset = true, IsLive = false,
-        },
     ];
+
+    /// <summary>The address a preset SHIPS with, or null for an id the launcher does not ship. Used to
+    /// tell "the player edited this realm" from "this is still the shipped default", which decides
+    /// whether a manifest may move it (<c>RealmBinding.Effective</c>).</summary>
+    public static string? ShippedAddress(string? id) =>
+        Presets().FirstOrDefault(p => string.Equals(p.Id, id, StringComparison.OrdinalIgnoreCase))?.RealmlistAddress;
+
+    /// <summary>
+    /// Fold a config written by an older launcher onto the single preset: the rail entries
+    /// <c>elwynn</c>/<c>barrens</c> no longer exist, so a saved copy of either would otherwise reappear
+    /// as a stray custom realm (undeletable, since it was persisted as a preset) and a
+    /// <c>SelectedRealmId</c> pointing at one would select nothing.
+    ///
+    /// <para>An address the player EDITED on the old Elwynn entry is carried over to Stonetavern — it is
+    /// the only field of theirs that could have been deliberately changed and still means the same thing.
+    /// Barrens is dropped: it never had an address of its own that differed.</para>
+    /// </summary>
+    internal static void MigrateLegacyRealms(LauncherConfig cfg)
+    {
+        var legacy = cfg.Realms
+            .Where(r => string.Equals(r.Id, ElwynnId, StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(r.Id, BarrensId, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        if (legacy.Count > 0)
+        {
+            var elwynn = legacy.FirstOrDefault(r => string.Equals(r.Id, ElwynnId, StringComparison.OrdinalIgnoreCase));
+            var editedAddress = elwynn is not null
+                                && !string.IsNullOrWhiteSpace(elwynn.RealmlistAddress)
+                                && !string.Equals(elwynn.RealmlistAddress.Trim(), StonetavernAddress, StringComparison.OrdinalIgnoreCase)
+                ? elwynn.RealmlistAddress.Trim()
+                : null;
+
+            foreach (var old in legacy) cfg.Realms.Remove(old);
+
+            if (editedAddress is not null
+                && !cfg.Realms.Any(r => string.Equals(r.Id, StonetavernId, StringComparison.OrdinalIgnoreCase)))
+            {
+                var shipped = Presets()[0];
+                shipped.RealmlistAddress = editedAddress;
+                if (elwynn is not null) shipped.ClientKey = elwynn.ClientKey;
+                cfg.Realms.Add(shipped);
+            }
+        }
+
+        if (string.Equals(cfg.SelectedRealmId, ElwynnId, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(cfg.SelectedRealmId, BarrensId, StringComparison.OrdinalIgnoreCase))
+            cfg.SelectedRealmId = StonetavernId;
+    }
 
     /// <summary>Presets plus the player's own realms, presets first, ids deduped against the presets.</summary>
     public static List<RealmEntry> All(LauncherConfig cfg)
     {
+        // Older configs still carry the two rail entries this launcher no longer ships. Fold them first,
+        // so nothing downstream ever sees a realm that does not exist any more.
+        MigrateLegacyRealms(cfg);
+
         var list = Presets();
 
         // A stored copy of a preset (edited address, say) wins over the shipped default, so an owner
@@ -161,6 +256,9 @@ public static class RealmRegistry
                 // player COULD have deliberately changed - RealmlistAddress, the active ClientKey,
                 // ManifestUrl, IsLive - stays exactly as saved.
                 stored.ClientKeys = shipped.ClientKeys;
+                // Same rule, same reason: which GAME realms sit behind a preset is shipped data the
+                // player has no UI for, so the shipped list always wins over whatever was persisted.
+                stored.ArmoryRealms = shipped.ArmoryRealms;
                 list[idx] = stored;
             }
             else

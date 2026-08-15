@@ -67,7 +67,7 @@ public sealed class FirstRunSetupServiceTests
         Assert.True(File.Exists(shortcut));
         if (OperatingSystem.IsLinux())
             Assert.True(File.GetUnixFileMode(shortcut).HasFlag(UnixFileMode.UserExecute));
-        Assert.Contains("StartupWMClass=WowLauncher", await File.ReadAllTextAsync(shortcut), StringComparison.Ordinal);
+        Assert.Contains($"StartupWMClass={DesktopIntegration.WmClass}", await File.ReadAllTextAsync(shortcut), StringComparison.Ordinal);
         Assert.Contains("gio", ran); // trust marked through the injected runner, no real process
 
         // 4) one-time flag flipped so it never runs again

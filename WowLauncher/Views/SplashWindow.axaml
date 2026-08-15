@@ -1,0 +1,186 @@
+<!--
+  Stonetavern Launcher — start screen.
+
+  One lit object in a dark stone room. The lantern is the mark and the only light source: the bloom
+  behind it is the light it casts, so the composition has a cause instead of a decorative gradient.
+  Everything else is quiet on purpose — a wordmark, a wick, one sentence. All colours are the shared
+  Stone / Parchment / Ember tokens (Styles.axaml); the lantern flicker is the v3 skin's own gated
+  animation, reused rather than re-invented.
+
+  Player-facing text is English and comes from the catalogue (projects/wow/VOICE.md): the status line
+  is bound, the ViewModel reads it from Loc.
+-->
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:loc="using:WowLauncher.Localization"
+        xmlns:vm="using:WowLauncher.ViewModels"
+        x:Class="WowLauncher.Views.SplashWindow"
+        x:DataType="vm:SplashViewModel"
+        Icon="avares://WowLauncher/Assets/stonetavern-logo.png"
+        Title="{loc:Tr App_WindowTitleShort}"
+        Width="460" Height="340"
+        CanResize="False"
+        SizeToContent="Manual"
+        WindowStartupLocation="CenterScreen"
+        WindowDecorations="None"
+        ExtendClientAreaToDecorationsHint="True"
+        Background="{StaticResource StoneBase}">
+
+    <Window.Styles>
+        <!-- The wick. An indeterminate wait has no percentage, so this does not pretend to be one:
+             the ember grows OUTWARD FROM THE CENTRE and ebbs back, which cannot be misread as
+             progress that reset. 3.2s, sine, one hairline tall, no travel, no bounce.
+
+             Gated under Border.live like every endless animation in this app (the rule and its
+             enumeration live in the motion header of Styles.v3.axaml). The splash is closed on every
+             startup path, so it can never be the window that keeps a core warm — but the gate is
+             wired anyway, from the code-behind, so a minimised splash paints nothing either. Kept
+             local to this window instead of in the shared sheets: nothing else uses it. -->
+        <Style Selector="Border.live Border.wick">
+            <Style.Animations>
+                <Animation Duration="0:0:3.2" IterationCount="INFINITE" Easing="SineEaseInOut">
+                    <KeyFrame Cue="0%">
+                        <Setter Property="Width" Value="26"/>
+                        <Setter Property="Opacity" Value="0.35"/>
+                    </KeyFrame>
+                    <KeyFrame Cue="50%">
+                        <Setter Property="Width" Value="196"/>
+                        <Setter Property="Opacity" Value="0.95"/>
+                    </KeyFrame>
+                    <KeyFrame Cue="100%">
+                        <Setter Property="Width" Value="26"/>
+                        <Setter Property="Opacity" Value="0.35"/>
+                    </KeyFrame>
+                </Animation>
+            </Style.Animations>
+        </Style>
+
+        <!-- Der Bogen, der um die Laterne kreist.
+             Owner 2026-08-05: "ich will wenn er auch laedt nen ladebalken oder etwas was sich dreht
+             passend zum artwork vom launcher". Der Docht unten WAR schon die Ladeanzeige, aber eine
+             Haarlinie, die auf nichts abebbt - in dem Moment, in dem sie null ist, bewegt sich auf
+             dem Bildschirm gar nichts, und genau daran liest man einen Haenger.
+
+             Warum ein Bogen und kein Balken: ein Balken behauptet einen Anteil. Was hier laeuft
+             (Manifest holen, Signatur pruefen, Version vergleichen) hat keinen - ein Balken bei 60%
+             waere eine Zahl, die wir uns ausgedacht haben. Ein Bogen, der kreist, sagt "es geht
+             weiter" und nichts sonst.
+
+             Und warum um die LATERNE: die Laterne ist die einzige Lichtquelle dieses Bildes, der
+             Schein hinter ihr ist ihr eigener. Ein Ember-Bogen, der sie umlaeuft, ist wanderndes
+             Licht derselben Quelle - kein fremdes Rad, das man auf ein Bild geklebt hat.
+
+             Zwei Ringe: eine ruhende Spur, damit der Bogen etwas hat, worauf er laeuft, und der
+             Bogen selbst als Strichmuster (18 an, 300 aus) mit gedrehtem Ursprung. Gated unter
+             Border.live wie jede endlose Animation hier. -->
+        <Style Selector="Border.live Ellipse.orbit">
+            <Style.Animations>
+                <Animation Duration="0:0:2.6" IterationCount="INFINITE" Easing="LinearEasing">
+                    <KeyFrame Cue="0%">
+                        <Setter Property="RotateTransform.Angle" Value="0"/>
+                    </KeyFrame>
+                    <KeyFrame Cue="100%">
+                        <Setter Property="RotateTransform.Angle" Value="360"/>
+                    </KeyFrame>
+                </Animation>
+            </Style.Animations>
+        </Style>
+
+        <!-- The update sentence is the one message here a player must not read as a crash, so it is
+             the only text on this screen that steps up to full parchment. -->
+        <Style Selector="TextBlock.status">
+            <Setter Property="Foreground" Value="{StaticResource ParchmentSecondary}"/>
+        </Style>
+        <Style Selector="TextBlock.status.updating">
+            <Setter Property="Foreground" Value="{StaticResource ParchmentPrimary}"/>
+        </Style>
+    </Window.Styles>
+
+    <Border x:Name="Splash" Classes="live"
+            BorderBrush="{StaticResource StoneBorder}" BorderThickness="1"
+            Background="{StaticResource StoneBase}" ClipToBounds="True">
+        <Grid>
+
+            <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Margin="40,0">
+
+                <!-- The mark and the light it throws. The bloom is not hit-testable and has no layout
+                     effect; it sits behind the lantern in the same cell so the two never drift apart. -->
+                <Panel Height="158">
+                    <Border Width="300" Height="180" IsHitTestVisible="False"
+                            HorizontalAlignment="Center" VerticalAlignment="Center">
+                        <Border.Background>
+                            <RadialGradientBrush Center="50%,42%" GradientOrigin="50%,42%"
+                                                 RadiusX="50%" RadiusY="58%">
+                                <GradientStop Offset="0.0" Color="#4C8A5523"/>
+                                <GradientStop Offset="0.40" Color="#248A5523"/>
+                                <GradientStop Offset="1.0" Color="#008A5523"/>
+                            </RadialGradientBrush>
+                        </Border.Background>
+                    </Border>
+
+                    <!-- Ruhende Spur. Sehr leise: sie ist da, damit der Bogen nicht im Nichts
+                         laeuft, nicht damit man sie ansieht. -->
+                    <Ellipse Width="150" Height="150" IsHitTestVisible="False"
+                             HorizontalAlignment="Center" VerticalAlignment="Center"
+                             Stroke="{StaticResource StoneBorder}" StrokeThickness="1" Opacity="0.28"/>
+                    <!-- Ein Bogen, nicht ein Punktkranz. Die Einheiten von StrokeDashArray sind
+                         Vielfache der Strichstaerke, nicht Pixel: bei Umfang ~471px und 2px Strich
+                         sind das ~235 Einheiten fuer den ganzen Ring. 34 an und 205 aus ergibt also
+                         EIN Segment von gut einem Siebtel. Der erste Versuch stand auf 1.6/26 und
+                         zeichnete zwoelf Punkte im Kreis - im Standbild ein Ornament, in Bewegung
+                         ein Karussell. Gesehen, nicht gerechnet: gerendert und angesehen. -->
+                    <Ellipse Classes="orbit" Width="150" Height="150" IsHitTestVisible="False"
+                             HorizontalAlignment="Center" VerticalAlignment="Center"
+                             Stroke="{StaticResource EmberBase}" StrokeThickness="2"
+                             StrokeDashArray="34,205" StrokeLineCap="Round"
+                             RenderTransformOrigin="50%,50%">
+                        <Ellipse.RenderTransform>
+                            <RotateTransform Angle="0"/>
+                        </Ellipse.RenderTransform>
+                    </Ellipse>
+
+                    <Image Source="avares://WowLauncher/Assets/lantern.png"
+                           Classes="v3flicker"
+                           Height="118" Width="97"
+                           HorizontalAlignment="Center" VerticalAlignment="Center"
+                           RenderOptions.BitmapInterpolationMode="HighQuality"/>
+                </Panel>
+
+                <TextBlock Text="STONETAVERN"
+                           FontFamily="{StaticResource FontDisplay}"
+                           FontSize="22" LetterSpacing="7"
+                           Foreground="{StaticResource ParchmentPrimary}"
+                           HorizontalAlignment="Center" Margin="7,30,0,0"/>
+
+                <!-- Track + wick. The track is a hairline so the ember has something to sit on when it
+                     ebbs to nothing; without it the line disappears and the panel reads as broken. -->
+                <!-- 2px statt 1px, und der Docht ebbt auf 26px ab statt auf null: eine Linie, die
+                     verschwindet, sieht in dem Moment aus wie ein Programm, das stehengeblieben ist
+                     (Owner-Befund 2026-08-05). -->
+                <Panel Width="196" Height="2" Margin="0,28,0,0">
+                    <Border Height="2" Opacity="0.55" Background="{StaticResource StoneBorder}"/>
+                    <Border Classes="wick" Height="2" Width="26"
+                            HorizontalAlignment="Center"
+                            Background="{StaticResource EmberBase}"/>
+                </Panel>
+
+                <TextBlock Text="{Binding Status}"
+                           Classes="status"
+                           Classes.updating="{Binding IsUpdatingLauncher}"
+                           FontFamily="{StaticResource FontBody}"
+                           FontSize="13.5" LineHeight="20"
+                           TextAlignment="Center" TextWrapping="Wrap"
+                           MaxWidth="372"
+                           HorizontalAlignment="Center" Margin="0,26,0,0"/>
+            </StackPanel>
+
+            <!-- The running version, bottom right. It is here because "which build am I actually on"
+                 was the question nobody could answer while the update loop was running. -->
+            <TextBlock Text="{Binding VersionText}"
+                       FontFamily="{StaticResource FontMono}" FontSize="10"
+                       Foreground="{StaticResource ParchmentFaint}" Opacity="0.7"
+                       HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                       Margin="0,0,14,10"/>
+        </Grid>
+    </Border>
+</Window>

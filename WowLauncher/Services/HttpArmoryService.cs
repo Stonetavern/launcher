@@ -14,7 +14,7 @@ using WowLauncher.Models;
 /// class answers <see cref="ArmoryStatus.Unavailable"/> on every call, which is exactly what it would
 /// do against a 404 anyway - so wiring it in cannot break the app, and the demo mock keeps driving
 /// the UI. The contract it expects is written down in
-/// /AI/projects/wow/launcher/HANDOFF-armory.md; the DTOs carry the same warning.</para>
+/// (internal design notes, not published); the DTOs carry the same warning.</para>
 ///
 /// <para><b>Own characters only.</b> The bearer is the scope - no account id is ever sent, and the
 /// launcher has no way to ask for somebody elses characters.</para>
@@ -42,8 +42,9 @@ public sealed class HttpArmoryService : IArmoryService
     public async Task<ArmoryRoster> GetCharactersAsync(string realmId, CancellationToken ct = default)
     {
         var token = _auth.CurrentToken;
+        var id = realmId ?? "";
         if (!_auth.IsLoggedIn || string.IsNullOrEmpty(token))
-            return ArmoryRoster.Empty(ArmoryStatus.SignedOut); // no session -> no request
+            return ArmoryRoster.Empty(ArmoryStatus.SignedOut, id); // no session -> no request
 
         var realm = Uri.EscapeDataString(realmId ?? "");
         var url = $"{ApiEndpoints.Base(_config)}/launcher/characters?realm={realm}";
@@ -54,24 +55,30 @@ public sealed class HttpArmoryService : IArmoryService
             using var resp = await _http.SendAsync(req, ct).ConfigureAwait(false);
 
             if (resp.StatusCode is HttpStatusCode.Unauthorized)
-                return ArmoryRoster.Empty(ArmoryStatus.SignedOut);
+                return ArmoryRoster.Empty(ArmoryStatus.SignedOut, id);
             if (!resp.IsSuccessStatusCode)
             {
-                _log.Warning("Armory fetch returned {Status} - showing the quiet empty state", (int)resp.StatusCode);
-                return ArmoryRoster.Empty(ArmoryStatus.Unavailable);
+                // The code goes to the PLAYER, not only to the log. "Not available" alone made a
+                // realm that does not exist, a server that is down and an expired session look
+                // identical on screen, and left the one person who could act on it nothing to act on.
+                _log.Warning(
+                    "Armory fetch for {Realm} returned {Status} - showing the quiet empty state",
+                    id, (int)resp.StatusCode);
+                return ArmoryRoster.Empty(ArmoryStatus.Unavailable, id, $"HTTP {(int)resp.StatusCode}");
             }
 
             var json = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
             var dto = JsonSerializer.Deserialize(json, ArmoryApiJsonContext.Default.ArmoryResponseDto);
-            if (dto?.Characters is null) return ArmoryRoster.Empty(ArmoryStatus.Unavailable);
+            if (dto?.Characters is null)
+                return ArmoryRoster.Empty(ArmoryStatus.Unavailable, id, "unreadable answer");
 
             var list = new List<ArmoryCharacter>(dto.Characters.Length);
             foreach (var c in dto.Characters)
             {
                 var mapped = Map(c);
-                if (mapped is not null) list.Add(mapped);
+                if (mapped is not null) list.Add(mapped with { RealmId = id });
             }
-            return new ArmoryRoster(list, ArmoryStatus.Ok);
+            return new ArmoryRoster(list, ArmoryStatus.Ok, id);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -79,13 +86,13 @@ public sealed class HttpArmoryService : IArmoryService
         }
         catch (OperationCanceledException ex)
         {
-            _log.Warning(ex, "Armory fetch timed out - showing the quiet empty state");
-            return ArmoryRoster.Empty(ArmoryStatus.Unavailable);
+            _log.Warning(ex, "Armory fetch for {Realm} timed out - showing the quiet empty state", id);
+            return ArmoryRoster.Empty(ArmoryStatus.Unavailable, id, "no answer in time");
         }
         catch (Exception ex)
         {
-            _log.Warning(ex, "Armory fetch failed - showing the quiet empty state");
-            return ArmoryRoster.Empty(ArmoryStatus.Unavailable);
+            _log.Warning(ex, "Armory fetch for {Realm} failed - showing the quiet empty state", id);
+            return ArmoryRoster.Empty(ArmoryStatus.Unavailable, id, "could not be reached");
         }
     }
 

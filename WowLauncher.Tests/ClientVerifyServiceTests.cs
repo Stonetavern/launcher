@@ -158,9 +158,15 @@ public sealed class ClientVerifyServiceTests
 
     [Theory]
     [InlineData("WTF/config.wtf")]
-    [InlineData("Interface/AddOns/MyAddon/addon.lua")]
     [InlineData("Screenshots/shot1.tga")]
     [InlineData("realmlist.wtf")]
+    // The modern client ships its tree nested under "World of Warcraft/<flavor>/", so the same
+    // player-owned paths arrive with a prefix. Only the flat Vanilla layout was covered before,
+    // which is why a leading-prefix-only Preserve rule looked correct for a year.
+    [InlineData("World of Warcraft/_classic_era_/WTF/Config.wtf")]
+    [InlineData("World of Warcraft/_classic_era_/WTF/SavedVariables/Blizzard_Console.lua")]
+    [InlineData("World of Warcraft/_classic_era_/Screenshots/shot1.tga")]
+    [InlineData("World of Warcraft/_classic_era_/realmlist.wtf")]
     public async Task PreservedPaths_AreNeverFlagged_EvenWhenWrong(string preservedPath)
     {
         var dir = NewTempDir();
@@ -179,6 +185,57 @@ public sealed class ClientVerifyServiceTests
             Assert.True(report.IsIntact, $"{preservedPath} is player-owned data the extractor never overwrites — it must never be reported as a defect.");
             Assert.DoesNotContain(preservedPath, report.Missing);
             Assert.DoesNotContain(preservedPath, report.Corrupt);
+        }
+        finally { DeleteDir(dir); }
+    }
+
+    [Theory]
+    [InlineData("Interface/AddOns/JimsPlus/Core.lua")]
+    [InlineData("World of Warcraft/_classic_era_/Interface/AddOns/JimsPlus/Core.lua")]
+    public async Task ShippedServerAddon_IsRepairable_NotTreatedAsPlayerData(string addonPath)
+    {
+        // The bundled server addon travels inside the client package and nowhere else — no addon
+        // catalogue carries it. If Preserve covered Interface/AddOns/, every addon update would
+        // silently stop reaching existing installs. A damaged copy must be reported as a defect.
+        var dir = NewTempDir();
+        try
+        {
+            WriteFile(dir, addonPath, "locally-modified-or-damaged");
+            var manifest = new ClientFileManifest
+            {
+                Build = 42597,
+                Files = [Entry(addonPath, "the-shipped-version")],
+            };
+
+            var report = await NewService().VerifyAsync(dir, manifest);
+
+            Assert.False(report.IsIntact, "a damaged shipped addon must be repairable");
+            Assert.Contains(addonPath, report.Corrupt);
+        }
+        finally { DeleteDir(dir); }
+    }
+
+    [Fact]
+    public async Task PlayerOwnAddon_IsNeverTouched_BecauseItIsNotInTheManifest()
+    {
+        // The player's own addons are safe by construction rather than by a preserve rule: they
+        // appear in neither the manifest nor the zip, so nothing ever looks at them.
+        var dir = NewTempDir();
+        try
+        {
+            WriteFile(dir, "Interface/AddOns/MyOwnAddon/addon.lua", "player-authored");
+            var manifest = new ClientFileManifest
+            {
+                Build = 42597,
+                Files = [Entry("Data/patch.mpq", "shipped")],
+            };
+            WriteFile(dir, "Data/patch.mpq", "shipped");
+
+            var report = await NewService().VerifyAsync(dir, manifest);
+
+            Assert.True(report.IsIntact);
+            Assert.Equal(1, report.Total);
+            Assert.True(File.Exists(Path.Combine(dir, "Interface", "AddOns", "MyOwnAddon", "addon.lua")));
         }
         finally { DeleteDir(dir); }
     }

@@ -17,6 +17,10 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:m="using:WowLauncher.Models">
 
+    <Styles.Resources>
+    </Styles.Resources>
+
+
     <!-- ═══════════════════════════════════════════════════════════════════════════
          MOTION — "candlelight".
 
@@ -211,6 +215,26 @@
     </Style>
 
     <!-- ═══ TopNav tab (Row0): active = ember underline, like Button.otab in v2 ═══ -->
+    <!-- ═══ The wordmark, as the way home ═══
+         It has to keep looking like a masthead, not like a button: no chrome, no fill, nothing that
+         reads as "control". Only the pointer and a slight warming on hover say it can be pressed —
+         the same restraint the tabs use. -->
+    <Style Selector="Button.v3brand">
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="BorderThickness" Value="0"/>
+        <Setter Property="CornerRadius" Value="0"/>
+        <Setter Property="Padding" Value="0"/>
+        <Setter Property="Cursor" Value="Hand"/>
+        <Setter Property="Foreground" Value="{StaticResource ParchmentSecondary}"/>
+        <Setter Property="VerticalContentAlignment" Value="Center"/>
+    </Style>
+    <Style Selector="Button.v3brand:pointerover /template/ ContentPresenter">
+        <Setter Property="Background" Value="Transparent"/>
+    </Style>
+    <Style Selector="Button.v3brand:pointerover">
+        <Setter Property="Foreground" Value="{StaticResource ParchmentPrimary}"/>
+    </Style>
+
     <Style Selector="Button.v3tab">
         <Setter Property="Background" Value="Transparent"/>
         <Setter Property="Foreground" Value="{StaticResource ParchmentSecondary}"/>
@@ -268,7 +292,10 @@
     <Style Selector="ListBox.v3rail ListBoxItem">
         <Setter Property="Background" Value="Transparent"/>
         <Setter Property="Foreground" Value="{StaticResource ParchmentSecondary}"/>
-        <Setter Property="BorderThickness" Value="3,0,0,0"/>
+        <!-- Kein Ember-Streifen am Leistenrand mehr. Solange die Marke selbst eine glühende Kante
+             bekommt, sagten beide dasselbe — zwei Betonungen für eine Aussage, und die Marke stand
+             dadurch sichtbar aus der Mitte. Das Signal sitzt jetzt dort, wo der Blick ohnehin ist. -->
+        <Setter Property="BorderThickness" Value="0"/>
         <Setter Property="BorderBrush" Value="Transparent"/>
         <Setter Property="CornerRadius" Value="0"/>
         <Setter Property="Padding" Value="0"/>
@@ -294,16 +321,67 @@
         <Setter Property="Foreground" Value="{StaticResource ParchmentPrimary}"/>
     </Style>
 
+    <!-- ═══ Realm-Marke ═══
+         Eine gravierte Messingmarke, wie die Zimmermarken hinter einem Tavernentresen — kein runder
+         Avatar (das ist der Chat-Programm-Reflex und sagt über einen Server nichts) und keine nackte
+         Initiale im Leeren. Die Marke hat eine Kante, sitzt eingelassen in der Leiste und trägt das
+         Sigel in der Auszeichnungsschrift. Der Realmname steht nicht darunter, sondern im Tooltip:
+         das ist der ganze Grund, warum die Kachel wieder atmen kann.
+         Randabstand 10px links/rechts = 52px Marke in einer 72px-Leiste. -->
+    <Style Selector="Border.realmmark">
+        <Setter Property="Margin" Value="10,5"/>
+        <Setter Property="Height" Value="52"/>
+        <Setter Property="CornerRadius" Value="3"/>
+        <Setter Property="BorderThickness" Value="1"/>
+        <Setter Property="BorderBrush" Value="{StaticResource BorderHairline}"/>
+        <!-- Eine Spur heller als die Leiste (StoneSurface #161210): die Marke liegt AUF dem Stein,
+             sie ist kein Loch darin. -->
+        <Setter Property="Background" Value="{StaticResource StoneHover}"/>
+        <Setter Property="Transitions">
+            <Transitions>
+                <BrushTransition Property="BorderBrush" Duration="0:0:0.14"/>
+                <BrushTransition Property="Background" Duration="0:0:0.14"/>
+            </Transitions>
+        </Setter>
+    </Style>
+    <!-- Angesteuert: die Marke fängt Licht, bevor sie gewählt ist. -->
+    <Style Selector="ListBox.v3rail ListBoxItem:pointerover Border.realmmark">
+        <Setter Property="BorderBrush" Value="{StaticResource EmberDim}"/>
+    </Style>
+    <!-- Gewählt: der Ember-Streifen am Leistenrand markiert bereits die Zeile; die Marke antwortet
+         mit einer wärmeren Kante statt mit einer zweiten Farbfläche. Ein Signal, zwei Stimmen. -->
+    <Style Selector="ListBox.v3rail ListBoxItem:selected Border.realmmark">
+        <Setter Property="BorderBrush" Value="{StaticResource EmberBase}"/>
+        <Setter Property="Background" Value="{StaticResource StoneBorder}"/>
+    </Style>
+
     <!-- Rail "+" add-realm glyph (custom, brand-safe, inert for now) -->
+    <!-- Die leere Marke: dieselbe Form, dasselbe Maß, nur noch nicht vergeben. Vorher war das "+" ein
+         nacktes Zeichen neben einer gerahmten Marke — zwei Dinge derselben Liste, die aussahen, als
+         gehörten sie nicht zusammen. Als leerer Rahmen liest es sich als freier Platz, und genau das
+         ist es: hier kommt ein eigener Realm hin. -->
     <Style Selector="Button.v3railadd">
         <Setter Property="Background" Value="Transparent"/>
         <Setter Property="Foreground" Value="{StaticResource ParchmentFaint}"/>
-        <Setter Property="FontSize" Value="24"/>
+        <Setter Property="FontSize" Value="20"/>
         <Setter Property="FontWeight" Value="Normal"/>
-        <Setter Property="CornerRadius" Value="0"/>
+        <Setter Property="CornerRadius" Value="3"/>
+        <Setter Property="BorderThickness" Value="1"/>
+        <Setter Property="BorderBrush" Value="{StaticResource BorderHairline}"/>
         <Setter Property="Height" Value="52"/>
-        <Setter Property="HorizontalAlignment" Value="Stretch"/>
+        <Setter Property="Width" Value="52"/>
+        <Setter Property="Margin" Value="10,7,10,0"/>
+        <Setter Property="HorizontalAlignment" Value="Center"/>
         <Setter Property="HorizontalContentAlignment" Value="Center"/>
+        <Setter Property="VerticalContentAlignment" Value="Center"/>
+        <Setter Property="Transitions">
+            <Transitions>
+                <BrushTransition Property="BorderBrush" Duration="0:0:0.14"/>
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="Button.v3railadd:pointerover">
+        <Setter Property="BorderBrush" Value="{StaticResource EmberDim}"/>
     </Style>
     <Style Selector="Button.v3railadd:pointerover /template/ ContentPresenter">
         <Setter Property="Background" Value="{StaticResource StoneHover}"/>
@@ -417,14 +495,38 @@
     </Style>
 
     <!-- Small ember "+" add button -->
+    <!-- Der bestaetigende Knopf im Realm-Fenster.
+         🔴 Neu gemasst 2026-08-05, Owner am Bildschirm: "button hier bei add realm auch nicht so
+         schoen". Der Grund war eine Masszahl, nicht der Geschmack: dieser Stil ist fuer ein "+"
+         gebaut worden (34px breit, Padding 0, Schrift 16) und traegt seit einem Umbau das WORT
+         "Add". Ein Wort in einem Kaestchen ohne Innenabstand klebt an seinen Kanten - es sah nicht
+         wie ein Knopf aus, sondern wie ein Etikett mit Hintergrundfarbe.
+         Jetzt ein kompakter Hauptknopf im Mass der uebrigen Formularzeilen: derselbe Ember-Ton wie
+         SPIELEN, aber eine Nummer kleiner, weil er eine Form bestaetigt und nicht ein Spiel startet.
+         Danebenstehendes "Realm entfernen" bleibt ghost - genau EIN gefuellter Knopf je Zeile. -->
     <Style Selector="Button.v3addbtn">
         <Setter Property="Background" Value="{StaticResource EmberDim}"/>
         <Setter Property="Foreground" Value="{StaticResource ParchmentPrimary}"/>
-        <Setter Property="FontSize" Value="16"/>
-        <Setter Property="MinWidth" Value="34"/>
-        <Setter Property="Padding" Value="0"/>
+        <Setter Property="FontFamily" Value="{StaticResource FontDisplay}"/>
+        <Setter Property="FontSize" Value="14"/>
+        <Setter Property="MinWidth" Value="110"/>
+        <Setter Property="MinHeight" Value="38"/>
+        <Setter Property="Padding" Value="20,0"/>
+        <Setter Property="CornerRadius" Value="{StaticResource RadiusMd}"/>
+        <Setter Property="Cursor" Value="Hand"/>
         <Setter Property="HorizontalContentAlignment" Value="Center"/>
         <Setter Property="VerticalContentAlignment" Value="Center"/>
+        <Setter Property="Transitions">
+            <Transitions>
+                <BrushTransition Property="Background" Duration="0:0:0.12"/>
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="Button.v3addbtn:pointerover /template/ ContentPresenter">
+        <Setter Property="Background" Value="{StaticResource EmberBase}"/>
+    </Style>
+    <Style Selector="Button.v3addbtn:disabled">
+        <Setter Property="Opacity" Value="0.38"/>
     </Style>
 
     <!-- ═══ Sign-in card (sidebar, signed out) ═══ -->
@@ -571,6 +673,70 @@
         <Setter Property="LineHeight" Value="50"/>
     </Style>
 
+    <!-- ═══ Addons ═══
+         A row, not a card: the page is a list of decisions and reads top-to-bottom. The hairline is
+         the only separator, the ember lives exclusively in the row's action button. -->
+    <Style Selector="Border.v3addonrow">
+        <Setter Property="Background" Value="{StaticResource StoneSurface}"/>
+        <Setter Property="BorderBrush" Value="{StaticResource BorderHairline}"/>
+        <Setter Property="BorderThickness" Value="1"/>
+        <Setter Property="CornerRadius" Value="{StaticResource RadiusMd}"/>
+        <Setter Property="Padding" Value="18,14"/>
+        <Setter Property="Margin" Value="0,0,0,10"/>
+    </Style>
+
+    <!-- Install / Update: the one strong action per row -->
+    <Style Selector="Button.v3addonaction">
+        <Setter Property="Background" Value="{StaticResource EmberBase}"/>
+        <Setter Property="Foreground" Value="{StaticResource ParchmentPrimary}"/>
+        <Setter Property="FontSize" Value="12"/>
+        <Setter Property="CornerRadius" Value="{StaticResource RadiusMd}"/>
+        <Setter Property="Padding" Value="16,8"/>
+        <Setter Property="Cursor" Value="Hand"/>
+    </Style>
+    <Style Selector="Button.v3addonaction:pointerover /template/ ContentPresenter">
+        <Setter Property="Background" Value="{StaticResource EmberBright}"/>
+    </Style>
+    <Style Selector="Button.v3addonaction:disabled /template/ ContentPresenter">
+        <Setter Property="Background" Value="{StaticResource EmberDim}"/>
+    </Style>
+    <Style Selector="Button.v3addonaction:pressed">
+        <Setter Property="RenderTransform" Value="none"/>
+    </Style>
+
+    <!-- Remove: quiet on purpose. Deleting is never the thing the page invites you to do. -->
+    <Style Selector="Button.v3addonremove">
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="Foreground" Value="{StaticResource ParchmentFaint}"/>
+        <Setter Property="BorderBrush" Value="{StaticResource BorderHairline}"/>
+        <Setter Property="BorderThickness" Value="1"/>
+        <Setter Property="FontSize" Value="12"/>
+        <Setter Property="CornerRadius" Value="{StaticResource RadiusMd}"/>
+        <Setter Property="Padding" Value="14,8"/>
+        <Setter Property="Cursor" Value="Hand"/>
+    </Style>
+    <Style Selector="Button.v3addonremove:pointerover /template/ ContentPresenter">
+        <Setter Property="Background" Value="{StaticResource StoneHover}"/>
+    </Style>
+    <Style Selector="Button.v3addonremove:pressed">
+        <Setter Property="RenderTransform" Value="none"/>
+    </Style>
+
+    <!-- Quiet inline link (project page) -->
+    <Style Selector="Button.v3linkquiet">
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="Foreground" Value="{StaticResource ParchmentFaint}"/>
+        <Setter Property="FontSize" Value="11"/>
+        <Setter Property="Padding" Value="0"/>
+        <Setter Property="Cursor" Value="Hand"/>
+    </Style>
+    <Style Selector="Button.v3linkquiet:pointerover">
+        <Setter Property="Foreground" Value="{StaticResource EmberBright}"/>
+    </Style>
+    <Style Selector="Button.v3linkquiet:pressed">
+        <Setter Property="RenderTransform" Value="none"/>
+    </Style>
+
     <!-- Hairline rule between ledger blocks -->
     <Style Selector="Border.v3rule">
         <Setter Property="Height" Value="1"/>
@@ -602,24 +768,40 @@
     </Style>
 
     <!-- ═══ Hero client toggle: only rendered when a realm offers more than one client
-         (RealmEntry.HasMultipleClients). A small, quiet row - NOT the old four-tile picker the
-         owner retired 2026-07-21. Same ember-underline selection language as Button.v3tab, scaled
-         down: this is a supporting control next to the badge, not a second hero. ═══ -->
+         (RealmEntry.HasMultipleClients).
+
+         🔴 Neu gezeichnet 2026-08-05, Owner am Bildschirm: "client auswahl ist nicht so ui ux gut
+         vor allem weil es nicht so ausschaut als koennte man es anclicken". Er hat recht, und der
+         Grund ist benennbar: die alte Fassung war zwei Textzeilen mit einer Ember-Unterstreichung
+         unter der aktiven - dieselbe Sprache wie die Reiter oben. An einem Reiter funktioniert das,
+         weil eine Reiterleiste als Leiste erkennbar ist. Hier standen zwei nackte Versionsnummern
+         frei im Bild, und eine unterstrichene Zahl liest sich als Beschriftung, nicht als Schalter.
+
+         Standpunkt statt Vorlage: ein EINGELASSENER Wahlschalter aus Stein. Die Spur ist eine
+         gefasste Fläche mit Haarlinie, also sichtbar ein Ding mit Rand; das gewählte Segment sitzt
+         VERTIEFT (dunkler als seine Spur) statt hervorgehoben - eine Wahl, die man gedrueckt hat,
+         nicht eine, die leuchtet. Ember bleibt eine Kante von 2px, kein Fuellton: die eine gefuellte
+         Ember-Flaeche im Bild ist SPIELEN, und das soll so bleiben.
+
+         Beim Hover hebt sich das ungewaehlte Segment leicht an. Das ist die eigentliche Antwort auf
+         "sieht nicht klickbar aus": eine Flaeche, die auf den Zeiger reagiert, ist ein Schalter. ═══ -->
     <Style Selector="ListBox.v3clienttoggle">
-        <Setter Property="Background" Value="Transparent"/>
-        <Setter Property="BorderThickness" Value="0"/>
-        <Setter Property="Padding" Value="0"/>
+        <Setter Property="Background" Value="{StaticResource StoneSurface}"/>
+        <Setter Property="BorderBrush" Value="{StaticResource BorderHairline}"/>
+        <Setter Property="BorderThickness" Value="1"/>
+        <Setter Property="CornerRadius" Value="{StaticResource RadiusMd}"/>
+        <Setter Property="Padding" Value="3"/>
     </Style>
     <Style Selector="ListBox.v3clienttoggle ListBoxItem">
         <Setter Property="Background" Value="Transparent"/>
-        <Setter Property="Foreground" Value="{StaticResource ParchmentFaint}"/>
+        <Setter Property="Foreground" Value="{StaticResource ParchmentSecondary}"/>
         <Setter Property="FontFamily" Value="{StaticResource FontMono}"/>
         <Setter Property="FontSize" Value="11"/>
-        <Setter Property="Padding" Value="0,0,0,3"/>
-        <Setter Property="Margin" Value="0,0,14,0"/>
+        <Setter Property="Padding" Value="11,6"/>
+        <Setter Property="Margin" Value="0"/>
         <Setter Property="BorderThickness" Value="0,0,0,2"/>
         <Setter Property="BorderBrush" Value="Transparent"/>
-        <Setter Property="CornerRadius" Value="0"/>
+        <Setter Property="CornerRadius" Value="{StaticResource RadiusSm}"/>
         <Setter Property="Cursor" Value="Hand"/>
         <Setter Property="Transitions">
             <Transitions>
@@ -627,18 +809,24 @@
             </Transitions>
         </Setter>
     </Style>
+    <!-- Der Zeiger hebt das ungewaehlte Segment an. Das gewaehlte bleibt unberuehrt: es ist schon
+         gedrueckt, und ein gedrueckter Schalter, der beim Hover heller wird, sieht kaputt aus. -->
     <Style Selector="ListBox.v3clienttoggle ListBoxItem:pointerover /template/ ContentPresenter">
-        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="Background" Value="{StaticResource StoneHover}"/>
     </Style>
     <Style Selector="ListBox.v3clienttoggle ListBoxItem:pointerover">
-        <Setter Property="Foreground" Value="{StaticResource ParchmentSecondary}"/>
+        <Setter Property="Foreground" Value="{StaticResource ParchmentPrimary}"/>
     </Style>
+    <!-- Vertieft: dunkler als die Spur, in der es sitzt. -->
     <Style Selector="ListBox.v3clienttoggle ListBoxItem:selected /template/ ContentPresenter">
-        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="Background" Value="{StaticResource StoneBase}"/>
     </Style>
     <Style Selector="ListBox.v3clienttoggle ListBoxItem:selected">
         <Setter Property="Foreground" Value="{StaticResource ParchmentPrimary}"/>
         <Setter Property="BorderBrush" Value="{StaticResource EmberBase}"/>
+    </Style>
+    <Style Selector="ListBox.v3clienttoggle ListBoxItem:selected:pointerover /template/ ContentPresenter">
+        <Setter Property="Background" Value="{StaticResource StoneBase}"/>
     </Style>
 
     <!-- ═══ Add-realm overlay (the "+" rail button): a carved card over a dim scrim, same
@@ -667,6 +855,27 @@
         <Setter Property="FontSize" Value="13"/>
         <Setter Property="Padding" Value="10,9"/>
         <Setter Property="HorizontalAlignment" Value="Stretch"/>
+    </Style>
+
+    <!-- ═══ Language picker in the action bar ═══
+         Sits beside the ghost buttons and has to read as one of them, not as a form field dropped
+         into a status bar: same flat stone, same secondary parchment, same 12px. The overlay field
+         style above is deliberately NOT reused — it is a stretched input for a card form and looks
+         like a hole in this row. Only shown when the installed client actually carries more than one
+         language (see PlayViewModel.HasLanguageChoice), so it never appears as a dead control. -->
+    <Style Selector="ComboBox.v3bar">
+        <Setter Property="Background" Value="{StaticResource StoneHover}"/>
+        <Setter Property="Foreground" Value="{StaticResource ParchmentSecondary}"/>
+        <Setter Property="BorderBrush" Value="{StaticResource BorderHairline}"/>
+        <Setter Property="BorderThickness" Value="1"/>
+        <Setter Property="CornerRadius" Value="{StaticResource RadiusMd}"/>
+        <Setter Property="FontSize" Value="12"/>
+        <Setter Property="Padding" Value="10,6"/>
+        <Setter Property="MinHeight" Value="0"/>
+        <Setter Property="VerticalAlignment" Value="Center"/>
+    </Style>
+    <Style Selector="ComboBox.v3bar:pointerover /template/ Border#Background">
+        <Setter Property="Background" Value="{StaticResource StoneBorder}"/>
     </Style>
 
     <!-- ═══ COMING SOON rows (Burning Crusade / Wrath) ═══

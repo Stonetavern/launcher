@@ -2,7 +2,7 @@ namespace WowLauncher.Models;
 
 using System.Text.Json.Serialization;
 
-// ── Armory contract DTOs (SSOT: /AI/projects/wow/launcher/HANDOFF-armory.md) ─────────────────────
+// ── Armory contract DTOs (SSOT: (internal design notes, not published)) ─────────────────────
 //
 // 🔴 UNVERIFIED WIRE SHAPE. As of 2026-07-21 the endpoint these DTOs describe does NOT exist yet:
 // the web app serves the armory only as a server-rendered page, and its launcher API surface is

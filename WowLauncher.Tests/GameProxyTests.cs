@@ -160,6 +160,65 @@ public sealed class GameProxyTests
         Assert.False(stillRunning, $"PID {pid} was still running after StopAsync.");
     }
 
+    /// <summary>A stop that did not work must not report success by cleaning up. Until 2026-08-03 this
+    /// method cleared its handle and deleted the PID file BEFORE killing and then threw the kill's result
+    /// away, so a failed kill left a live proxy on 1119 that nothing pointed at any more — not this
+    /// instance, and not the next start's stale-PID sweep, which reads exactly that file. The player then
+    /// hit "port already in use" on the next Play, from a proxy the launcher believed it had stopped.
+    ///
+    /// <para>Both seams are neutered here (no signal, no kill) while the child really keeps running, so
+    /// what is measured is the world, not the exit code.</para></summary>
+    [Fact]
+    public async Task AStopThatFails_KeepsThePidFile_SoTheNextStartCanReapIt()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+
+        var pidFile = TempPidPath();
+        var runner = new HermesProxyRunner(
+            Log(), "/usr/bin/sleep", ["30"], pidFile, OpensAfter(1),
+            sigterm: _ => false,            // signal never delivered
+            hardKill: static _ => { },      // and the hard kill does nothing either
+            stopGrace: TimeSpan.FromMilliseconds(50));
+
+        var started = await runner.StartAndWaitForPortAsync(1119, TimeSpan.FromSeconds(5));
+        Assert.True(started.Ready);
+        var pid = started.ProcessId!.Value;
+        try
+        {
+            await runner.StopAsync();
+
+            Assert.True(File.Exists(pidFile), "a failed stop deleted the PID file, orphaning a live proxy");
+            Assert.Equal(pid.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                (await File.ReadAllTextAsync(pidFile)).Trim());
+            using var alive = Process.GetProcessById(pid);
+            Assert.False(alive.HasExited);   // the premise of the test: it really did survive
+        }
+        finally
+        {
+            try { using var p = Process.GetProcessById(pid); p.Kill(entireProcessTree: true); } catch { }
+            File.Delete(pidFile);
+        }
+    }
+
+    /// <summary>The other direction, so the test above cannot pass by never cleaning up at all: a stop
+    /// that worked does remove the PID file.</summary>
+    [Fact]
+    public async Task AStopThatWorks_RemovesThePidFile()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+
+        var pidFile = TempPidPath();
+        var runner = new HermesProxyRunner(Log(), "/usr/bin/sleep", ["30"], pidFile, OpensAfter(1));
+
+        var started = await runner.StartAndWaitForPortAsync(1119, TimeSpan.FromSeconds(5));
+        Assert.True(started.Ready);
+        Assert.True(File.Exists(pidFile));
+
+        await runner.StopAsync();
+
+        Assert.False(File.Exists(pidFile));
+    }
+
     [Fact]
     public void StopAsync_OnANeverStartedRunner_DoesNotThrow()
     {
@@ -178,6 +237,88 @@ public sealed class GameProxyTests
 
         Assert.False(result.Ready);
         Assert.Contains("not found", result.Error, StringComparison.OrdinalIgnoreCase);
+    }
+
+    // ── The re-check right before the client starts ───────────────────────────────────────────────
+    //
+    // Between "the proxy is ready" and "the client is running" sit Wine startup, a winepath call and a
+    // process spawn — seconds in which the listener can change hands. This used to be a hardcoded
+    // `true` on every platform but Windows: a security check that answered "all fine" without ever
+    // looking, which is the failure shape that costs the most, because nothing about it looks broken.
+
+    [Fact]
+    public async Task TheRecheck_PassesWhenOurOwnProxyStillOwnsThePort()
+    {
+        var owner = new Owner();
+        var runner = new HermesProxyRunner(Log(), "/usr/bin/sleep", ["30"], TempPidPath(),
+            OpensAfter(1), portOwnerProbe: owner.Probe);
+        try
+        {
+            var started = await runner.StartAndWaitForPortAsync(1119, TimeSpan.FromSeconds(5));
+            Assert.True(started.Ready);
+            owner.Pid = started.ProcessId;   // the listener belongs to the proxy we started
+
+            Assert.True(await runner.VerifyStillListeningAsync(1119));
+        }
+        finally { await runner.StopAsync(); }
+    }
+
+    [Fact]
+    public async Task TheRecheck_RefusesWhenTheListenerChangedHands()
+    {
+        // The 2026-07-22 shape: the port is open, so every "is it listening" probe stays green — but it
+        // is somebody else's listener now, and starting the client would send the session to it.
+        var runner = new HermesProxyRunner(Log(), "/usr/bin/sleep", ["30"], TempPidPath(),
+            OpensAfter(1), portOwnerProbe: (_, _) => Task.FromResult<int?>(999_999));
+        try
+        {
+            Assert.True((await runner.StartAndWaitForPortAsync(1119, TimeSpan.FromSeconds(5))).Ready);
+
+            Assert.False(await runner.VerifyStillListeningAsync(1119));
+        }
+        finally { await runner.StopAsync(); }
+    }
+
+    [Fact]
+    public async Task TheRecheck_RefusesWhenOurProxyDied_EvenThoughThePortIsStillOpen()
+    {
+        // A proxy that comes up, is proven listening, and then dies while Wine is still starting. The
+        // port probe says open the whole way through, so only the liveness question can catch it — and
+        // it is exactly the case where something else is holding 1119 by the time the client connects.
+        var owner = new Owner();
+        var runner = new HermesProxyRunner(Log(), "/usr/bin/sleep", ["0.3"], TempPidPath(),
+            OpensAfter(1), portOwnerProbe: owner.Probe);
+        var started = await runner.StartAndWaitForPortAsync(1119, TimeSpan.FromSeconds(5));
+        Assert.True(started.Ready);
+        owner.Pid = started.ProcessId;
+
+        await Task.Delay(900);   // the proxy dies in here, the port stays "open" to the probe
+
+        Assert.False(await runner.VerifyStillListeningAsync(1119));
+    }
+
+    [Fact]
+    public async Task TheRecheck_StillPlays_WhenTheOwnerCannotBeDeterminedAtAll()
+    {
+        // Deliberate difference from the Windows runner: an unreadable owner means "I do not know", and
+        // taking the game away from a player whose setup is fine is the wrong answer to not knowing.
+        var runner = new HermesProxyRunner(Log(), "/usr/bin/sleep", ["30"], TempPidPath(),
+            OpensAfter(1), portOwnerProbe: (_, _) => Task.FromResult<int?>(null));
+        try
+        {
+            Assert.True((await runner.StartAndWaitForPortAsync(1119, TimeSpan.FromSeconds(5))).Ready);
+
+            Assert.True(await runner.VerifyStillListeningAsync(1119));
+        }
+        finally { await runner.StopAsync(); }
+    }
+
+    /// <summary>An owner probe whose answer the test sets AFTER the proxy has started — the PID only
+    /// exists then, and the runner reports it. No guessing from process tables.</summary>
+    private sealed class Owner
+    {
+        public int? Pid;
+        public Func<int, CancellationToken, Task<int?>> Probe => (_, _) => Task.FromResult(Pid);
     }
 
     /// <summary>

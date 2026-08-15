@@ -12,7 +12,7 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw
 
-BRAND = Path("/AI/projects/wow/stonetavern/brand/assets/logo/social/"
+BRAND = Path("(internal design notes, not published)"
              "stonetavern-lantern-1024.png")
 OUT = Path(__file__).resolve().parent
 

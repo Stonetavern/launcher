@@ -66,6 +66,9 @@ public sealed class ModernClientLauncherTests : IDisposable
         public bool StartSucceeds = true;
         public string? WindowsPath = @"Z:\bundle\World of Warcraft\_classic_era_";
         public string? WinePathRequestedFor;
+        /// <summary>Stand-in for the real thing that can throw mid-launch (a wine host that dies, a
+        /// winepath call that faults) — the case the rollback exists for.</summary>
+        public bool ThrowOnWinePath;
 
         public Task<GameLaunchResult> RunAsync(string exePath, string cwd, IReadOnlyList<string> args)
         {
@@ -78,6 +81,7 @@ public sealed class ModernClientLauncherTests : IDisposable
         public Task<string?> ToWindowsPathAsync(string unixPath)
         {
             WinePathRequestedFor = unixPath;
+            if (ThrowOnWinePath) throw new InvalidOperationException("wine host died mid-launch");
             return Task.FromResult(WindowsPath);
         }
     }
@@ -135,18 +139,39 @@ public sealed class ModernClientLauncherTests : IDisposable
     private sealed record Harness(
         ModernClientLauncher Launcher, FakeWine Wine, FakeProxy Proxy, DelayedDetector Detector, FixedDisplay Display);
 
+    /// <summary>Write a <c>.build.info</c> beside the bundle's Data folder, the file the client's own
+    /// installer leaves behind and the only honest source for "which languages does this copy have".
+    /// Shape copied from the real one (build 42597).</summary>
+    private void WriteBuildInfo(params string[] textLocales)
+    {
+        var installRoot = Path.Combine(_root, "World of Warcraft");
+        Directory.CreateDirectory(installRoot);
+        var tags = string.Join(":", textLocales.Select(l => $"Windows x86_64 EU? geoip-BG? {l} text?"));
+        File.WriteAllText(Path.Combine(installRoot, ".build.info"),
+            "Branch!STRING:0|Active!DEC:1|Tags!STRING:0|Version!STRING:0|Product!STRING:0\n"
+            + $"eu|1|{tags}|1.14.2.42597|wow_classic_era\n");
+    }
+
     private static Harness NewLauncher(
         FakeWine? wine = null, FakeProxy? proxy = null,
-        DelayedDetector? detector = null, FixedDisplay? display = null)
+        DelayedDetector? detector = null, FixedDisplay? display = null,
+        Func<string, PeArch>? peArch = null, IGameSession? session = null,
+        Func<string?>? locale = null)
     {
         wine ??= new FakeWine();
         proxy ??= new FakeProxy();
         detector ??= new DelayedDetector();
         display ??= new FixedDisplay();
+        // The bundle these tests build is made of placeholder files, not real PE binaries, so the
+        // bitness gate is fed a seam. Tests that are ABOUT the gate pass their own.
+        peArch ??= _ => PeArch.X64;
         // A short real window with a short real delay: the deadline is wall-clock (as it must be in
         // production), so an instant delay would spin the CPU for the whole window instead of waiting.
         var launcher = new ModernClientLauncher(
             Logger(), wine, detector, display, _ => proxy,
+            session: session,
+            locale: locale,
+            peArch: peArch,
             clientAppearTimeout: TimeSpan.FromMilliseconds(300),
             delay: _ => Task.Delay(5));
         return new Harness(launcher, wine, proxy, detector, display);
@@ -202,10 +227,7 @@ public sealed class ModernClientLauncherTests : IDisposable
         var exe = MakeBundle();
         var proxy = new FakeProxy();
         var session = new FakeSession();
-        var launcher = new ModernClientLauncher(
-            Logger(), new FakeWine(), new DelayedDetector(), new FixedDisplay(), _ => proxy,
-            session: session,
-            clientAppearTimeout: TimeSpan.FromMilliseconds(300), delay: _ => Task.Delay(5));
+        var launcher = NewLauncher(proxy: proxy, session: session).Launcher;
 
         var result = await launcher.LaunchAsync(exe, Path.GetDirectoryName(exe)!);
 
@@ -222,16 +244,171 @@ public sealed class ModernClientLauncherTests : IDisposable
         var exe = MakeBundle();
         var proxy = new FakeProxy();
         var session = new FakeSession();
-        var launcher = new ModernClientLauncher(
-            Logger(), new FakeWine { StartSucceeds = false }, new DelayedDetector(), new FixedDisplay(),
-            _ => proxy, session: session,
-            clientAppearTimeout: TimeSpan.FromMilliseconds(300), delay: _ => Task.Delay(5));
+        var launcher = NewLauncher(
+            wine: new FakeWine { StartSucceeds = false }, proxy: proxy, session: session).Launcher;
 
         var result = await launcher.LaunchAsync(exe, Path.GetDirectoryName(exe)!);
 
         Assert.False(result.Started);
         Assert.Equal(1, proxy.StopCount);
         Assert.Null(session.Attached);
+    }
+
+    // ── Language ──────────────────────────────────────────────────────────────────────────────
+
+    /// <summary>A language the installation carries is written into Config.wtf, so the client comes up
+    /// in it. Measured against the real client on 2026-08-03: ten locales ship inside the 1.14.2
+    /// package, and switching textLocale is all it takes — nothing is downloaded.</summary>
+    [Fact]
+    public async Task AnInstalledLanguage_IsWrittenIntoTheClientConfig()
+    {
+        var exe = MakeBundle();
+        WriteBuildInfo("enUS", "deDE", "frFR");
+        var launcher = NewLauncher(locale: () => "deDE").Launcher;
+
+        var result = await launcher.LaunchAsync(exe, Path.GetDirectoryName(exe)!);
+
+        Assert.True(result.Started);
+        var config = await File.ReadAllTextAsync(ModernClientLayout.Resolve(exe)!.ConfigWtf);
+        Assert.Contains("SET textLocale \"deDE\"", config, StringComparison.Ordinal);
+    }
+
+    /// <summary>The one that matters. A language this copy does NOT carry is not a fallback to English
+    /// inside the client — it is ERROR #134 before any window appears, which reads to a player like a
+    /// broken install (reproduced with itIT on 2026-08-03). So the launcher downgrades to English
+    /// rather than handing the client a language that kills it.</summary>
+    [Fact]
+    public async Task ALanguageThisClientDoesNotHave_IsDowngraded_NotWritten()
+    {
+        var exe = MakeBundle();
+        WriteBuildInfo("enUS", "deDE");
+        var launcher = NewLauncher(locale: () => "itIT").Launcher;
+
+        var result = await launcher.LaunchAsync(exe, Path.GetDirectoryName(exe)!);
+
+        Assert.True(result.Started);
+        var config = await File.ReadAllTextAsync(ModernClientLayout.Resolve(exe)!.ConfigWtf);
+        Assert.Contains("SET textLocale \"enUS\"", config, StringComparison.Ordinal);
+        Assert.DoesNotContain("itIT", config, StringComparison.Ordinal);
+    }
+
+    /// <summary>No <c>.build.info</c> at all (a hand-assembled client) means English, for the same
+    /// reason: an unverified language is a crash, and there is nothing here to verify against.</summary>
+    [Fact]
+    public async Task WithNoInstallationInfo_EnglishIsWritten()
+    {
+        var exe = MakeBundle();   // deliberately no WriteBuildInfo
+        var launcher = NewLauncher(locale: () => "deDE").Launcher;
+
+        var result = await launcher.LaunchAsync(exe, Path.GetDirectoryName(exe)!);
+
+        Assert.True(result.Started);
+        var config = await File.ReadAllTextAsync(ModernClientLayout.Resolve(exe)!.ConfigWtf);
+        Assert.Contains("SET textLocale \"enUS\"", config, StringComparison.Ordinal);
+    }
+
+    /// <summary>Spoken audio is left alone. Whether each locale carries speech was never measured, and
+    /// an unmeasured audioLocale is the same #134 crash with a different file id.</summary>
+    [Fact]
+    public async Task TheAudioLanguageIsNeverTouched()
+    {
+        var exe = MakeBundle();
+        WriteBuildInfo("enUS", "deDE");
+        var launcher = NewLauncher(locale: () => "deDE").Launcher;
+
+        await launcher.LaunchAsync(exe, Path.GetDirectoryName(exe)!);
+
+        var config = await File.ReadAllTextAsync(ModernClientLayout.Resolve(exe)!.ConfigWtf);
+        Assert.DoesNotContain("audioLocale", config, StringComparison.Ordinal);
+    }
+
+    /// <summary>No language wired (the caller does not care) leaves the file's own setting untouched
+    /// — the launcher does not invent a language nobody asked for.</summary>
+    [Fact]
+    public async Task WithNoLanguageWired_TheConfigKeepsWhateverItHad()
+    {
+        var exe = MakeBundle();
+        WriteBuildInfo("enUS", "deDE");
+        var launcher = NewLauncher().Launcher;
+
+        await launcher.LaunchAsync(exe, Path.GetDirectoryName(exe)!);
+
+        var config = await File.ReadAllTextAsync(ModernClientLayout.Resolve(exe)!.ConfigWtf);
+        Assert.DoesNotContain("textLocale", config, StringComparison.Ordinal);
+    }
+
+    // ── Rollback and the bitness gate (the Linux hardening Windows already had) ────────────────
+
+    /// <summary>An EXCEPTION between "the proxy is running" and "the session owns it" must still stop the
+    /// proxy. Before the finally existed, every failure path stopped it by hand and a throw skipped them
+    /// all, leaving HermesProxy on 1119 with nothing pointing at it — the next Play then failed on a busy
+    /// port for a reason invisible to the player.</summary>
+    [Fact]
+    public async Task AThrowAfterTheProxyStarted_StillStopsIt()
+    {
+        var exe = MakeBundle();
+        var proxy = new FakeProxy();
+        var session = new FakeSession();
+        var launcher = NewLauncher(
+            wine: new FakeWine { ThrowOnWinePath = true }, proxy: proxy, session: session).Launcher;
+
+        var result = await launcher.LaunchAsync(exe, Path.GetDirectoryName(exe)!);
+
+        Assert.False(result.Started);
+        Assert.Equal(1, proxy.StartCount);
+        Assert.Equal(1, proxy.StopCount);   // rolled back despite nobody catching the throw inline
+        Assert.Null(session.Attached);
+    }
+
+    /// <summary>A handed-off launch is NOT rolled back: the client is running and the session owns the
+    /// reap. Without this the finally would kill the proxy out from under a live game.</summary>
+    [Fact]
+    public async Task AHandedOffLaunch_IsNeverRolledBack()
+    {
+        var exe = MakeBundle();
+        var proxy = new FakeProxy();
+        var session = new FakeSession();
+        var launcher = NewLauncher(proxy: proxy, session: session).Launcher;
+
+        var result = await launcher.LaunchAsync(exe, Path.GetDirectoryName(exe)!);
+
+        Assert.True(result.Started);
+        Assert.Equal(0, proxy.StopCount);
+    }
+
+    /// <summary>A 32-bit client is refused BEFORE anything starts. It is not this package, and letting it
+    /// through produces a Wine failure that reads like a broken install instead of a wrong file.</summary>
+    [Fact]
+    public async Task AWrongArchitectureClient_IsRefusedBeforeTheProxyStarts()
+    {
+        var exe = MakeBundle();
+        var proxy = new FakeProxy();
+        var launcher = NewLauncher(proxy: proxy, peArch: _ => PeArch.X86).Launcher;
+
+        var result = await launcher.LaunchAsync(exe, Path.GetDirectoryName(exe)!);
+
+        Assert.False(result.Started);
+        Assert.Equal(0, proxy.StartCount);
+        Assert.Contains("64-bit", result.Error);
+    }
+
+    /// <summary>A file we cannot read as a Windows program is a refusal too — "unknown" is not "probably
+    /// fine". The Arctium patcher is checked as well as the client; both are handed to Wine.</summary>
+    [Fact]
+    public async Task AnUnreadablePatcher_IsRefused()
+    {
+        var exe = MakeBundle();
+        var proxy = new FakeProxy();
+        var launcher = NewLauncher(
+            proxy: proxy,
+            peArch: p => p.EndsWith(ModernClientLayout.ArctiumExeName, StringComparison.Ordinal)
+                ? PeArch.Unknown
+                : PeArch.X64).Launcher;
+
+        var result = await launcher.LaunchAsync(exe, Path.GetDirectoryName(exe)!);
+
+        Assert.False(result.Started);
+        Assert.Equal(0, proxy.StartCount);
     }
 
     /// <summary>The client exe is never what gets started: the static custom-server build ACCESS_VIOLATEs
@@ -295,6 +472,114 @@ public sealed class ModernClientLauncherTests : IDisposable
     }
 
     // ── Refusals ──────────────────────────────────────────────────────────────────────────────
+
+    /// <summary>Fail-closed endpoint (2026-07-27), the Linux counterpart to the Windows and macOS rule:
+    /// when the portal cannot be confirmed on disk, the launch is refused instead of starting the client
+    /// against whatever the file held before.
+    ///
+    /// <para>Until this test existed, Linux logged "starting anyway with whatever it already holds" and
+    /// went on. A stale portal there means the game comes up looking perfectly healthy and talks to the
+    /// WRONG server — the same silent-failure shape as the 1.12 farclip bug, where the client started
+    /// fine and rendered a broken world. Nothing crashes, nothing logs red.</para>
+    ///
+    /// <para>Reproduced the same way as the Windows test: a directory sits where Config.wtf must be, so
+    /// both the write and the readback fail.</para></summary>
+    [Fact]
+    public async Task WhenThePortalCannotBeConfirmed_TheLaunchIsRefused_BeforeAnythingStarts()
+    {
+        var exe = MakeBundle(withConfig: false);
+        var layout = ModernClientLayout.Resolve(exe)!;
+        Directory.CreateDirectory(layout.ConfigWtf);
+        var h = NewLauncher();
+
+        var result = await h.Launcher.LaunchAsync(exe, Path.GetDirectoryName(exe)!);
+
+        Assert.False(result.Started);
+        Assert.Equal(0, h.Proxy.StartCount);
+        Assert.Empty(h.Wine.Runs);
+    }
+
+    /// <summary>The other half of the same rule, and the reason it checks the FILE and not the write:
+    /// a config that already carries the right portal must still launch even if rewriting it fails.
+    /// Guarding the write instead of the result would have turned a recoverable state into a dead
+    /// button — the exact objection the old fail-open comment raised.</summary>
+    [Fact]
+    public async Task AnAlreadyCorrectPortal_StillLaunches_EvenWhenTheFileIsReadOnly()
+    {
+        var exe = MakeBundle(withConfig: false);
+        var layout = ModernClientLayout.Resolve(exe)!;
+        Directory.CreateDirectory(Path.GetDirectoryName(layout.ConfigWtf)!);
+        File.WriteAllText(layout.ConfigWtf, "SET portal \"127.0.0.1:1119\"\n");
+        var ro = new FileInfo(layout.ConfigWtf) { IsReadOnly = true };
+        try
+        {
+            var h = NewLauncher();
+
+            var result = await h.Launcher.LaunchAsync(exe, Path.GetDirectoryName(exe)!);
+
+            Assert.True(result.Started);
+        }
+        finally
+        {
+            ro.IsReadOnly = false;
+        }
+    }
+
+    /// <summary>A stale duplicate portal line stops the launch (Codex review 2026-07-27).
+    ///
+    /// <para>WtfConfigWriter rewrites the FIRST matching line and leaves later duplicates alone. An
+    /// "at least one line matches" readback would therefore pass on a file that still carries the old
+    /// address further down — and if the client honours the last definition, the game connects to the
+    /// wrong server while the launcher reports success. Which line 1.14.2 actually honours is not
+    /// documented, so the check refuses to depend on it.</para></summary>
+    [Fact]
+    public async Task ASecondStalePortalLine_StopsTheLaunch_RatherThanGamblingOnWhichOneWins()
+    {
+        var exe = MakeBundle(withConfig: false);
+        var layout = ModernClientLayout.Resolve(exe)!;
+        Directory.CreateDirectory(Path.GetDirectoryName(layout.ConfigWtf)!);
+        // First line is what the writer will rewrite; the second survives and points elsewhere.
+        File.WriteAllLines(layout.ConfigWtf,
+        [
+            "SET portal \"127.0.0.1:1119\"",
+            "SET gxApi \"D3D12\"",
+            "SET portal \"logon.example.invalid\"",
+        ]);
+        var h = NewLauncher();
+
+        var result = await h.Launcher.LaunchAsync(exe, Path.GetDirectoryName(exe)!);
+
+        Assert.False(result.Started);
+        Assert.Equal(0, h.Proxy.StartCount);
+        Assert.Empty(h.Wine.Runs);
+    }
+
+    /// <summary>A stale portal line written with a TAB instead of a space is caught too (Codex review
+    /// round 2, 2026-07-27).
+    ///
+    /// <para>The matcher used to require the literal string "SET " with an ASCII space, so
+    /// <c>SET\tportal "…"</c> was invisible to both the writer and the readback. If the client's own
+    /// parser is more permissive — and its grammar is not documented anywhere we can rely on — such a
+    /// line could sit beside the canonical one and win. Recognising more lines is the safe direction:
+    /// a line we see is one we either rewrite or refuse to start against.</para></summary>
+    [Fact]
+    public async Task AStalePortalLineWrittenWithATab_IsCaughtToo_NotJustSpaceSeparatedOnes()
+    {
+        var exe = MakeBundle(withConfig: false);
+        var layout = ModernClientLayout.Resolve(exe)!;
+        Directory.CreateDirectory(Path.GetDirectoryName(layout.ConfigWtf)!);
+        File.WriteAllLines(layout.ConfigWtf,
+        [
+            "SET portal \"127.0.0.1:1119\"",
+            "SET\tportal \"logon.example.invalid\"",
+        ]);
+        var h = NewLauncher();
+
+        var result = await h.Launcher.LaunchAsync(exe, Path.GetDirectoryName(exe)!);
+
+        Assert.False(result.Started);
+        Assert.Equal(0, h.Proxy.StartCount);
+    }
 
     /// <summary>Order matters and is asserted, not assumed: a client started before the proxy listens
     /// reaches the login screen and stops there with no error of any kind.</summary>

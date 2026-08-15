@@ -503,17 +503,11 @@ public sealed class ClientService : IClientService
         }
     }
 
-    /// <summary>Set or replace a single <c>SET key "value"</c> line in a .wtf file, preserving the rest.</summary>
-    private static void SetWtfVar(string path, string key, string value)
-    {
-        var lines = File.Exists(path) ? File.ReadAllLines(path).ToList() : new List<string>();
-        var newLine = $"SET {key} \"{value}\"";
-        var idx = lines.FindIndex(l =>
-            l.TrimStart().StartsWith($"SET {key} ", StringComparison.OrdinalIgnoreCase));
-        if (idx >= 0) lines[idx] = newLine;
-        else lines.Add(newLine);
-        File.WriteAllText(path, string.Join("\n", lines) + "\n");
-    }
+    /// <summary>Set or replace a single <c>SET key "value"</c> line in a .wtf file, preserving the rest.
+    /// The implementation lives in <see cref="WtfFile"/> because the 1.12.1 language switch writes into
+    /// the same file and must use the same rule.</summary>
+    private static void SetWtfVar(string path, string key, string value) =>
+        WtfFile.SetVar(path, key, value);
 
     public async Task<GameLaunchResult> LaunchAsync(string wowExePath)
     {

@@ -1,0 +1,102 @@
+{
+  "product": "stonetavern-classic",
+  "current_version": "1.12.1-enhanced",
+  "build_date": "2026-07-23",
+  "serial": 7,
+  "expires": "2026-10-27T00:00:00Z",
+  "channel": "stable",
+  "active_phase": "vanilla",
+  "base": {
+    "version": "1.12.1-enhanced",
+    "url": "https://downloads.stonetavern.app/clients/stonetavern-1.12.1-tuned/Stonetavern-Enhanced-1.12.1.zip",
+    "size": 5323449653,
+    "sha256": "158e2786a54cae8cd57907a44efe15b42203ebf6e632fd322d15ecdb5b9b74a7",
+    "files_url": "https://downloads.stonetavern.app/clients/stonetavern-1.12.1-tuned/vanilla-1.12.1-files.json"
+  },
+  "patches": [],
+  "phases": [
+    {
+      "phase": "vanilla",
+      "realmlist": "play.stonetavern.app",
+      "client": {
+        "version": "1.12.1-enhanced",
+        "url": "https://downloads.stonetavern.app/clients/stonetavern-1.12.1-tuned/Stonetavern-Enhanced-1.12.1.zip",
+        "size": 5323449653,
+        "sha256": "158e2786a54cae8cd57907a44efe15b42203ebf6e632fd322d15ecdb5b9b74a7",
+        "files_url": "https://downloads.stonetavern.app/clients/stonetavern-1.12.1-tuned/vanilla-1.12.1-files.json"
+      },
+      "clients": [
+        {
+          "build": 42597,
+          "os": "windows",
+          "version": "1.3.1",
+          "url": "https://downloads.stonetavern.app/clients/stonetavern-modern-1.14.2/Stonetavern-Modern-1.14.2-v1.3.1.zip",
+          "size": 8240519812,
+          "sha256": "624808bb8503b08a991384c61997175c546832365ca19131018ffcb72385d8d2",
+          "files_url": "https://downloads.stonetavern.app/clients/stonetavern-modern-1.14.2/modern-1.14.2-windows-files.json"
+        },
+        {
+          "build": 42597,
+          "os": "linux",
+          "version": "1.3.1",
+          "url": "https://downloads.stonetavern.app/clients/stonetavern-modern-1.14.2/Stonetavern-Modern-1.14.2-Linux-v1.3.1.zip",
+          "size": 8272101832,
+          "sha256": "4ee513a58296767c89b407fafa5cad786508b69cf4cd6019eaf4ce4cb12bc2f5"
+        },
+        {
+          "build": 42597,
+          "os": "macos",
+          "version": "1.3.1",
+          "url": "https://downloads.stonetavern.app/clients/stonetavern-modern-1.14.2/Stonetavern-Modern-1.14.2-macOS.zip",
+          "size": 8538657600,
+          "sha256": "d96560341e621ee97cc7542ea45ae9023ef733b9603cd57a9f8cfd4647e7c871"
+        }
+      ]
+    }
+  ],
+  "launcher_linux": {
+    "version": "1.6.4",
+    "url": "https://downloads.stonetavern.app/launcher/stonetavern-launcher-1.6.4-x86_64.AppImage",
+    "sha256": "6deb508ed0e7c1f185cd77370e8f8aa0e588629c4a60f394b82dd54742fd4693",
+    "size": 44718584
+  },
+  "launcher": {
+    "version": "1.6.4",
+    "url": "https://downloads.stonetavern.app/launcher/stonetavern-launcher-1.6.4-win-x64.exe",
+    "sha256": "e6f607bd46657606a2c4b14fc48b5235c534725b5f89d4631d8549e0711fe00f",
+    "size": 61479234
+  },
+  "language_packs": [
+    {
+      "locale": "deDE",
+      "build": 5875,
+      "url": "https://downloads.stonetavern.app/clients/stonetavern-1.12.1-tuned/lang/stonetavern-lang-1.12.1-deDE.zip",
+      "size": 94859086,
+      "sha256": "c4864fbd067f1cdb3c4652896fb95269f8b17e1b8bc16e235344596046b8235f"
+    },
+    {
+      "locale": "esES",
+      "build": 5875,
+      "url": "https://downloads.stonetavern.app/clients/stonetavern-1.12.1-tuned/lang/stonetavern-lang-1.12.1-esES.zip",
+      "size": 93256496,
+      "sha256": "0d5e3a243a295c09865f8d0cc474fe1752068e57c0aaa0fce65fc19be347c67b"
+    },
+    {
+      "locale": "frFR",
+      "build": 5875,
+      "url": "https://downloads.stonetavern.app/clients/stonetavern-1.12.1-tuned/lang/stonetavern-lang-1.12.1-frFR.zip",
+      "size": 87684157,
+      "sha256": "071bea486c49d17beab04cd58c3d5df8caade4707677a4175c580b7c2fbc6209"
+    }
+  ],
+  "language_clients": [
+    {
+      "build": 5875,
+      "locale": "ruRU",
+      "version": "1.12.1-ruRU",
+      "url": "https://downloads.stonetavern.app/clients/stonetavern-1.12.1-ruRU/Stonetavern-Russian-1.12.1.zip",
+      "size": 6165490736,
+      "sha256": "df628e9250aa938f594476b02b623d305f06d4edd9ce1e081241abc6793eb2d4"
+    }
+  ]
+}

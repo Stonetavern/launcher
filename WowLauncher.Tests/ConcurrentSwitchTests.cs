@@ -50,6 +50,11 @@ public sealed class ConcurrentSwitchTests
         private readonly ServerManifest _m = m;
 
         public Task<ServerManifest?> FetchAsync(CancellationToken ct = default) => Task.FromResult<ServerManifest?>(_m);
+        /// <summary>Kein Launcher-Manifest in diesem Double: der Selbst-Update-Pfad ist hier
+        /// nicht der Prüfgegenstand, und "keins" heißt "kein Update", nie "irgendeins".</summary>
+        public Task<ServerManifest?> FetchLauncherManifestAsync(CancellationToken ct = default) =>
+            Task.FromResult<ServerManifest?>(null);
+
         public Task<ClientFileManifest?> FetchFileManifestAsync(string url, CancellationToken ct = default) =>
             Task.FromResult<ClientFileManifest?>(null);
     }
@@ -61,6 +66,11 @@ public sealed class ConcurrentSwitchTests
         public ServerManifest? Current = m;
 
         public Task<ServerManifest?> FetchAsync(CancellationToken ct = default) => Task.FromResult(Current);
+        /// <summary>Kein Launcher-Manifest in diesem Double: der Selbst-Update-Pfad ist hier
+        /// nicht der Prüfgegenstand, und "keins" heißt "kein Update", nie "irgendeins".</summary>
+        public Task<ServerManifest?> FetchLauncherManifestAsync(CancellationToken ct = default) =>
+            Task.FromResult<ServerManifest?>(null);
+
         public Task<ClientFileManifest?> FetchFileManifestAsync(string url, CancellationToken ct = default) =>
             Task.FromResult<ClientFileManifest?>(null);
     }
@@ -146,6 +156,9 @@ public sealed class ConcurrentSwitchTests
 
     private sealed class NoUpdate : IUpdateService
     {
+        // Never raised here: these doubles model "there is no update", so nothing announces one.
+        public event System.EventHandler? LauncherUpdateStarting { add { } remove { } }
+
         public Task<bool> CheckAndApplyAsync(ServerManifest? manifest, CancellationToken ct = default) => Task.FromResult(false);
         public LauncherUpdateNotice? CheckForNotice(ServerManifest? manifest) => null;
     }

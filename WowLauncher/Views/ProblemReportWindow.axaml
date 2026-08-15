@@ -1,0 +1,128 @@
+<!--
+  Report a problem. Frameless card centred on the shell, in the shared Stone / Parchment / Ember
+  tokens so it reads as part of the launcher rather than a system dialog. Same shape as
+  ClosePromptWindow, one size larger because this one has a text box and a preview.
+
+  The preview pane is the point of the layout, not a detail: this sends the player's own log, which
+  carries their folder names. They see exactly what goes out, before it goes out.
+
+  All text is English (VOICE.md): no em dashes, no apostrophes.
+-->
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:loc="using:WowLauncher.Localization"
+        xmlns:vm="using:WowLauncher.ViewModels"
+        x:Class="WowLauncher.Views.ProblemReportWindow"
+        x:DataType="vm:ProblemReportViewModel"
+        Title="{loc:Tr Report_Title}"
+        Icon="avares://WowLauncher/Assets/stonetavern-logo.png"
+        SizeToContent="Height"
+        Width="520"
+        CanResize="False"
+        ShowInTaskbar="False"
+        WindowStartupLocation="CenterOwner"
+        WindowDecorations="None"
+        Background="Transparent">
+
+    <Window.Styles>
+        <Style Selector="Button.promptPrimary">
+            <Setter Property="Background" Value="{StaticResource EmberBase}"/>
+            <Setter Property="Foreground" Value="{StaticResource StoneBase}"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Height" Value="38"/>
+            <Setter Property="Padding" Value="18,0"/>
+            <Setter Property="HorizontalContentAlignment" Value="Center"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+        </Style>
+        <Style Selector="Button.promptPrimary:pointerover /template/ ContentPresenter">
+            <Setter Property="Background" Value="{StaticResource EmberBright}"/>
+        </Style>
+        <Style Selector="Button.promptGhost">
+            <Setter Property="Background" Value="{StaticResource StoneHover}"/>
+            <Setter Property="Foreground" Value="{StaticResource ParchmentSecondary}"/>
+            <Setter Property="Height" Value="38"/>
+            <Setter Property="Padding" Value="18,0"/>
+            <Setter Property="HorizontalContentAlignment" Value="Center"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+        </Style>
+        <Style Selector="Button.promptGhost:pointerover /template/ ContentPresenter">
+            <Setter Property="Background" Value="{StaticResource StoneBorder}"/>
+        </Style>
+        <Style Selector="TextBox.reportField">
+            <Setter Property="Background" Value="{StaticResource StoneHover}"/>
+            <Setter Property="Foreground" Value="{StaticResource ParchmentPrimary}"/>
+            <Setter Property="BorderBrush" Value="{StaticResource StoneBorder}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="10,8"/>
+        </Style>
+        <Style Selector="TextBlock.reportLabel">
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Foreground" Value="{StaticResource ParchmentSecondary}"/>
+        </Style>
+    </Window.Styles>
+
+    <Border Background="{StaticResource StoneBase}"
+            BorderBrush="{StaticResource StoneBorder}" BorderThickness="1">
+        <StackPanel Margin="28,26" Spacing="14">
+
+            <StackPanel Orientation="Horizontal" Spacing="12" VerticalAlignment="Center">
+                <Image Source="avares://WowLauncher/Assets/lantern.png" Height="28"
+                       VerticalAlignment="Center"
+                       RenderOptions.BitmapInterpolationMode="HighQuality"/>
+                <TextBlock Text="{loc:Tr Report_Title}" FontSize="17"
+                           FontFamily="{StaticResource FontDisplay}"
+                           Foreground="{StaticResource ParchmentPrimary}"
+                           VerticalAlignment="Center"/>
+            </StackPanel>
+
+            <!-- The written report ─────────────────────────────────────────────────────────────-->
+            <StackPanel Spacing="6" IsVisible="{Binding !IsSent}">
+                <TextBlock Classes="reportLabel" Text="{loc:Tr Report_Body}" TextWrapping="Wrap"/>
+
+                <TextBox Classes="reportField" Text="{Binding Message}"
+                         PlaceholderText="{loc:Tr Report_Message_Hint}"
+                         AcceptsReturn="True" TextWrapping="Wrap" Height="96"
+                         AutomationProperties.Name="{loc:Tr Report_Message_A11y}"/>
+
+                <TextBlock Classes="reportLabel" Text="{loc:Tr Report_Contact_Label}" Margin="0,4,0,0"/>
+                <TextBox Classes="reportField" Text="{Binding Contact}"
+                         PlaceholderText="{loc:Tr Report_Contact_Hint}"
+                         AutomationProperties.Name="{loc:Tr Report_Contact_Label}"/>
+
+                <!-- What goes with it. Collapsed by default: offered, never hidden. -->
+                <Expander Header="{loc:Tr Report_Preview_Header}" Margin="0,6,0,0"
+                          Background="Transparent"
+                          Foreground="{StaticResource ParchmentSecondary}">
+                    <ScrollViewer MaxHeight="180" HorizontalScrollBarVisibility="Auto">
+                        <SelectableTextBlock Text="{Binding Preview}"
+                                             FontFamily="{StaticResource OFontMono}"
+                                             FontSize="11"
+                                             Foreground="{StaticResource ParchmentSecondary}"/>
+                    </ScrollViewer>
+                </Expander>
+
+                <TextBlock Classes="reportLabel" Text="{Binding Error}" TextWrapping="Wrap"
+                           Foreground="{StaticResource EmberBright}"
+                           IsVisible="{Binding HasError}"/>
+            </StackPanel>
+
+            <!-- After sending: the reference, which is the one thing worth keeping ──────────────-->
+            <StackPanel Spacing="8" IsVisible="{Binding IsSent}">
+                <TextBlock Text="{loc:Tr Report_Sent_Body}" TextWrapping="Wrap" FontSize="13"
+                           Foreground="{StaticResource ParchmentPrimary}"/>
+                <SelectableTextBlock Text="{Binding SentReference}"
+                                     FontFamily="{StaticResource OFontMono}" FontSize="15"
+                                     Foreground="{StaticResource EmberBright}"/>
+            </StackPanel>
+
+            <Grid ColumnDefinitions="Auto,*,Auto" Margin="0,4,0,0">
+                <Button Grid.Column="0" Classes="promptGhost" Content="{loc:Tr Report_Close}"
+                        Click="OnCloseClick" AutomationProperties.Name="{loc:Tr Report_Close}"/>
+                <Button Grid.Column="2" Classes="promptPrimary" IsDefault="True"
+                        Content="{loc:Tr Report_Send}" Command="{Binding SendCommand}"
+                        IsVisible="{Binding !IsSent}"
+                        AutomationProperties.Name="{loc:Tr Report_Send}"/>
+            </Grid>
+        </StackPanel>
+    </Border>
+</Window>
