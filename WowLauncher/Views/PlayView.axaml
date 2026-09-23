@@ -95,7 +95,7 @@
 
                 <!-- Sprache + Realmlist + Wartungs-Aktionen — auf montierter Stein-Plakette (Slab) -->
                 <Border Grid.Row="2" Classes="slab reveal3" VerticalAlignment="Bottom">
-                <Grid ColumnDefinitions="Auto,*,Auto" RowDefinitions="Auto,Auto,Auto">
+                <Grid ColumnDefinitions="Auto,*,Auto" RowDefinitions="Auto,Auto,Auto,Auto">
                     <TextBlock Grid.Row="0" Grid.Column="0" Text="{loc:Tr Play_Language}" VerticalAlignment="Center"
                                Margin="0,0,14,0" FontSize="13" Foreground="{StaticResource ParchmentSecondary}"/>
                     <ComboBox Grid.Row="0" Grid.Column="1" HorizontalAlignment="Left" MinWidth="180"
@@ -129,6 +129,17 @@
                                TextWrapping="Wrap"
                                Foreground="{StaticResource ParchmentSecondary}"
                                AutomationProperties.Name="{loc:Tr Play_LauncherUpdate_A11y}"/>
+
+                    <!-- Release 1.8.11: Stolperfallen-Preflight — non-blocking note about the chosen
+                         install folder (synced to the cloud, Controlled folder access, running elevated, ...).
+                         Empty/invisible when the preflight found nothing worth a Warn. -->
+                    <TextBlock Grid.Row="3" Grid.Column="0" Grid.ColumnSpan="3"
+                               Text="{Binding InstallEnvironmentHint}"
+                               IsVisible="{Binding HasInstallEnvironmentHint}"
+                               Margin="0,12,0,0" VerticalAlignment="Center" FontSize="12"
+                               TextWrapping="Wrap"
+                               Foreground="{StaticResource ParchmentSecondary}"
+                               AutomationProperties.Name="{loc:Tr Play_InstallEnvironmentHint_A11y}"/>
                 </Grid>
                 </Border>
             </Grid>

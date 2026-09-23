@@ -256,6 +256,16 @@ public sealed class ManifestContractTests
 
         public Task<bool> ExtractClientAsync(string zipPath, string destDir,
             IProgress<string>? progress = null, CancellationToken ct = default) => Task.FromResult(true);
+    
+        /// <summary>Pflichtteil der Schnittstelle: ohne Grund gilt der Fehlschlag als nicht behebbar,
+        /// also als kaputtes Paket. Das ist die sichere Richtung fuer eine Attrappe.</summary>
+        public async System.Threading.Tasks.Task<WowLauncher.Models.ExtractOutcome> ExtractClientWithReasonAsync(
+            string zipPath, string destDir, bool freshInstall,
+            System.IProgress<string>? progress = null,
+            System.Threading.CancellationToken ct = default) =>
+            await ExtractClientAsync(zipPath, destDir, progress, ct).ConfigureAwait(false)
+                ? WowLauncher.Models.ExtractOutcome.Success
+                : WowLauncher.Models.ExtractOutcome.Fail(WowLauncher.Models.ExtractFailure.Unknown);
     }
 
     private sealed class FakeSwap(bool isSupported) : IUpdateSwapStrategy

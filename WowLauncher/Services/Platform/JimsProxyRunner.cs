@@ -44,11 +44,16 @@ public sealed class JimsProxyRunner : IGameProxy
     private readonly Func<Process, bool> _gracefulStop; // WM_CLOSE; true when the close was delivered
     private readonly Action<Process> _hardKill;         // Kill fallback (own seam so a test can observe it)
     private readonly TimeSpan _stopGrace;               // how long to wait for a clean exit before escalating
+    /// <summary>Where the proxy's own stdout/stderr is recorded. Null keeps the old behaviour (drain and
+    /// discard) — the launch never depends on it. See <see cref="ProxyOutputLog"/> for why it exists.</summary>
+    private readonly string? _outputLogPath;
 
     private Process? _process;
+    private ProxyOutputLog? _outputLog;
 
-    public JimsProxyRunner(Serilog.ILogger logger, string exePath, IReadOnlyList<string> args, string pidFilePath)
-        : this(logger, exePath, args, pidFilePath, TcpPortProbeAsync)
+    public JimsProxyRunner(Serilog.ILogger logger, string exePath, IReadOnlyList<string> args, string pidFilePath,
+        string? outputLogPath = null)
+        : this(logger, exePath, args, pidFilePath, TcpPortProbeAsync, outputLogPath: outputLogPath)
     {
     }
 
@@ -61,8 +66,9 @@ public sealed class JimsProxyRunner : IGameProxy
     internal JimsProxyRunner(Serilog.ILogger logger, string exePath, IReadOnlyList<string> args,
         string pidFilePath, Func<int, CancellationToken, Task<bool>> portProbe,
         Func<Process, bool>? gracefulStop = null, Action<Process>? hardKill = null, TimeSpan? stopGrace = null,
-        Func<int, CancellationToken, Task<int?>>? portOwnerProbe = null)
+        Func<int, CancellationToken, Task<int?>>? portOwnerProbe = null, string? outputLogPath = null)
     {
+        _outputLogPath = outputLogPath;
         _logger = logger;
         _exePath = exePath;
         _args = args;
@@ -74,21 +80,22 @@ public sealed class JimsProxyRunner : IGameProxy
         _stopGrace = stopGrace ?? TimeSpan.FromSeconds(5);
     }
 
-    private static async Task<bool> TcpPortProbeAsync(int port, CancellationToken ct)
+    // See GameProxy.TcpPortProbeAsync: racing the connect against a delay orphaned the connect task,
+    // which then faulted unobserved with SocketException 995 once the TcpClient was disposed. Awaiting
+    // it with a linked token leaves nothing behind.
+    internal static async Task<bool> TcpPortProbeAsync(int port, CancellationToken ct)
     {
         try
         {
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeout.CancelAfter(TimeSpan.FromMilliseconds(300));
             using var client = new TcpClient();
-            var connectTask = client.ConnectAsync("127.0.0.1", port);
-            using var timeoutCts = new CancellationTokenSource(TimeSpan.FromMilliseconds(300));
-            using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
-            var delay = Task.Delay(Timeout.Infinite, linked.Token);
-            var completed = await Task.WhenAny(connectTask, delay).ConfigureAwait(false);
-            return completed == connectTask && client.Connected;
+            await client.ConnectAsync("127.0.0.1", port, timeout.Token).ConfigureAwait(false);
+            return true;
         }
         catch
         {
-            return false; // connection refused/reset - not open yet
+            return false; // connection refused/reset/timed out - not open yet
         }
     }
 
@@ -135,8 +142,7 @@ public sealed class JimsProxyRunner : IGameProxy
 
         _process = process;
         WritePidFile(process.Id);
-        _ = process.StandardOutput.ReadToEndAsync(); // drain, never block a chatty child
-        _ = process.StandardError.ReadToEndAsync();
+        _outputLog = ProxyOutputLog.AttachOrDrain(process, _outputLogPath, _logger);
 
         var opened = await WaitForPortAsync(port, timeout, process, ct).ConfigureAwait(false);
         if (!opened)
@@ -196,6 +202,22 @@ public sealed class JimsProxyRunner : IGameProxy
     /// the check-to-use gap between "proxy ready" and "start the client" (Codex Finding 1). Returns false
     /// when the proxy died, the port dropped, or a different process now owns it — the caller then rolls
     /// the launch back rather than starting a client against a listener it no longer controls.</summary>
+    /// <inheritdoc />
+    /// <remarks>Reads only the process handle this runner already holds. <c>null</c> before a start and
+    /// after a clean stop — in both cases there is no proxy of ours to be dead.</remarks>
+    public bool? IsProcessAlive
+    {
+        get
+        {
+            var process = _process;
+            if (process is null) return null;
+            // A disposed or otherwise unreadable handle is NOT proof of death: reporting false here
+            // would tell a playing user their connection dropped when nothing happened.
+            try { return !process.HasExited; }
+            catch (System.InvalidOperationException) { return null; }
+        }
+    }
+
     public async Task<bool> VerifyStillListeningAsync(int port, CancellationToken ct = default)
     {
         var process = _process;
@@ -363,6 +385,10 @@ public sealed class JimsProxyRunner : IGameProxy
             // pointing at it.
             _process = null;
             DeletePidFile();
+            // Close the output log only once the proxy is confirmed gone — its last lines are written as
+            // it dies, and those are the ones worth reading.
+            try { _outputLog?.Dispose(); } catch { /* best effort */ }
+            _outputLog = null;
             try { process.Dispose(); } catch { /* already gone */ }
         }
         else
@@ -491,15 +517,20 @@ public sealed class JimsProxyRunner : IGameProxy
 
     private void KillStalePidFileEntry()
     {
-        int pid;
-        try
-        {
-            if (!File.Exists(_pidFilePath)) return;
-            var text = File.ReadAllText(_pidFilePath).Trim();
-            if (!int.TryParse(text, out pid)) { DeletePidFile(); return; }
-        }
-        catch { return; }
+        var entry = ProxyPidFile.Read(_pidFilePath);
+        if (entry is null) { ProxyPidFile.Delete(_pidFilePath); return; }
 
+        // Another launcher window is holding this proxy for a session that is running right now.
+        // Killing it here disconnects a player mid-game — see ProxyPidFile for how that happened.
+        if (ProxyPidFile.OwnerStillRunning(entry.Value))
+        {
+            _logger.Information(
+                "Leaving the proxy (PID={Pid}) alone: another launcher instance (PID={Owner}) is using it",
+                entry.Value.ProxyPid, entry.Value.OwnerPid);
+            return;
+        }
+
+        var pid = entry.Value.ProxyPid;
         try
         {
             using var stale = Process.GetProcessById(pid);
@@ -536,19 +567,9 @@ public sealed class JimsProxyRunner : IGameProxy
         catch { return false; }
     }
 
-    private void WritePidFile(int pid)
-    {
-        try
-        {
-            var dir = Path.GetDirectoryName(_pidFilePath);
-            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
-            File.WriteAllText(_pidFilePath, pid.ToString());
-        }
-        catch (Exception ex)
-        {
-            _logger.Debug(ex, "Could not write proxy pidfile {Path}", _pidFilePath);
-        }
-    }
+    // Records the proxy PID AND ours, so a second launcher window can tell "orphaned by a crash"
+    // from "in use by a session that is running" (ProxyPidFile).
+    private void WritePidFile(int pid) => ProxyPidFile.Write(_pidFilePath, pid, _logger);
 
     private void DeletePidFile()
     {

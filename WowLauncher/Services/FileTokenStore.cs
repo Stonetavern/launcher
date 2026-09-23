@@ -1,8 +1,10 @@
 namespace WowLauncher.Services;
 
+using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using WowLauncher.Models;
 using WowLauncher.Services.Platform;
 
@@ -16,11 +18,15 @@ using WowLauncher.Services.Platform;
 /// user-bound key store Windows itself uses for credentials, so the token is unreadable by another
 /// user or off this machine, no key management on our side.</para>
 ///
-/// <para><b>Non-Windows (Linux/macOS)</b> has no equivalent zero-config OS key store, so for v1 the
-/// blob is written in <b>plaintext</b> with owner-only file permissions (mode <c>600</c>). This is a
-/// <b>deliberate, documented v1 compromise</b>: a bearer token in a 0600 file under the user home is
-/// no more exposed than the session cookies every browser keeps the same way. A real secret-service
-/// backend (libsecret / Keychain) is a later hardening step (see TODO in the handoff return).</para>
+/// <para><b>Non-Windows (Linux/macOS)</b> seals the blob with AES-256-GCM under a key derived
+/// (SHA-256) from the machine id, the user name and a fixed application salt. The machine id is
+/// <c>/etc/machine-id</c> on Linux and the <c>IOPlatformUUID</c> on macOS; the machine name is the
+/// documented fallback. A copied file therefore fails the GCM tag check on a different machine or for
+/// a different user and is treated as signed out — the token never sits on disk in cleartext.</para>
+///
+/// <para>The file keeps owner-only permissions (mode <c>600</c>) as a second layer, because the
+/// machine-id derivation is weaker than a real OS key store. A libsecret/Keychain backend remains a
+/// later hardening step; §12.2 chose "token only, machine-bound", not a full keychain port.</para>
 ///
 /// The token is a secret: this class NEVER writes it to a log (only the file path, on failure).
 /// </summary>
@@ -33,6 +39,11 @@ public sealed class FileTokenStore : ITokenStore
     // (it ships in the binary); it only scopes the ciphertext to this app so an unrelated DPAPI blob
     // for the same user cannot be swapped in.
     private static readonly byte[] Entropy = Encoding.UTF8.GetBytes("stonetavern-launcher/session/v1");
+
+    // Container of the non-Windows blob: magic || nonce(12) || tag(16) || ciphertext.
+    private static readonly byte[] Magic = "STLS1"u8.ToArray();
+    private const int NonceSize = 12;
+    private const int TagSize = 16;
 
     public FileTokenStore(IAppPaths paths, Serilog.ILogger log)
     {
@@ -50,15 +61,16 @@ public sealed class FileTokenStore : ITokenStore
 
             byte[] plain = OperatingSystem.IsWindows()
                 ? ProtectedData.Unprotect(stored, Entropy, DataProtectionScope.CurrentUser)
-                : stored;
+                : Unseal(stored);
 
             var json = Encoding.UTF8.GetString(plain);
             return JsonSerializer.Deserialize(json, FriendsApiJsonContext.Default.LauncherSession);
         }
         catch (Exception ex)
         {
-            // Corrupt / undecryptable / foreign-machine blob -> treat as signed-out, never throw and
-            // never echo the file contents. Drop the unusable file so we start clean next time.
+            // Corrupt / undecryptable / foreign-machine blob (or a pre-1.9 plaintext file) -> treat as
+            // signed-out, never throw and never echo the file contents. Drop the unusable file so we
+            // start clean next time.
             _log.Warning(ex, "Could not read stored launcher session at {Path} — treating as signed out", _path);
             try { File.Delete(_path); } catch { /* best-effort */ }
             return null;
@@ -77,7 +89,7 @@ public sealed class FileTokenStore : ITokenStore
 
             byte[] toWrite = OperatingSystem.IsWindows()
                 ? ProtectedData.Protect(plain, Entropy, DataProtectionScope.CurrentUser)
-                : plain;
+                : Seal(plain);
 
             File.WriteAllBytes(_path, toWrite);
             RestrictPermissions(_path);
@@ -96,12 +108,89 @@ public sealed class FileTokenStore : ITokenStore
         catch (Exception ex) { _log.Warning(ex, "Could not clear launcher session at {Path}", _path); }
     }
 
-    /// <summary>Owner-only (read+write) on POSIX so the plaintext v1 blob is not world/group readable.
+    /// <summary>Owner-only (read+write) on POSIX so the sealed blob is not world/group readable.
     /// No-op on Windows, where DPAPI already binds the ciphertext to the user.</summary>
     private static void RestrictPermissions(string path)
     {
         if (OperatingSystem.IsWindows()) return;
         try { File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite); }
         catch { /* best-effort — a filesystem without POSIX modes is not a hard failure */ }
+    }
+
+    // ── Non-Windows sealing (AES-256-GCM, key bound to machine + user) ──────────────────────────
+
+    private static byte[] Seal(byte[] plain)
+    {
+        var nonce = RandomNumberGenerator.GetBytes(NonceSize);
+        var tag = new byte[TagSize];
+        var cipher = new byte[plain.Length];
+        using (var aes = new AesGcm(MachineKey(), TagSize))
+            aes.Encrypt(nonce, plain, cipher, tag);
+
+        var blob = new byte[Magic.Length + NonceSize + TagSize + cipher.Length];
+        Magic.CopyTo(blob, 0);
+        nonce.CopyTo(blob, Magic.Length);
+        tag.CopyTo(blob, Magic.Length + NonceSize);
+        cipher.CopyTo(blob, Magic.Length + NonceSize + TagSize);
+        return blob;
+    }
+
+    /// <summary>Throws <see cref="CryptographicException"/> when the blob is not ours, was sealed on
+    /// another machine/user, or was tampered with — the caller's catch treats all three as signed out.</summary>
+    private static byte[] Unseal(byte[] stored)
+    {
+        if (stored.Length < Magic.Length + NonceSize + TagSize
+            || !stored.AsSpan(0, Magic.Length).SequenceEqual(Magic))
+            throw new CryptographicException("Unrecognized launcher session format");
+
+        var nonce = stored.AsSpan(Magic.Length, NonceSize);
+        var tag = stored.AsSpan(Magic.Length + NonceSize, TagSize);
+        var cipher = stored.AsSpan(Magic.Length + NonceSize + TagSize);
+        var plain = new byte[cipher.Length];
+        using var aes = new AesGcm(MachineKey(), TagSize);
+        aes.Decrypt(nonce, cipher, tag, plain);
+        return plain;
+    }
+
+    /// <summary>Key = SHA-256 over application salt + machine id + user. Not a secret (all inputs are
+    /// local and readable), but it binds the ciphertext to THIS machine and THIS user: a copied file
+    /// fails the GCM tag check and is treated as signed out.</summary>
+    private static byte[] MachineKey() =>
+        SHA256.HashData(Encoding.UTF8.GetBytes(
+            $"stonetavern-launcher/session/v1\n{MachineId()}\n{Environment.UserName}"));
+
+    private static string MachineId()
+    {
+        if (OperatingSystem.IsLinux())
+        {
+            foreach (var path in new[] { "/etc/machine-id", "/var/lib/dbus/machine-id" })
+            {
+                try
+                {
+                    var id = File.ReadAllText(path).Trim();
+                    if (id.Length > 0) return id;
+                }
+                catch { /* try the next source */ }
+            }
+        }
+        else if (OperatingSystem.IsMacOS())
+        {
+            // The macOS analogue of /etc/machine-id is the hardware UUID. ioreg prints it; any
+            // failure falls through to the machine name, which is still a stable local binding.
+            try
+            {
+                using var p = Process.Start(new ProcessStartInfo("/usr/sbin/ioreg", "-rd1 -c IOPlatformExpertDevice")
+                {
+                    RedirectStandardOutput = true,
+                    UseShellExecute = false,
+                })!;
+                var output = p.StandardOutput.ReadToEnd();
+                p.WaitForExit(2000);
+                var m = Regex.Match(output, "\"IOPlatformUUID\"\\s*=\\s*\"([^\"]+)\"");
+                if (m.Success) return m.Groups[1].Value;
+            }
+            catch { /* fall through */ }
+        }
+        return Environment.MachineName;
     }
 }

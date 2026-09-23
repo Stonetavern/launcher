@@ -32,8 +32,12 @@ public sealed class ManifestSignatureTests
 {
     private static Serilog.ILogger Log => new Serilog.LoggerConfiguration().CreateLogger();
 
-    private const string ManifestUrl = "https://downloads.example.invalid/manifest.json";
-    private const string SignatureUrl = ManifestUrl + ".sig";
+    // Deliberately taken from LauncherChannel rather than written out: the stub server below answers
+    // ONLY this address. If the gate ever goes back to asking the player's config where to fetch its
+    // manifest — the bug that silently stopped launcher updates for anyone on a custom realm — the
+    // request lands on a 404 here and these tests go red instead of quietly testing nothing.
+    private static readonly string ManifestUrl = LauncherChannel.ManifestUrl;
+    private static readonly string SignatureUrl = ManifestUrl + ".sig";
 
     // ─── Key helpers (throwaway keys, generated per test) ─────────────────
 
@@ -355,7 +359,7 @@ public sealed class ManifestSignatureTests
 
     private static ManifestSignatureGate NewGate(string publicKey, byte[] manifestBody, string? signatureBody) =>
         new(new HttpClient(new StubServer(manifestBody, signatureBody)),
-            new FixedConfig(ManifestUrl), new ManifestSignature(publicKey),
+            new ManifestSignature(publicKey),
             // A real policy over a fresh in-memory floor: the gate must pass BOTH checks, and the
             // fixture is authored to satisfy the release policy (serial 42, stable, expires 2099).
             new ManifestReleasePolicy(new MemoryTrustStore(), Log), Log);
@@ -393,15 +397,6 @@ public sealed class ManifestSignatureTests
         }
     }
 
-    private sealed class FixedConfig(string manifestUrl) : IConfigService
-    {
-        public bool LastSaveSucceeded => true;
-
-        public LauncherConfig Load() => new() { ManifestUrl = manifestUrl };
-
-        public void Save(LauncherConfig config) { }
-    }
-
     /// <summary>The server published nothing usable — every check refuses.</summary>
     private sealed class RefusingGate : IManifestSignatureGate
     {
@@ -436,6 +431,16 @@ public sealed class ManifestSignatureTests
 
         public Task<bool> ExtractClientAsync(string zipPath, string destDir,
             IProgress<string>? progress = null, CancellationToken ct = default) => Task.FromResult(true);
+    
+        /// <summary>Pflichtteil der Schnittstelle: ohne Grund gilt der Fehlschlag als nicht behebbar,
+        /// also als kaputtes Paket. Das ist die sichere Richtung fuer eine Attrappe.</summary>
+        public async System.Threading.Tasks.Task<WowLauncher.Models.ExtractOutcome> ExtractClientWithReasonAsync(
+            string zipPath, string destDir, bool freshInstall,
+            System.IProgress<string>? progress = null,
+            System.Threading.CancellationToken ct = default) =>
+            await ExtractClientAsync(zipPath, destDir, progress, ct).ConfigureAwait(false)
+                ? WowLauncher.Models.ExtractOutcome.Success
+                : WowLauncher.Models.ExtractOutcome.Fail(WowLauncher.Models.ExtractFailure.Unknown);
     }
 
     private sealed class RecordingSwap(bool isSupported) : IUpdateSwapStrategy

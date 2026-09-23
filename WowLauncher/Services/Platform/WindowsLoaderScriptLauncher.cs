@@ -54,6 +54,7 @@ public sealed class WindowsLoaderScriptLauncher : IGameLauncher
     private readonly Serilog.ILogger _log;
     private readonly Func<string, IReadOnlyDictionary<string, string>, GameLaunchResult>? _runScript;
     private readonly Func<string?>? _realmAddress;
+    private readonly IClientDisplayService? _display;
 
     /// <param name="inner">The launcher used when there is no loader batch (the existing native start).</param>
     /// <param name="realmAddress">The realm this launch goes to. Null preserves standalone-client
@@ -64,8 +65,10 @@ public sealed class WindowsLoaderScriptLauncher : IGameLauncher
         IGameLauncher inner,
         Serilog.ILogger log,
         Func<string?>? realmAddress = null,
-        Func<string, IReadOnlyDictionary<string, string>, GameLaunchResult>? runScript = null)
+        Func<string, IReadOnlyDictionary<string, string>, GameLaunchResult>? runScript = null,
+        IClientDisplayService? display = null)
     {
+        _display = display;
         _inner = inner;
         _log = log;
         _realmAddress = realmAddress;
@@ -101,10 +104,27 @@ public sealed class WindowsLoaderScriptLauncher : IGameLauncher
             }
         }
 
+        // The monitor question is settled by the launcher, not by the batch: the packaged
+        // detection wrote the monitor's mode on every start, which threw away the player's own
+        // resolution and refresh rate and, on a scaled Windows desktop, wrote a size no monitor
+        // has (ClientDisplayPolicy explains the black screen). Once the launcher has judged the
+        // stored values, the batch is told to keep its hands off (WOW_KEEP_RESOLUTION=1, a
+        // switch both packaged scripts already honour). When the monitor cannot be read here, the
+        // batch keeps doing what it did — nothing is worse than before.
+        if (_display is not null
+            && !WowLauncher.Models.ClientVersion.ExeNameNeedsModernRuntime(Path.GetFileName(exePath)))
+        {
+            var clientDirForDisplay = LoaderScriptPaths.ClientDirectory(script, exePath, workingDirectory);
+            var applied = _display.Apply(clientDirForDisplay);
+            if (applied.Handled)
+                environment = WithKeepResolution(environment);
+        }
+
         if (script is null)
             return await _inner.LaunchAsync(exePath, workingDirectory).ConfigureAwait(false);
 
         _log.Information("Launching the tuned client through its loader batch {Script}", script);
+        LogHardwareFacts(LoaderScriptPaths.ClientDirectory(script, exePath, workingDirectory));
         try
         {
             return _runScript is not null ? _runScript(script, environment) : StartCmd(script, environment);
@@ -161,6 +181,39 @@ public sealed class WindowsLoaderScriptLauncher : IGameLauncher
 
     private static readonly IReadOnlyDictionary<string, string> EmptyEnvironment =
         new Dictionary<string, string>(StringComparer.Ordinal);
+
+    /// <summary>What the Enhanced modules need, written into the log where a crash ticket will
+    /// carry it. Warnings, not refusals: the launcher has not measured that either failure is
+    /// certain, so it says what it sees and lets the client start.</summary>
+    private void LogHardwareFacts(string clientDir)
+    {
+        try
+        {
+            var turbo = HardwareFacts.ListsModule(clientDir, "wow_turbo.dll");
+            var nampower = HardwareFacts.ListsModule(clientDir, "nampower.dll");
+            var avx2 = HardwareFacts.Avx2Supported;
+            var vc = HardwareFacts.VcRuntimeX86Present(clientDir);
+            _log.Information("Hardware: AVX2 {Avx2}, VC++ x86 runtime {Vc}; modules: wow_turbo {Turbo}, nampower {Nampower}",
+                avx2, vc, turbo, nampower);
+            if (turbo && !avx2)
+                _log.Warning("This CPU has no AVX2 but dlls.txt loads wow_turbo.dll — expect a crash once the world loads");
+            if (nampower && !vc)
+                _log.Warning("The 32-bit Visual C++ 2015-2022 runtime is not installed but dlls.txt loads nampower.dll — the module cannot load (https://aka.ms/vs/17/release/vc_redist.x86.exe)");
+        }
+        catch (Exception ex)
+        {
+            _log.Debug(ex, "Hardware facts could not be read");
+        }
+    }
+
+    internal static IReadOnlyDictionary<string, string> WithKeepResolution(IReadOnlyDictionary<string, string> environment)
+    {
+        var merged = new Dictionary<string, string>(environment, StringComparer.Ordinal)
+        {
+            [IClientDisplayService.KeepResolutionEnvVar] = "1",
+        };
+        return merged;
+    }
 
     private GameLaunchResult StartCmd(string script, IReadOnlyDictionary<string, string> environment)
     {

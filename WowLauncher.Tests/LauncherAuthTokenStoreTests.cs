@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Net;
 using System.Net.Http;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using WowLauncher.Models;
@@ -13,11 +14,12 @@ using Xunit;
 namespace WowLauncher.Tests;
 
 /// <summary>
-/// Token-store roundtrip + the security invariant that matters most here: the bearer token and the
-/// password NEVER reach a log. The store roundtrip runs the non-Windows (plaintext + mode 0600) path
-/// on this Fedora box; the DPAPI path is Windows-only and is exercised on Windows, not here (called
-/// out honestly in the return). The log-leak proof runs a full fake sign-in and asserts neither the
-/// token nor the password appears in any emitted log line.
+/// Token-store roundtrip + the security invariants that matter most here: the bearer token is never
+/// on disk in cleartext (and never reaches a log), and the password never reaches either. The store
+/// roundtrip runs the non-Windows (AES-256-GCM sealed + mode 0600) path on this Fedora box; the DPAPI
+/// path is Windows-only and is exercised on Windows, not here (called out honestly in the return).
+/// The log-leak proof runs a full fake sign-in and asserts neither the token nor the password appears
+/// in any emitted log line.
 /// </summary>
 public sealed class LauncherAuthTokenStoreTests
 {
@@ -143,6 +145,53 @@ public sealed class LauncherAuthTokenStoreTests
         var mode = File.GetUnixFileMode(Path.Combine(paths.ConfigDir, "launcher_session.dat"));
         // No group/other bits at all — owner read+write only.
         Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, mode);
+    }
+
+    /// <summary>§12.2 A with hardening: on Linux/macOS the file is sealed, so neither the token nor
+    /// the account name can be read out of it. The positive control (same search finds the token in a
+    /// plaintext blob) runs first, so passing negatives mean "sealed", not "needle never matched".</summary>
+    [Fact]
+    public void StoredFile_DoesNotCarryTheTokenOrUsernameInClearText()
+    {
+        if (OperatingSystem.IsWindows()) return; // DPAPI path; the Windows blob is covered on Windows
+
+        using var paths = new TempPaths();
+        paths.EnsureDirectories();
+        var (log, _) = CapturingLogger();
+        var store = new FileTokenStore(paths, log);
+        store.Save(new LauncherSession(Token, 1, "tester", 0));
+
+        var path = Path.Combine(paths.ConfigDir, "launcher_session.dat");
+        var raw = Encoding.Latin1.GetString(File.ReadAllBytes(path));
+
+        // POSITIVE CONTROL: the identical search DOES find the token in a plaintext blob.
+        var plaintextBlob = Encoding.UTF8.GetBytes($$"""{"token":"{{Token}}","username":"tester"}""");
+        Assert.Contains(Token, Encoding.Latin1.GetString(plaintextBlob));
+
+        Assert.DoesNotContain(Token, raw);
+        Assert.DoesNotContain("tester", raw);
+    }
+
+    /// <summary>The GCM tag is the second half of §12.2: a blob edited or copied (different machine
+    /// key) fails authentication and is treated as signed out, never as a valid session.</summary>
+    [Fact]
+    public void TamperedBlob_IsTreatedAsSignedOut()
+    {
+        if (OperatingSystem.IsWindows()) return; // DPAPI path is covered on Windows
+
+        using var paths = new TempPaths();
+        paths.EnsureDirectories();
+        var (log, _) = CapturingLogger();
+        var store = new FileTokenStore(paths, log);
+        store.Save(new LauncherSession(Token, 1, "tester", 0));
+
+        var path = Path.Combine(paths.ConfigDir, "launcher_session.dat");
+        var bytes = File.ReadAllBytes(path);
+        bytes[^1] ^= 0xFF;
+        File.WriteAllBytes(path, bytes);
+
+        Assert.Null(store.Load());           // tag mismatch -> signed out
+        Assert.False(File.Exists(path));     // and the unusable file is dropped
     }
 
     // ── The leak proof: a full sign-in must not log the token or the password ─────────────────────

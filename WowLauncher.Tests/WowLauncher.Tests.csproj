@@ -32,4 +32,15 @@
     <None Include="..\deploy\manifest-1.6.4-candidate.json"
           Link="fixtures\manifest-release-candidate.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
+
+  <!-- S2 patcher engine (Patching/ButlerSidecarRealBinaryTests.cs): the real, hash-pinned linux-x64
+       butler binary, copied next to the test assembly regardless of $(RuntimeIdentifier) — the main
+       csproj only ships it for a genuine RID publish, but these tests run as a plain portable build.
+       Linux-only (the dev/CI machine for this suite); ButlerFixture.BinaryPath returns null and every
+       test that needs it skips with a reason when the file is not there, on any OS. -->
+  <ItemGroup Condition="$([MSBuild]::IsOSPlatform('Linux'))">
+    <None Include="..\WowLauncher\tools\butler\linux-x64\**"
+          Link="butler-fixture\tools\butler\linux-x64\%(RecursiveDir)%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>

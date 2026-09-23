@@ -274,16 +274,14 @@ public sealed class ManifestSignatureGate : IManifestSignatureGate
     private const int MaxManifestBytes = 1024 * 1024;
 
     private readonly HttpClient _httpClient;
-    private readonly IConfigService _config;
     private readonly ManifestSignature _signature;
     private readonly ManifestReleasePolicy _policy;
     private readonly Serilog.ILogger _log;
 
-    public ManifestSignatureGate(HttpClient httpClient, IConfigService config,
+    public ManifestSignatureGate(HttpClient httpClient,
         ManifestSignature signature, ManifestReleasePolicy policy, Serilog.ILogger log)
     {
         _httpClient = httpClient;
-        _config = config;
         _signature = signature;
         _policy = policy;
         _log = log;
@@ -291,18 +289,14 @@ public sealed class ManifestSignatureGate : IManifestSignatureGate
 
     public async Task<ServerManifest?> AcquireVerifiedAsync(CancellationToken ct = default)
     {
-        var url = _config.Load().ManifestUrl;
-
-        // Simple-mode profile (custom server, no manifest): nothing to verify and nothing to update.
-        // This is not a refusal, so it must not be logged as one.
-        if (string.IsNullOrWhiteSpace(url))
-            return null;
-
-        if (!ManifestService.IsValidManifestUrl(url))
-        {
-            _log.Error("Manifest-Signaturprüfung übersprungen: {Url} ist keine absolute http(s)-Adresse", url);
-            return null;
-        }
+        // 🔴 The launcher's OWN origin, not the selected realm's. This used to read
+        // LauncherConfig.ManifestUrl, and that is the manifest of whichever realm the player has
+        // selected — so a player who added their own realm pointed this gate at a document that was
+        // never signed with our release key (or at nothing at all, which simple mode allows). The
+        // gate then returned null, null means "do nothing", and that player silently stopped
+        // receiving launcher updates for good. ManifestService.FetchLauncherManifestAsync had the
+        // rule right already; this seam did not. See LauncherChannel for why it is not a bare const.
+        var url = LauncherChannel.ManifestUrl;
 
         var signatureUrl = url.Trim() + SignatureSuffix;
 
@@ -345,6 +339,15 @@ public sealed class ManifestSignatureGate : IManifestSignatureGate
             if (!release.Ok)
             {
                 _log.Error("Signiertes Manifest abgelehnt: {Reason} — kein Launcher-Update", release.Reason);
+                // Diagnostic only, on top of the refusal above — never a second gate. When the refusal
+                // was "expired" and the expiry lies more than a week in the past, that is what a badly
+                // wrong local clock looks like from here, so tell the player rather than leave "no
+                // update, ever" unexplained (release 1.8.11, Stolperfallen-Preflight).
+                var skew = WowLauncher.Services.Platform.InstallEnvironmentPreflight.CheckClockSkew(
+                    release, manifest.Expires, DateTimeOffset.UtcNow);
+                if (skew is not null)
+                    _log.Warning("Preflight {Code}: {Message}",
+                        skew.Code, WowLauncher.Services.Platform.InstallEnvironmentPreflight.DisplayText(skew));
                 return null;
             }
 

@@ -136,14 +136,15 @@ public sealed class NetworkTimeoutTests
     // ── Friends / presence ──────────────────────────────────────────────────────────────────────
 
     [Fact]
-    public async Task AFriendsPollAgainstAHangingServer_DegradesInsteadOfThrowing()
+    public async Task AFriendsPollAgainstAHangingServer_ReportsUnavailableInsteadOfThrowing()
     {
         var svc = new HttpFriendsPresenceService(new HttpClient(new TimeoutHandler()),
             new StubConfig(), new SignedInAuth(), Silent());
 
         var friends = await svc.GetFriendsAsync();
 
-        Assert.Empty(friends);
+        // Unavailable, not empty — see IFriendsPresenceService.GetFriendsAsync.
+        Assert.Null(friends);
     }
 
     [Fact]

@@ -1,0 +1,220 @@
+<!--
+  QuantumLoader — the one area loader for every place whose duration is UNKNOWN (Spec §1, §8.2):
+  init steps behind the status line, the sign-in, patch/extract, client start. Download and verify
+  have known progress and keep their determinate bars; the button keeps its small arc micro spinner.
+
+  Owner template: design/REF-2026-09-20-quantum-cloud-loader.md (React/Tailwind), translated:
+  four dots on a 176x96 stage, each with its own period (Motion.QuantumA..D = 3.8/5.6/3.1/6.4 s),
+  all on Ease.Quantum = cubic-bezier(0.37,0,0.63,1), the slow one alternating. Positions, scales
+  and opacities are the template's keyframes, verbatim. Glow = BoxShadow, no gradient.
+
+  Colours are NOT the template's red/blue/yellow/green: that would break the semantic split of
+  stitch-DESIGN-v2 (one hue for action, another for live data). The four dots wear the launcher's
+  own hues: EmberBase and EmberBright (action, two shades) and the live-data cyan of the v2 sheet
+  in two shades (OCyan, OCyanDim). The shadow colours are those hex values with alpha, because a
+  BoxShadow needs a Color, not a Brush.
+
+  Motion gate: the dots only move while the control wears "running", which the code-behind sets
+  from the owning window (active AND not minimised) and clears for ReducedMotion. Without it the
+  four dots rest at their mid-cycle positions: a still, readable figure, never a blank.
+-->
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="WowLauncher.Controls.QuantumLoader"
+             IsHitTestVisible="False">
+
+    <UserControl.Styles>
+        <!-- ═══ Rest positions (the 50 % keyframe of each dot): what a still frame shows ═══ -->
+        <Style Selector="Border.qdot">
+            <Setter Property="CornerRadius" Value="999"/>
+            <Setter Property="HorizontalAlignment" Value="Center"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="RenderTransformOrigin" Value="50%,50%"/>
+        </Style>
+        <Style Selector="Border.qa"><Setter Property="Opacity" Value="1.0"/></Style>
+        <Style Selector="Border.qb"><Setter Property="Opacity" Value="0.42"/></Style>
+        <Style Selector="Border.qc"><Setter Property="Opacity" Value="1.0"/></Style>
+        <Style Selector="Border.qd"><Setter Property="Opacity" Value="0.9"/></Style>
+
+        <!-- ═══ The four orbits, only while running ═══ -->
+        <!-- A: fast inner particle (template "red"), 3.8 s -->
+        <Style Selector="UserControl.running Border.qa">
+            <Style.Animations>
+                <Animation Duration="{StaticResource Motion.QuantumA}" IterationCount="INFINITE" Easing="{StaticResource Ease.Quantum}">
+                    <KeyFrame Cue="0%">
+                        <Setter Property="TranslateTransform.X" Value="-46"/><Setter Property="TranslateTransform.Y" Value="7"/>
+                        <Setter Property="ScaleTransform.ScaleX" Value="0.72"/><Setter Property="ScaleTransform.ScaleY" Value="0.72"/>
+                        <Setter Property="Opacity" Value="0.45"/>
+                    </KeyFrame>
+                    <KeyFrame Cue="25%">
+                        <Setter Property="TranslateTransform.X" Value="-23"/><Setter Property="TranslateTransform.Y" Value="-7"/>
+                        <Setter Property="ScaleTransform.ScaleX" Value="0.95"/><Setter Property="ScaleTransform.ScaleY" Value="0.95"/>
+                        <Setter Property="Opacity" Value="0.78"/>
+                    </KeyFrame>
+                    <KeyFrame Cue="50%">
+                        <Setter Property="TranslateTransform.X" Value="46"/><Setter Property="TranslateTransform.Y" Value="0"/>
+                        <Setter Property="ScaleTransform.ScaleX" Value="1.18"/><Setter Property="ScaleTransform.ScaleY" Value="1.18"/>
+                        <Setter Property="Opacity" Value="1.0"/>
+                    </KeyFrame>
+                    <KeyFrame Cue="75%">
+                        <Setter Property="TranslateTransform.X" Value="23"/><Setter Property="TranslateTransform.Y" Value="7"/>
+                        <Setter Property="ScaleTransform.ScaleX" Value="0.95"/><Setter Property="ScaleTransform.ScaleY" Value="0.95"/>
+                        <Setter Property="Opacity" Value="0.78"/>
+                    </KeyFrame>
+                    <KeyFrame Cue="100%">
+                        <Setter Property="TranslateTransform.X" Value="-46"/><Setter Property="TranslateTransform.Y" Value="7"/>
+                        <Setter Property="ScaleTransform.ScaleX" Value="0.72"/><Setter Property="ScaleTransform.ScaleY" Value="0.72"/>
+                        <Setter Property="Opacity" Value="0.45"/>
+                    </KeyFrame>
+                </Animation>
+            </Style.Animations>
+        </Style>
+
+        <!-- B: large outer particle (template "blue"), 5.6 s -->
+        <Style Selector="UserControl.running Border.qb">
+            <Style.Animations>
+                <Animation Duration="{StaticResource Motion.QuantumB}" IterationCount="INFINITE" Easing="{StaticResource Ease.Quantum}">
+                    <KeyFrame Cue="0%">
+                        <Setter Property="TranslateTransform.X" Value="38"/><Setter Property="TranslateTransform.Y" Value="-4"/>
+                        <Setter Property="ScaleTransform.ScaleX" Value="1.0"/><Setter Property="ScaleTransform.ScaleY" Value="1.0"/>
+                        <Setter Property="Opacity" Value="0.95"/>
+                    </KeyFrame>
+                    <KeyFrame Cue="25%">
+                        <Setter Property="TranslateTransform.X" Value="19"/><Setter Property="TranslateTransform.Y" Value="7"/>
+                        <Setter Property="ScaleTransform.ScaleX" Value="0.88"/><Setter Property="ScaleTransform.ScaleY" Value="0.88"/>
+                        <Setter Property="Opacity" Value="0.72"/>
+                    </KeyFrame>
+                    <KeyFrame Cue="50%">
+                        <Setter Property="TranslateTransform.X" Value="-38"/><Setter Property="TranslateTransform.Y" Value="3"/>
+                        <Setter Property="ScaleTransform.ScaleX" Value="0.68"/><Setter Property="ScaleTransform.ScaleY" Value="0.68"/>
+                        <Setter Property="Opacity" Value="0.42"/>
+                    </KeyFrame>
+                    <KeyFrame Cue="75%">
+                        <Setter Property="TranslateTransform.X" Value="-19"/><Setter Property="TranslateTransform.Y" Value="-7"/>
+                        <Setter Property="ScaleTransform.ScaleX" Value="0.88"/><Setter Property="ScaleTransform.ScaleY" Value="0.88"/>
+                        <Setter Property="Opacity" Value="0.72"/>
+                    </KeyFrame>
+                    <KeyFrame Cue="100%">
+                        <Setter Property="TranslateTransform.X" Value="38"/><Setter Property="TranslateTransform.Y" Value="-4"/>
+                        <Setter Property="ScaleTransform.ScaleX" Value="1.0"/><Setter Property="ScaleTransform.ScaleY" Value="1.0"/>
+                        <Setter Property="Opacity" Value="0.95"/>
+                    </KeyFrame>
+                </Animation>
+            </Style.Animations>
+        </Style>
+
+        <!-- C: centre particle (template "yellow"), 3.1 s -->
+        <Style Selector="UserControl.running Border.qc">
+            <Style.Animations>
+                <Animation Duration="{StaticResource Motion.QuantumC}" IterationCount="INFINITE" Easing="{StaticResource Ease.Quantum}">
+                    <KeyFrame Cue="0%">
+                        <Setter Property="TranslateTransform.X" Value="-27"/><Setter Property="TranslateTransform.Y" Value="2"/>
+                        <Setter Property="ScaleTransform.ScaleX" Value="0.82"/><Setter Property="ScaleTransform.ScaleY" Value="0.82"/>
+                        <Setter Property="Opacity" Value="0.65"/>
+                    </KeyFrame>
+                    <KeyFrame Cue="20%">
+                        <Setter Property="TranslateTransform.X" Value="-17"/><Setter Property="TranslateTransform.Y" Value="-5"/>
+                        <Setter Property="ScaleTransform.ScaleX" Value="0.94"/><Setter Property="ScaleTransform.ScaleY" Value="0.94"/>
+                        <Setter Property="Opacity" Value="0.82"/>
+                    </KeyFrame>
+                    <KeyFrame Cue="50%">
+                        <Setter Property="TranslateTransform.X" Value="27"/><Setter Property="TranslateTransform.Y" Value="0"/>
+                        <Setter Property="ScaleTransform.ScaleX" Value="1.08"/><Setter Property="ScaleTransform.ScaleY" Value="1.08"/>
+                        <Setter Property="Opacity" Value="1.0"/>
+                    </KeyFrame>
+                    <KeyFrame Cue="80%">
+                        <Setter Property="TranslateTransform.X" Value="17"/><Setter Property="TranslateTransform.Y" Value="5"/>
+                        <Setter Property="ScaleTransform.ScaleX" Value="0.94"/><Setter Property="ScaleTransform.ScaleY" Value="0.94"/>
+                        <Setter Property="Opacity" Value="0.82"/>
+                    </KeyFrame>
+                    <KeyFrame Cue="100%">
+                        <Setter Property="TranslateTransform.X" Value="-27"/><Setter Property="TranslateTransform.Y" Value="2"/>
+                        <Setter Property="ScaleTransform.ScaleX" Value="0.82"/><Setter Property="ScaleTransform.ScaleY" Value="0.82"/>
+                        <Setter Property="Opacity" Value="0.65"/>
+                    </KeyFrame>
+                </Animation>
+            </Style.Animations>
+        </Style>
+
+        <!-- D: slow orbital particle (template "green"), 6.4 s, alternating -->
+        <Style Selector="UserControl.running Border.qd">
+            <Style.Animations>
+                <Animation Duration="{StaticResource Motion.QuantumD}" IterationCount="INFINITE" PlaybackDirection="Alternate" Easing="{StaticResource Ease.Quantum}">
+                    <KeyFrame Cue="0%">
+                        <Setter Property="TranslateTransform.X" Value="64"/><Setter Property="TranslateTransform.Y" Value="6"/>
+                        <Setter Property="ScaleTransform.ScaleX" Value="0.52"/><Setter Property="ScaleTransform.ScaleY" Value="0.52"/>
+                        <Setter Property="Opacity" Value="0.25"/>
+                    </KeyFrame>
+                    <KeyFrame Cue="20%">
+                        <Setter Property="TranslateTransform.X" Value="43"/><Setter Property="TranslateTransform.Y" Value="-5"/>
+                        <Setter Property="ScaleTransform.ScaleX" Value="0.68"/><Setter Property="ScaleTransform.ScaleY" Value="0.68"/>
+                        <Setter Property="Opacity" Value="0.45"/>
+                    </KeyFrame>
+                    <KeyFrame Cue="50%">
+                        <Setter Property="TranslateTransform.X" Value="0"/><Setter Property="TranslateTransform.Y" Value="3"/>
+                        <Setter Property="ScaleTransform.ScaleX" Value="1.0"/><Setter Property="ScaleTransform.ScaleY" Value="1.0"/>
+                        <Setter Property="Opacity" Value="0.9"/>
+                    </KeyFrame>
+                    <KeyFrame Cue="80%">
+                        <Setter Property="TranslateTransform.X" Value="-43"/><Setter Property="TranslateTransform.Y" Value="-5"/>
+                        <Setter Property="ScaleTransform.ScaleX" Value="0.68"/><Setter Property="ScaleTransform.ScaleY" Value="0.68"/>
+                        <Setter Property="Opacity" Value="0.45"/>
+                    </KeyFrame>
+                    <KeyFrame Cue="100%">
+                        <Setter Property="TranslateTransform.X" Value="-64"/><Setter Property="TranslateTransform.Y" Value="6"/>
+                        <Setter Property="ScaleTransform.ScaleX" Value="0.52"/><Setter Property="ScaleTransform.ScaleY" Value="0.52"/>
+                        <Setter Property="Opacity" Value="0.25"/>
+                    </KeyFrame>
+                </Animation>
+            </Style.Animations>
+        </Style>
+    </UserControl.Styles>
+
+    <!-- The stage is 176x96 at Scale 1; Scale shrinks the whole figure for the status line. -->
+    <Panel x:Name="Stage" Width="176" Height="96" RenderTransformOrigin="50%,50%" ClipToBounds="False">
+        <Panel.RenderTransform>
+            <ScaleTransform ScaleX="1" ScaleY="1"/>
+        </Panel.RenderTransform>
+
+        <!-- D first: the slow orbital sits at the back (template z-0). -->
+        <Border Classes="qdot qd" Width="14" Height="14" Background="#2F5A62"
+                BoxShadow="0 0 12 0 #BF2F5A62, 0 0 24 0 #4D2F5A62" ZIndex="0">
+            <Border.RenderTransform>
+                <TransformGroup>
+                    <ScaleTransform ScaleX="1.0" ScaleY="1.0"/>
+                    <TranslateTransform X="0" Y="3"/>
+                </TransformGroup>
+            </Border.RenderTransform>
+        </Border>
+        <!-- B: the large outer particle (template z-10). Live-data cyan. -->
+        <Border Classes="qdot qb" Width="24" Height="24" Background="#78D2E1"
+                BoxShadow="0 0 16 0 #B378D2E1, 0 0 30 0 #4078D2E1" ZIndex="1">
+            <Border.RenderTransform>
+                <TransformGroup>
+                    <ScaleTransform ScaleX="0.68" ScaleY="0.68"/>
+                    <TranslateTransform X="-38" Y="3"/>
+                </TransformGroup>
+            </Border.RenderTransform>
+        </Border>
+        <!-- A: the fast inner particle (template z-30). Action ember. -->
+        <Border Classes="qdot qa" Width="16" Height="16" Background="#C9772E"
+                BoxShadow="0 0 12 0 #BFC9772E, 0 0 24 0 #4DC9772E" ZIndex="3">
+            <Border.RenderTransform>
+                <TransformGroup>
+                    <ScaleTransform ScaleX="1.18" ScaleY="1.18"/>
+                    <TranslateTransform X="46" Y="0"/>
+                </TransformGroup>
+            </Border.RenderTransform>
+        </Border>
+        <!-- C: the centre particle (template z-40). Bright ember. -->
+        <Border Classes="qdot qc" Width="20" Height="20" Background="#E2912F"
+                BoxShadow="0 0 14 0 #BFE2912F, 0 0 26 0 #4DE2912F" ZIndex="4">
+            <Border.RenderTransform>
+                <TransformGroup>
+                    <ScaleTransform ScaleX="1.08" ScaleY="1.08"/>
+                    <TranslateTransform X="27" Y="0"/>
+                </TransformGroup>
+            </Border.RenderTransform>
+        </Border>
+    </Panel>
+</UserControl>

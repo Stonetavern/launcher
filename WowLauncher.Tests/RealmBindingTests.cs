@@ -39,7 +39,7 @@ public sealed class RealmBindingTests : IDisposable
     [InlineData("play.stonetavern.app", "play.stonetavern.app", null)]
     [InlineData("  play.example.invalid  ", "play.example.invalid", null)]
     [InlineData("play.example.invalid:3725", "play.example.invalid", 3725)]
-    [InlineData("10.0.0.5:3724", "10.0.0.5", 3724)]
+    [InlineData("192.0.2.5:3724", "192.0.2.5", 3724)]
     [InlineData("[fd00::1]:3724", "[fd00::1]", 3724)]
     public void Parse_SplitsHostAndPort(string raw, string host, int? port)
     {
@@ -328,7 +328,7 @@ public sealed class RealmBindingTests : IDisposable
 
         var proxyDir = Path.Combine(root, "Hermes", "linux");
         Directory.CreateDirectory(proxyDir);
-        File.WriteAllText(Path.Combine(proxyDir, ModernClientLayout.ProxyExeName), "ELF");
+        File.WriteAllText(Path.Combine(proxyDir, "JimsProxy"), "ELF");
 
         return (exe, proxyDir);
     }

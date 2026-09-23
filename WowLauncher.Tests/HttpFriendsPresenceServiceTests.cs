@@ -121,19 +121,21 @@ public sealed class HttpFriendsPresenceServiceTests
     // ── Offline-first ─────────────────────────────────────────────────────────────────────────────
 
     [Fact]
-    public async Task GetFriends_OnNetworkFailure_ReturnsDegradedList_NeverThrows()
+    public async Task GetFriends_OnNetworkFailure_SaysSoInsteadOfClaimingAnEmptyRoster()
     {
         var handler = new CaptureHandler(HttpStatusCode.OK, "", @throw: true);
         var list = await Service(handler).GetFriendsAsync();
-        Assert.Empty(list); // degraded, not a crash
+        // Null, not empty: an empty list is a claim that the player has no friends, and the poller acted
+        // on it by clearing the roster on screen at every failed poll.
+        Assert.Null(list);
     }
 
     [Fact]
-    public async Task GetFriends_OnServerError_ReturnsEmpty()
+    public async Task GetFriends_OnServerError_SaysSoInsteadOfClaimingAnEmptyRoster()
     {
         var handler = new CaptureHandler(HttpStatusCode.InternalServerError, "");
         var list = await Service(handler).GetFriendsAsync();
-        Assert.Empty(list);
+        Assert.Null(list);
     }
 
     [Fact]

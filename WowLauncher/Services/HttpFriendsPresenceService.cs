@@ -33,7 +33,7 @@ public sealed class HttpFriendsPresenceService : IFriendsPresenceService
         _log = log;
     }
 
-    public async Task<IReadOnlyList<FriendPresence>> GetFriendsAsync(CancellationToken ct = default)
+    public async Task<IReadOnlyList<FriendPresence>?> GetFriendsAsync(CancellationToken ct = default)
     {
         var token = _auth.CurrentToken;
         if (!_auth.IsLoggedIn || string.IsNullOrEmpty(token))
@@ -47,13 +47,16 @@ public sealed class HttpFriendsPresenceService : IFriendsPresenceService
             using var resp = await _http.SendAsync(req, ct).ConfigureAwait(false);
             if (!resp.IsSuccessStatusCode)
             {
-                _log.Warning("Friends fetch returned {Status} — showing a degraded list", (int)resp.StatusCode);
-                return Array.Empty<FriendPresence>();
+                // Same reasoning as for a network error: a 500 tells us nothing about the roster, so it
+                // must not be reported as "no friends" and wipe the list on screen.
+                _log.Warning("Friends fetch returned {Status} — keeping the previous list", (int)resp.StatusCode);
+                return null;
             }
 
             var json = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
             var dtos = JsonSerializer.Deserialize(json, FriendsApiJsonContext.Default.FriendDtoArray);
-            if (dtos is null) return Array.Empty<FriendPresence>();
+            // A body that does not parse is a broken answer, not an empty roster.
+            if (dtos is null) return null;
 
             var list = new List<FriendPresence>(dtos.Length);
             foreach (var dto in dtos)
@@ -71,14 +74,48 @@ public sealed class HttpFriendsPresenceService : IFriendsPresenceService
         {
             // Timeout, not a cancel: rethrowing it escaped the fire-and-forget poll as an unhandled
             // exception. A server that does not answer degrades the list, like any other fetch failure.
-            _log.Warning(ex, "Friends fetch timed out — showing a degraded list");
-            return Array.Empty<FriendPresence>();
+            LogRepeatedFailure(ex, "timed out");
+            return null;
         }
         catch (Exception ex)
         {
-            _log.Warning(ex, "Friends fetch failed — showing a degraded list");
-            return Array.Empty<FriendPresence>();
+            LogRepeatedFailure(ex, ex.GetType().Name);
+            return null;
         }
+    }
+
+    /// <summary>How long the same repeated failure stays quiet before it is summarised again. The poll
+    /// runs every 18 seconds, so an hour of a dead connection would otherwise be ~200 log entries; with a
+    /// stack trace each, they fill the 16k a problem report can carry and push out the error the player
+    /// actually clicked about (report ST-8PXS-EGCY).</summary>
+    private static readonly TimeSpan FailureSummaryInterval = TimeSpan.FromMinutes(60);
+
+    private string? _lastFailureKind;
+    private DateTimeOffset _lastFailureLoggedAt;
+    private int _failuresSinceLastLog;
+
+    /// <summary>First occurrence: the full exception. Same failure again: counted, and summarised at most
+    /// once an hour. A DIFFERENT failure logs in full again, because it is new information.</summary>
+    private void LogRepeatedFailure(Exception ex, string kind)
+    {
+        var now = DateTimeOffset.UtcNow;
+        if (!string.Equals(kind, _lastFailureKind, StringComparison.Ordinal))
+        {
+            _log.Warning(ex, "Friends fetch failed ({Kind}) — keeping the previous list", kind);
+            _lastFailureKind = kind;
+            _lastFailureLoggedAt = now;
+            _failuresSinceLastLog = 0;
+            return;
+        }
+
+        _failuresSinceLastLog++;
+        if (now - _lastFailureLoggedAt < FailureSummaryInterval) return;
+
+        _log.Warning(
+            "Friends fetch still failing ({Kind}); {Count} times since the last note. Last reason: {Reason}",
+            kind, _failuresSinceLastLog, ex.Message);
+        _lastFailureLoggedAt = now;
+        _failuresSinceLastLog = 0;
     }
 
     public async Task<AddFriendResult> AddFriendAsync(string account, CancellationToken ct = default)

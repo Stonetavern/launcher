@@ -46,8 +46,10 @@ public sealed class JimsProxyRunnerTests
         {
             try
             {
-                if (File.Exists(pidPath) && int.TryParse(File.ReadAllText(pidPath).Trim(), out var p))
-                    return Task.FromResult<int?>(p);
+                // Read through the real parser — the pidfile carries the owning launcher's PID
+                // alongside the proxy's since 2026-08-31, and a second copy of that format here would
+                // drift from it.
+                if (ProxyPidFile.Read(pidPath) is { } e) return Task.FromResult<int?>(e.ProxyPid);
             }
             catch { /* ignore */ }
             return Task.FromResult<int?>(null);
@@ -273,8 +275,10 @@ public sealed class JimsProxyRunnerTests
         {
             try
             {
-                if (File.Exists(pidPath) && int.TryParse(File.ReadAllText(pidPath).Trim(), out var p))
-                    return Task.FromResult<int?>(p);
+                // Read through the real parser — the pidfile carries the owning launcher's PID
+                // alongside the proxy's since 2026-08-31, and a second copy of that format here would
+                // drift from it.
+                if (ProxyPidFile.Read(pidPath) is { } e) return Task.FromResult<int?>(e.ProxyPid);
             }
             catch { /* ignore */ }
             return Task.FromResult<int?>(null);
@@ -366,7 +370,7 @@ public sealed class JimsProxyRunnerTests
         Task<int?> Owner(int _, CancellationToken __)
         {
             if (reCheck) return Task.FromResult<int?>(999_999);
-            try { if (File.Exists(pidPath) && int.TryParse(File.ReadAllText(pidPath).Trim(), out var p)) return Task.FromResult<int?>(p); }
+            try { if (ProxyPidFile.Read(pidPath) is { } e) return Task.FromResult<int?>(e.ProxyPid); }
             catch { }
             return Task.FromResult<int?>(null);
         }

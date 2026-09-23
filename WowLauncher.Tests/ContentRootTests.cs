@@ -107,7 +107,10 @@ public class ContentRootTests
             Directory.CreateDirectory(Path.Combine(packageRoot, "WTF"));
             Directory.CreateDirectory(Path.Combine(exeDir, "WTF"));
 
-            var resolved = ContentRoot.Resolve(exeDir, new[] { "WTF/", "Hermes/CSV/AreaNames.csv" });
+            // The exe path rides along as every real package carries it: since 2026-09-05 a parent
+            // is only a candidate when the package describes it (see WindowsAToZFixTests).
+            var resolved = ContentRoot.Resolve(exeDir,
+                new[] { "WTF/", "Hermes/CSV/AreaNames.csv", "World of Warcraft/_classic_era_/WowClassic.exe" });
 
             Assert.Equal(packageRoot, resolved);
         }

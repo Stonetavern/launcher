@@ -371,20 +371,7 @@ public sealed class VanillaLocalePacks
     /// the client keeps showing the OLD language for everything it has already seen, which reads as a
     /// language pack that only half worked. The cache refills on its own.
     /// </summary>
-    private void DropWdbCache(string clientDir)
-    {
-        try
-        {
-            var wdb = Path.Combine(clientDir, "WDB");
-            if (!Directory.Exists(wdb)) return;
-            foreach (var file in Directory.EnumerateFiles(wdb, "*.wdb", SearchOption.AllDirectories))
-                TryDelete(file);
-        }
-        catch (Exception ex)
-        {
-            _log.Debug(ex, "Could not clear the WDB cache in {Dir}", clientDir);
-        }
-    }
+    private void DropWdbCache(string clientDir) => WdbCache.Clear(clientDir, _log);
 
     private void TryDelete(string path)
     {

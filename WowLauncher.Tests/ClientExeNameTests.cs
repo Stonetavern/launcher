@@ -483,4 +483,81 @@ public sealed class ClientExeNameTests
         }
         finally { DeleteDir(dir); }
     }
+
+    // ── Spielermeldungen 2026-08-05 / 2026-08-26: der getunte 1.12.1-Client heisst WoW_tweaked.exe ──
+
+    /// <summary>The tuned 1.12.1 package runs <c>VanillaFixes.exe WoW_tweaked.exe</c>, so the live
+    /// process is named "WoW_tweaked" — a name the Windows scan did not know. While the game was up the
+    /// launcher therefore concluded "Game process never became visible within 20s" and treated the
+    /// session as already ended (player report 2026-08-26, experienced as a disconnect), and the
+    /// install guard would have written into a running client. Without the fix this is red: no known
+    /// name matches the process.</summary>
+    [SkippableFact]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
+    public void WindowsGameProcessDetector_FindsRunning_TunedVanillaProcess()
+    {
+        Skip.IfNot(FindRealBinary("/usr/bin/sleep", "/bin/sleep") is not null, "no sleep binary available on this host");
+
+        var (path, proc) = StartRenamedProcess("WoW_tweaked"); // OS process name, no .exe
+        try
+        {
+            var detector = new WindowsGameProcessDetector(new Serilog.LoggerConfiguration().CreateLogger());
+            var found = PollUntil(() => detector.IsGameRunning(null), TimeSpan.FromSeconds(5));
+
+            Assert.True(found,
+                "A running 'WoW_tweaked' process (the tuned 1.12.1 client started through launch.bat) " +
+                "must be detected — otherwise the launcher declares a live session ended.");
+        }
+        finally { KillAndCleanup(proc, path); }
+    }
+
+    /// <summary>Linux pendant. The caller passes the EXPECTED path ".../WoW.exe" while the running
+    /// image is ".../WoW_tweaked.exe" in that same directory — a whole-path comparison can never match,
+    /// which is why the 10 s Wine grace window counted a successful launch as failed (player report
+    /// 2026-08-05). The install directory is the identity here. Red without the fix: neither the leaf
+    /// vocabulary nor the path equality accepts the tuned name.</summary>
+    [SkippableFact]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
+    public void LinuxGameProcessDetector_FindsRunning_TunedVanillaExe_WhenExpectingWowExe()
+    {
+        Skip.IfNot(FindRealBinary("/usr/bin/sleep", "/bin/sleep") is not null, "no sleep binary available on this host");
+
+        var (path, proc) = StartRenamedProcess("WoW_tweaked.exe");
+        try
+        {
+            // What the launcher knows about the install: the canonical WoW.exe beside the running exe.
+            var expected = Path.Combine(Path.GetDirectoryName(path)!, "WoW.exe");
+
+            var detector = new LinuxGameProcessDetector(new Serilog.LoggerConfiguration().CreateLogger());
+            var found = PollUntil(() => detector.IsGameRunning(expected), TimeSpan.FromSeconds(5));
+
+            Assert.True(found,
+                "A running WoW_tweaked.exe in the expected install directory must count as the game " +
+                "running, even though the launcher expects WoW.exe there.");
+        }
+        finally { KillAndCleanup(proc, path); }
+    }
+
+    /// <summary>Guard against the fix becoming a blanket yes: a tuned client in a DIFFERENT directory
+    /// is not this install. Without this the directory rule could degrade into "any WoW_tweaked
+    /// anywhere", which would block downloads for an unrelated install.</summary>
+    [SkippableFact]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
+    public void LinuxGameProcessDetector_IgnoresTunedVanillaExe_InAnotherDirectory()
+    {
+        Skip.IfNot(FindRealBinary("/usr/bin/sleep", "/bin/sleep") is not null, "no sleep binary available on this host");
+
+        var (path, proc) = StartRenamedProcess("WoW_tweaked.exe");
+        var otherDir = NewTempDir();
+        try
+        {
+            var expected = Path.Combine(otherDir, "WoW.exe");
+
+            var detector = new LinuxGameProcessDetector(new Serilog.LoggerConfiguration().CreateLogger());
+            System.Threading.Thread.Sleep(300); // let the process register before asserting a negative
+            Assert.False(detector.IsGameRunning(expected),
+                "A tuned client in an unrelated directory must not count as this install running.");
+        }
+        finally { KillAndCleanup(proc, path); DeleteDir(otherDir); }
+    }
 }

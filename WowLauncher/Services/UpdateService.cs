@@ -22,10 +22,13 @@ public interface IUpdateService
     /// Returns true if an update was downloaded, hash-verified, and the swap was launched —
     /// the caller MUST then Environment.Exit(0) so the running binary releases its file lock.
     /// Returns false (and does nothing) when no update applies or verification fails.
-    /// <para>Auto-apply runs ONLY on the Windows channel (reads <c>manifest.launcher</c>, byte-for-byte
-    /// the shipped behaviour). On every other channel this never downloads or swaps a launcher — Linux
-    /// never fetches the Windows build, and its update surfaces through <see cref="CheckForNotice"/>
-    /// instead (PLAN §1.5 / WP7: no auto-apply before artefact signing).</para>
+    /// <para>Auto-apply runs on every channel that has both a manifest entry and a swap strategy —
+    /// Windows since day one, and since the signature gate below exists (that was the condition WP7
+    /// named), Linux and macOS too: Linux reads <c>manifest.launcher_linux</c> via
+    /// <see cref="LinuxUpdateSwapStrategy"/> (measured 1.8.3 → 1.8.11 in a container, 2026-09-19),
+    /// macOS reads <c>manifest.launcher_macos</c> via its bundle swap (measured 1.8.0 → 1.8.10). A
+    /// channel with no swap strategy wired falls back to the passive hint in
+    /// <see cref="CheckForNotice"/> instead of pretending to apply one.</para>
     /// <para><b>Signature gate (all channels).</b> Before anything else this obtains a
     /// signature-verified manifest from <see cref="IManifestSignatureGate"/> and every later decision
     /// reads THAT copy. Without a valid signature nothing happens at all: no download, no swap, and
@@ -36,12 +39,13 @@ public interface IUpdateService
     Task<bool> CheckAndApplyAsync(ServerManifest? manifest, CancellationToken ct = default);
 
     /// <summary>
-    /// Notify-only launcher-update check for platforms that do NOT auto-apply (Linux today). Pure —
-    /// no download, no swap, no side effects. Reads THIS platform's launcher field (Linux →
+    /// Notify-only launcher-update check for a channel that has no swap strategy wired (none today —
+    /// Linux and macOS both auto-apply since 2026-09-19/2026-09-15, see <see cref="CheckAndApplyAsync"/>).
+    /// Pure — no download, no swap, no side effects. Reads THIS platform's launcher field (Linux →
     /// <c>launcher_linux</c>) and returns a notice when it advertises a strictly newer version than the
-    /// running assembly; otherwise null. The Windows channel always returns null here (it auto-applies
-    /// via <see cref="CheckAndApplyAsync"/> and must not also raise a passive hint). A missing field is
-    /// not an error — it simply yields null (no hint).
+    /// running assembly; otherwise null. A channel that auto-applies always returns null here (it
+    /// updates via <see cref="CheckAndApplyAsync"/> and must not also raise a passive hint). A missing
+    /// field is not an error — it simply yields null (no hint).
     /// <para><b>Reads only signature-verified data.</b> The hint is derived from the manifest copy
     /// <see cref="CheckAndApplyAsync"/> proved authentic in this same round; the
     /// <paramref name="manifest"/> argument is kept for API compatibility and for the "no manifest at
@@ -57,7 +61,9 @@ public enum LauncherUpdateChannel
 {
     /// <summary>Reads <c>manifest.launcher</c> and auto-applies via the Windows swap strategy (shipped behaviour).</summary>
     Windows,
-    /// <summary>Reads <c>manifest.launcher_linux</c>; Check + Notify only (no auto-apply until WP7 signing).</summary>
+    /// <summary>Reads <c>manifest.launcher_linux</c> and auto-applies via <see cref="LinuxUpdateSwapStrategy"/>
+    /// (since 2026-09-19, measured 1.8.3 → 1.8.11 in a container — the "no auto-apply until WP7" note
+    /// that used to live here described a pre-signature-gate stage that no longer applies).</summary>
     Linux,
     /// <summary>Reads <c>manifest.launcher_macos</c> and auto-applies via the macOS bundle swap.</summary>
     MacOs,
@@ -66,13 +72,16 @@ public enum LauncherUpdateChannel
     None,
 }
 
-/// <summary>A passive "a newer launcher exists" hint for the notify-only platforms (no download attached).</summary>
+/// <summary>A passive "a newer launcher exists" hint for whichever channel has no swap strategy wired
+/// (no download attached) — not a fixed set of platforms; Linux and macOS both auto-apply today.</summary>
 public sealed record LauncherUpdateNotice(string Version, string DownloadPage);
 
 public sealed class UpdateService : IUpdateService
 {
-    /// <summary>Where a notify-only hint points the player. Not a download URL — the passive path
-    /// intentionally sends the user to the signed release page (no unattended fetch, PLAN §1.5).</summary>
+    /// <summary>Where the passive hint points the player when a channel has no swap strategy wired.
+    /// Not a download URL — the passive path intentionally sends the user to the signed release page
+    /// (no unattended fetch, PLAN §1.5). Linux and macOS auto-apply since 2026-09-19/2026-09-15 and
+    /// normally never reach this path.</summary>
     public const string DownloadPage = "downloads.stonetavern.app";
 
     private readonly IDownloadService _download;
@@ -99,7 +108,7 @@ public sealed class UpdateService : IUpdateService
     public UpdateService(IDownloadService download, Serilog.ILogger log, IUpdateSwapStrategy swap,
         IManifestSignatureGate signatureGate, LauncherUpdateChannel channel, Version? currentVersion = null,
         IUpdateAttemptLedger? attempts = null, IUpdateHealth? health = null,
-        IUpdateCheckLog? checkLog = null)
+        IUpdateCheckLog? checkLog = null, IInstallEnvironmentGate? envGate = null)
     {
         _download = download;
         _log = log;
@@ -119,7 +128,12 @@ public sealed class UpdateService : IUpdateService
         // Optional wie die beiden darueber: ohne Protokoll verhaelt sich das Update exakt wie bisher,
         // es wird nur nichts aufgeschrieben.
         _checkLog = checkLog;
+        // Same optional-collaborator shape again (release 1.8.11): no gate means no self-update-swap
+        // preflight, i.e. the behaviour that shipped before this existed — see IInstallEnvironmentGate.
+        _envGate = envGate;
     }
+
+    private readonly IInstallEnvironmentGate? _envGate;
 
     private readonly IUpdateCheckLog? _checkLog;
 
@@ -304,6 +318,34 @@ public sealed class UpdateService : IUpdateService
         // silently turn the swap into a copy that can be interrupted halfway.
         var targetDir = Path.GetDirectoryName(currentExe) ?? appDir;
         var tmpExe = Path.Combine(targetDir, Path.GetFileName(currentExe) + ".download");
+
+        // 🔴 Stolperfallen-Preflight (release 1.8.11), BEFORE the swap and BEFORE the download that
+        // pays for it: a macOS launcher started from a translocated temp copy can never complete a
+        // swap (the copy is read-only and disappears with the process), and a launcher folder that
+        // cannot be written to fails the same way every time. Checked here — before RecordAttempt/
+        // ExpectVersion below — so a doomed swap never touches the attempt ledger or the health
+        // sentinel: those are exactly the two mechanisms that turn a single failure into a loop, and a
+        // trap this preflight already saw coming must not feed either one.
+        //
+        // _envGate is optional, same convention as _attempts/_health on this same constructor: null
+        // means "do not brake" (the behaviour that shipped before this existed) — a test that
+        // constructs UpdateService with fakes for download/swap and does not pass a gate must not
+        // suddenly perform a real filesystem write probe against wherever the TEST HOST process
+        // happens to run from.
+        if (_envGate is not null)
+        {
+            var swapPreflight = _envGate.EvaluateSelfUpdateSwap(appDir, targetDir);
+            if (swapPreflight.Count > 0)
+            {
+                foreach (var finding in swapPreflight)
+                    _log.Warning("Preflight {Severity} {Code} before self-update swap: {Message}",
+                        finding.Severity, finding.Code, InstallEnvironmentPreflight.DisplayText(finding));
+                // Same convention as every other "auto-apply cannot deliver this update" branch above:
+                // hand over to the passive manual-download hint instead of failing silently or looping.
+                _autoApplyFailed = true;
+                return false;
+            }
+        }
 
         // Announce BEFORE the download, not after. Everything from here on is committed to replacing
         // the binary, and the download is the long part — 14 s for 61 MB in the win11 VM on 2026-08-02.

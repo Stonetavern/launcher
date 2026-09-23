@@ -37,8 +37,9 @@ public sealed partial class SettingsViewModel : ViewModelBase
         IDesktopIntegrationService? desktopIntegration = null,
         StartReport? startReport = null, IClipboardService? clipboard = null,
         IUpdateCheckLog? checkLog = null, Func<string>? runningVersion = null,
-        Func<DateTimeOffset>? now = null)
+        Func<DateTimeOffset>? now = null, IClientDisplayService? display = null)
     {
+        _display = display;
         _checkLog = checkLog;
         _now = now ?? (() => DateTimeOffset.UtcNow);
         _runningVersion = runningVersion ?? (() =>
@@ -524,6 +525,54 @@ public sealed partial class SettingsViewModel : ViewModelBase
 
     /// <summary>Opens the same native folder picker the first-install download flow uses.
     /// A cancel leaves the field exactly as it was.</summary>
+    // ─── Grafik zuruecksetzen ─────────────────────────────────────────────
+    // Vier Tickets mit demselben Bild (#63, #92, #98 und ein aelteres): Video-Optionen angefasst,
+    // danach nur noch Schwarz mit Ton, bei jedem Start, bis jemand Config.wtf loescht oder neu
+    // installiert. Der Weg zurueck ist eine Zeile in Config.wtf, und der Spieler hat sie nicht.
+    // Deshalb steht sie hier als Knopf: Fenster + maximiert auf dem Modus, den der Monitor gerade
+    // faehrt. Lautstaerke, Tasten, Maus bleiben, wie sie sind - nur die vier Bildwerte.
+
+    private readonly IClientDisplayService? _display;
+
+    public bool ShowResetVideo => _display is { IsSupported: true };
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasResetVideoNote))]
+    private string? _resetVideoNote;
+
+    public bool HasResetVideoNote => !string.IsNullOrEmpty(ResetVideoNote);
+
+    /// <summary>The 1.12.1 install the launcher would start, if it has one recorded and the folder
+    /// is still there. The reset is about THAT client: the modern one has its own settings screen.</summary>
+    internal string? VanillaClientDirectory()
+    {
+        var c = _config.Load();
+        var build = ClientVersion.Default.Build;
+        if (c.ClientInstalls.TryGetValue(build, out var dir) && !string.IsNullOrWhiteSpace(dir)
+            && System.IO.Directory.Exists(dir))
+            return dir;
+        var exe = c.WowExecutablePath;
+        if (!string.IsNullOrWhiteSpace(exe) && System.IO.File.Exists(exe)
+            && !ClientVersion.ExeNameNeedsModernRuntime(System.IO.Path.GetFileName(exe)))
+            return System.IO.Path.GetDirectoryName(exe);
+        return null;
+    }
+
+    [RelayCommand]
+    private void ResetVideo()
+    {
+        if (_display is null) return;
+        var dir = VanillaClientDirectory();
+        if (dir is null)
+        {
+            ResetVideoNote = Loc.T("Settings_ResetVideo_NoClient");
+            return;
+        }
+        ResetVideoNote = _display.ResetVideo(dir, out var error)
+            ? Loc.T("Settings_ResetVideo_Done")
+            : Loc.F("Settings_ResetVideo_Failed", error ?? "");
+    }
+
     [RelayCommand]
     private async Task BrowseInstallFolder()
     {

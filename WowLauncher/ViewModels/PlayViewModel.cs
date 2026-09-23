@@ -12,6 +12,7 @@ using Serilog;
 using WowLauncher.Localization;
 using WowLauncher.Models;
 using WowLauncher.Services;
+using WowLauncher.Services.Platform;
 
 namespace WowLauncher.ViewModels;
 
@@ -39,9 +40,15 @@ public sealed partial class PlayViewModel : ViewModelBase
     /// keeps compiling; null simply means the 1.12.1 language menu stays English-only, which is what
     /// shipped before it existed.</summary>
     private readonly ILanguagePackService? _languagePacks;
+    private readonly WowLauncher.Services.Platform.IGameRuntimeProvisioner? _runtime;
     /// <summary>Used only to refuse a language switch while a client is up. Optional for the same
     /// reason as <see cref="_languagePacks"/>.</summary>
     private readonly WowLauncher.Services.Platform.IGameProcessDetector? _gameDetector;
+    /// <summary>The S2 patch engine (ARCHITEKTUR-v2-patcher.md §4). Optional so every existing
+    /// construction of this view model keeps compiling; null means every download/repair takes
+    /// today's whole-ZIP path unconditionally, which is also what happens when the active manifest
+    /// entry lacks the v2 fields (<see cref="ClientHasPatchManifest"/>) even when this is set.</summary>
+    private readonly WowLauncher.Services.Patching.ClientPatchEngine? _patchEngine;
     private readonly ILogger _log;
 
     private string _wowPathBacking = "";
@@ -65,6 +72,11 @@ public sealed partial class PlayViewModel : ViewModelBase
     private string _downloadSha256 = "";
     private long _downloadSize;                    // manifest-declared size, for the pre-download disk-space check
     private string _filesManifestUrl = "";        // optional per-file manifest for Repair (MANIFEST-SCHEMA.md §files_url)
+    /// <summary>The full manifest entry for the active build, kept alongside the flattened
+    /// <c>_download*</c>/<c>_filesManifestUrl</c> fields so <see cref="ClientHasPatchManifest"/> and
+    /// the S2 patch engine can read <c>files_base</c>/<c>files_sha256</c>/<c>deltas</c>/<c>protected</c>
+    /// without a second round of manifest lookups (ARCHITEKTUR-v2-patcher.md §2/§4).</summary>
+    private WowLauncher.Models.ManifestFile? _patchManifestClient;
     private string _clientVersion = "";          // manifest's current client version for the active build (§6.3)
     // False whenever the ACTIVE build (SelectedClientChoice) is not the phase's own canonical build -
     // the manifest only ever describes that one build per phase, so an alternate build (1.14.2/42597
@@ -138,6 +150,185 @@ public sealed partial class PlayViewModel : ViewModelBase
     private CancellationTokenSource? _applyCts;   // cancels an in-flight expansion switch when a new one starts
     private CancellationTokenSource? _downloadCts; // cancels an in-flight client download when the player pauses
 
+    /// <summary>How often the same build/version may fail AFTER a completed transfer before the
+    /// launcher stops offering to fetch it again. Three, for the same reason
+    /// <see cref="UpdateAttemptLedger.MaxAttempts"/> is three: a scanner that holds one file for a
+    /// moment deserves a retry, a broken package does not deserve an evening of them.</summary>
+    internal const int MaxInstallAttempts = 3;
+
+    /// <summary>Consecutive unrecoverable post-transfer failures, counted per ARTEFACT — build plus the
+    /// manifest SHA256, not the version string. A corrected package republished under the same version
+    /// number is a different artefact and deserves a fresh budget; keying on the version alone would
+    /// keep the old refusal standing over the fix (Codex review 2026-09-14).
+    ///
+    /// <para>The reason travels WITH the entry, not in a field beside it. A single
+    /// <c>_lastInstallFailure</c> was the same defect this patch found in <c>DownloadErrorDetail</c>:
+    /// a text that outlives its context, so the refusal for one build could quote the reason of
+    /// another.</para>
+    ///
+    /// <para><b>Deliberately NOT persisted</b>, and that is not a shortcut.
+    /// <see cref="UpdateAttemptLedger"/> writes to disk because the launcher has already exited when
+    /// its self-update is applied — it cannot count in memory. The client download is the opposite
+    /// case: the launcher is alive for every attempt (four in four minutes in the report on record),
+    /// so the session is the scope the loop actually has. A file-backed counter could additionally
+    /// lock a player out of a download across restarts on the strength of a stale line, which is a
+    /// worse failure than the one being fixed. Restarting the launcher is the deliberate way back
+    /// in.</para></summary>
+    private readonly Dictionary<(int Build, string Artefact), (int Count, string Reason, bool CacheFreed)> _failedInstalls = [];
+
+    /// <summary>Count one post-transfer failure that repeating cannot fix, and keep its reason.</summary>
+    private void NoteInstallFailed((int Build, string Artefact) key, string reason)
+    {
+        var prevCount = _failedInstalls.TryGetValue(key, out var prev) ? prev.Count : 0;
+        var count = prevCount + 1;
+        _failedInstalls[key] = (count, reason, prev.CacheFreed);
+        _log.Warning("Client install attempt {Count}/{Max} failed for build {Build}: {Reason}",
+            count, MaxInstallAttempts, key.Build, reason);
+    }
+
+    /// <summary>
+    /// Free bytes the target filesystem must have before this install may start.
+    ///
+    /// <para>Without a cached archive both the download and the unpacked tree have to fit: one times
+    /// the ZIP plus the tree it expands to, which the shipped packages put at roughly 1,2×, plus fixed
+    /// headroom. <b>With</b> a complete archive already on disk the transfer does not happen again, so
+    /// only the unpacked part is still missing — demanding the download budget a second time is what
+    /// made the kept archive able to block the very retry it exists for (Codex review 2026-09-14).</para>
+    ///
+    /// <para>The two numbers are deliberately one <paramref name="downloadSize"/> apart: should the
+    /// cached archive turn out not to match after all, it is deleted, which frees exactly that much —
+    /// so the full budget is met again before a fresh transfer starts. The reduced check can therefore
+    /// never let the launcher into a download it does not have room for.</para>
+    /// </summary>
+    internal static long RequiredFreeBytes(long downloadSize, bool archiveAlreadyCached)
+        => DownloadBudget(downloadSize, archiveAlreadyCached) + UnpackBudget(downloadSize);
+
+    /// <summary>Feste Reserve, die auf jedem gemessenen Datentraeger ueber dem Bedarf frei bleiben soll.</summary>
+    internal const long DiskHeadroom = 500L * 1024 * 1024;
+
+    /// <summary>Bytes, die noch auf das Laufwerk des ZWISCHENSPEICHERS fliessen muessen. Liegt das
+    /// Archiv vollstaendig dort, ist das null — der Transfer findet nicht noch einmal statt.</summary>
+    internal static long DownloadBudget(long downloadSize, bool archiveAlreadyCached)
+        => archiveAlreadyCached ? 0 : downloadSize;
+
+    /// <summary>Bytes, die auf dem Laufwerk des INSTALLATIONSORDNERS entstehen: der entpackte Baum
+    /// (die ausgelieferten Pakete liegen bei rund 1,2x der ZIP-Groesse) plus feste Reserve.</summary>
+    internal static long UnpackBudget(long downloadSize)
+        => (long)(downloadSize * 1.2) + DiskHeadroom;
+
+    /// <summary>
+    /// 🔴 Der Download und das Entpacken landen nicht zwangslaeufig auf demselben Datentraeger.
+    ///
+    /// <para>Das Archiv geht immer in den Zwischenspeicher (<c>CacheDir</c>, unter XDG im Home), der
+    /// entpackte Client dorthin, wo der Spieler ihn haben will — bei einem 18-GB-Client ist das
+    /// typischerweise eine zweite Platte. Bis 2026-09-14 verlangte die Sperre beide Betraege auf dem
+    /// Laufwerk des Installationsordners: dort wurden ~8,3 GB zu viel gefordert (falsche Abweisung mit
+    /// genug Platz), waehrend das Laufwerk, auf dem die 8,3 GB wirklich landen, gar nicht geprueft
+    /// wurde — der Download konnte also nach Minuten an einer vollen Systemplatte scheitern, ohne dass
+    /// die Vorpruefung je etwas gesagt haette. Dieselbe Fehlerklasse wie das gegen sich selbst
+    /// gewendete Archiv: eine Zahl, die eine andere Frage beantwortet als die gestellte.</para>
+    ///
+    /// <para>Getrennt gerechnet wird nur, wenn die beiden Pfade NACHWEISLICH auf verschiedenen
+    /// Dateisystemen liegen. Laesst sich das nicht bestimmen (<see cref="SameVolume"/> antwortet dann
+    /// <c>null</c>), gilt die volle Summe — eine fehlgeschlagene Messung darf den Launcher nicht in
+    /// einen Download lassen, fuer den der Platz nicht reicht.</para>
+    /// </summary>
+    internal static long RequiredFreeBytes(long downloadSize, bool archiveAlreadyCached, bool cacheOnSameVolume)
+        => cacheOnSameVolume
+            ? RequiredFreeBytes(downloadSize, archiveAlreadyCached)
+            : UnpackBudget(downloadSize);
+
+    /// <summary>
+    /// Reicht der Platz auf dem Laufwerk des ZWISCHENSPEICHERS? Gibt den fehlenden Bedarf zurueck
+    /// (<c>null</c> = kein Grund zur Abweisung), damit die Entscheidung ohne zwei echte Mounts
+    /// pruefbar ist — sonst waere genau dieser Zweig die eine Stelle, die kein Test je betritt.
+    ///
+    /// <para>Gemessen wird nur, wenn die Laufwerke NACHWEISLICH getrennt sind (bei einem Laufwerk hat
+    /// die Pruefung des Installationsordners den Download schon mitverlangt) und ueberhaupt noch Bytes
+    /// fliessen muessen.</para>
+    /// </summary>
+    internal static long? CacheShortfall(long downloadSize, bool archiveCached, bool separateVolumes,
+        long availableOnCacheVolume)
+    {
+        if (!separateVolumes || archiveCached) return null;
+        var need = DownloadBudget(downloadSize, archiveCached) + DiskHeadroom;
+        return availableOnCacheVolume < need ? need : null;
+    }
+
+    /// <summary>Was bei Platzmangel mit dem zwischengespeicherten Archiv zu geschehen hat.</summary>
+    /// <param name="FreeTheCache">Löschen bringt auf dem gemessenen Datenträger wirklich Platz.</param>
+    /// <param name="PointAtOtherDrive">Das Archiv liegt woanders — dem Spieler sagen, wo, damit er
+    /// die richtige Platte aufräumt.</param>
+    internal readonly record struct ShortfallPlan(bool FreeTheCache, bool PointAtOtherDrive);
+
+    /// <summary>
+    /// 🔴 Aufräumen hilft nur auf dem Datenträger, der gemessen wurde.
+    ///
+    /// <para>Der Zwischenspeicher liegt in <c>CacheDir</c> (Windows neben der Exe, Linux unter
+    /// <c>~/.cache</c>), der Installationsordner dort, wo der Spieler ihn hingelegt hat — bei einem
+    /// 18-GB-Client auf einer zweiten Platte sind das typischerweise verschiedene Mounts, und
+    /// <see cref="DiskSpace.ForPath"/> löst pro Pfad genau deshalb einzeln auf. Ein Löschen über die
+    /// Datenträgergrenze hinweg gibt auf dem gemessenen Laufwerk NULL Bytes frei und vernichtet
+    /// dabei das geprüfte Mehr-Gigabyte-Archiv — also genau die teure Schleife wieder her, gegen die
+    /// dieser Patch geschrieben ist, und ausgerechnet bei den Spielern mit knapper Platte
+    /// (Review 2026-09-14).</para>
+    /// </summary>
+    internal static ShortfallPlan PlanShortfall(bool archiveCached, bool cacheOnSameVolume) =>
+        new(FreeTheCache: archiveCached && cacheOnSameVolume,
+            PointAtOtherDrive: archiveCached && !cacheOnSameVolume);
+
+    /// <summary>
+    /// Die Menge, die dem Spieler genannt wird — gerechnet für den Zustand NACH dem Aufräumen.
+    ///
+    /// <para>Bis zum Review wurde die mit <c>archiveCached: true</c> gerechnete Zahl gezeigt und
+    /// danach das Archiv gelöscht. Beim nächsten Klick galt die um eine Archivgröße höhere Zahl: der
+    /// Spieler schaffte exakt das Genannte frei und wurde mit einer GRÖSSEREN Zahl erneut abgewiesen.
+    /// Dieselbe Fehlerklasse wie der stehengebliebene Fehlersatz — eine Zahl, die eine andere Frage
+    /// beantwortet als die, vor welcher der Leser steht.</para>
+    /// </summary>
+    internal static long RequirementAfterCleanup(long downloadSize, bool archiveCached, bool cacheFreed,
+        bool cacheOnSameVolume = true) =>
+        RequiredFreeBytes(downloadSize, archiveCached && !cacheFreed, cacheOnSameVolume);
+
+    /// <summary>
+    /// Liegen beide Pfade auf demselben Dateisystem? <c>null</c> heisst: fuer mindestens einen der
+    /// beiden liess es sich nicht bestimmen.
+    ///
+    /// <para>🔴 Die Unterscheidung ist noetig, weil „unbestimmbar" fuer die beiden Leser dieser
+    /// Antwort in ENTGEGENGESETZTE Richtungen sicher ist: beim Aufraeumen darf dann nicht geloescht
+    /// werden (ein geprueftes Mehr-Gigabyte-Archiv faellt nie einer Vermutung zum Opfer), beim Rechnen
+    /// muss dann der volle Betrag verlangt werden (sonst laesst eine fehlgeschlagene Messung den
+    /// Launcher in einen Download, fuer den der Platz nicht reicht). Ein einzelnes <c>false</c> haette
+    /// einen der beiden still falsch bedient.</para>
+    /// </summary>
+    private static bool? SameVolume(string a, string b)
+    {
+        var va = DiskSpace.ForPath(a)?.Name;
+        var vb = DiskSpace.ForPath(b)?.Name;
+        if (string.IsNullOrEmpty(va) || string.IsNullOrEmpty(vb)) return null;
+        return string.Equals(va, vb, OperatingSystem.IsWindows()
+            ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+    }
+
+    /// <summary>Drop the cached client archive and say whether there was one. Used where the launcher
+    /// gives up: an 8 GB scratch file that no longer serves a retry is just a full disk waiting to
+    /// happen, and on Windows it sits next to the launcher forever.</summary>
+    private bool DiscardCachedArchive(string zipPath, string why)
+    {
+        try
+        {
+            if (!File.Exists(zipPath)) return false;
+            File.Delete(zipPath);
+            _log.Information("Cached client archive discarded ({Why}): {Zip}", why, zipPath);
+            return true;
+        }
+        catch (System.Exception ex)
+        {
+            _log.Warning(ex, "Could not discard the cached client archive {Zip}", zipPath);
+            return false;
+        }
+    }
+
     public PlayViewModel(IConfigService cfg, IManifestService mf, IClientService cl,
         IServerStatusService st, IDownloadService dl, IClientVerifyService verify, IUpdateService up,
         INewsService news, WowLauncher.Services.Platform.ILaunchExitPolicy launchExit,
@@ -145,13 +336,15 @@ public sealed partial class PlayViewModel : ViewModelBase
         IShellWindowController? windowController = null,
         WowLauncher.Services.Platform.IGameSession? session = null,
         ILanguagePackService? languagePacks = null,
-        WowLauncher.Services.Platform.IGameProcessDetector? gameDetector = null)
+        WowLauncher.Services.Platform.IGameProcessDetector? gameDetector = null,
+        WowLauncher.Services.Platform.IGameRuntimeProvisioner? runtime = null,
+        WowLauncher.Services.Patching.ClientPatchEngine? patchEngine = null)
     {
         _config = cfg; _manifest = mf; _client = cl; _srv = st; _download = dl; _verify = verify;
         _update = up; _news = news;
         _launchExit = launchExit; _paths = paths; _folderPicker = folderPicker;
         _windowController = windowController; _session = session; _languagePacks = languagePacks;
-        _gameDetector = gameDetector;
+        _gameDetector = gameDetector; _runtime = runtime; _patchEngine = patchEngine;
         _log = log.ForContext<PlayViewModel>();
         var c = _config.Load();
         _selectedLocale = ClientLocales.FromCode(c.Locale);
@@ -429,6 +622,18 @@ public sealed partial class PlayViewModel : ViewModelBase
         return _applyCts.Token;
     }
 
+    // 🔴 Die abgeloeste CancellationTokenSource wird ABSICHTLICH nicht freigegeben (geprueft und
+    // wieder zurueckgenommen, 2026-09-03). Eine DeepSeek-Analyse hatte das fehlende Dispose als
+    // langsames Ressourcenleck gemeldet — zutreffend, und trotzdem ist der Fix schaedlicher als der
+    // Mangel: der abgesagte Token lebt in der noch laufenden ApplyExpansionAsync weiter und wandert
+    // von dort in ServerStatusService.CheckAsync, wo er die Grundlage eines
+    // CancellationTokenSource.CreateLinkedTokenSource ist. Auf einer freigegebenen Quelle wirft genau
+    // dieser Aufruf ObjectDisposedException — aus einem gemuetlichen Objekt, das der
+    // Speicherbereiniger ohnehin einsammelt, wuerde ein Absturz beim Realmwechsel. Ein CTS ohne Timer
+    // und ohne verknuepfte Token haelt kein Betriebsmittel; es wartet nur auf den naechsten Durchlauf
+    // der Speicherbereinigung. Wer das doch schliessen will, braucht eine Freigabe NACH dem Ende der
+    // abgeloesten Anwendung, nicht an dieser Stelle.
+
     // ─── Realm status (HeroStage PulseDot) ────────────────────────────────
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(RealmStatusText), nameof(RealmOnline),
@@ -479,7 +684,12 @@ public sealed partial class PlayViewModel : ViewModelBase
             // which read as a broken sentence in the middle of one (image check 2026-08-05).
             : Loc.F("Play_Status_BringYourOwn", SelectedClientChoice.Client.ShortLabel),
         LauncherState.EraTransition => Loc.F("Play_Status_EraTransition", _activePhase.DisplayName),
-        LauncherState.Ready => "✓ " + Loc.T("Play_Status_Ready"),
+        // Ready with a reason, when there is one to give. A client the player brought himself is
+        // playable but deliberately not maintained by the launcher, and silence about that is what made
+        // the old behaviour look like a bug.
+        LauncherState.Ready => "✓ " + (string.IsNullOrEmpty(ReadyDetail)
+            ? Loc.T("Play_Status_Ready")
+            : ReadyDetail),
         LauncherState.UpdateAvailable => Loc.T("Play_Status_UpdateAvailable"),
         LauncherState.Downloading => Loc.T("Play_Status_Downloading") + "…",
         LauncherState.Paused => Loc.T("Play_Status_Paused"),
@@ -578,20 +788,44 @@ public sealed partial class PlayViewModel : ViewModelBase
     [NotifyPropertyChangedFor(nameof(StatusLine))]
     private string _downloadErrorDetail = "";
 
+    /// <summary>Extra sentence shown in the Ready line — today only "this client is not ours, we leave
+    /// it alone". Cleared automatically on every state change, so it can never outlive its situation.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(StatusLine))]
+    private string _readyDetail = "";
+
+    partial void OnStateChanged(LauncherState value)
+    {
+        if (value != LauncherState.Ready) ReadyDetail = "";
+    }
+
     /// <summary>Concrete failure text from the platform launcher (stub/Wine/Process.Start) — shown
     /// in the LaunchFailed status line instead of a generic message (Codex F6a).</summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(StatusLine))]
     private string _launchFailedDetail = "";
 
-    /// <summary>WP4: passive "a newer launcher exists" hint (Linux Check + Notify — no auto-apply until
-    /// WP7). Empty on Windows (Windows auto-applies) and whenever the manifest advertises no newer Linux
-    /// build. Orthogonal to <see cref="LauncherState"/> — it does not gate any action, it only informs.</summary>
+    /// <summary>WP4: passive "a newer launcher exists" hint for a channel with no swap strategy wired.
+    /// Linux auto-applies since 2026-09-19 (measured 1.8.3 → 1.8.11 in a container) like Windows and
+    /// macOS, so this stays empty in normal operation; it still fires whenever the manifest advertises
+    /// no newer build, or a channel falls back because its swap failed. Orthogonal to
+    /// <see cref="LauncherState"/> — it does not gate any action, it only informs.</summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(HasLauncherUpdateHint))]
     private string _launcherUpdateHint = "";
 
     public bool HasLauncherUpdateHint => !string.IsNullOrEmpty(LauncherUpdateHint);
+
+    /// <summary>Release 1.8.11 (Stolperfallen-Preflight): a non-blocking note from
+    /// <see cref="WowLauncher.Services.Platform.InstallEnvironmentPreflight"/> about the chosen install
+    /// folder (synced to the cloud, Controlled folder access, running elevated, ...). Empty when the
+    /// preflight found nothing worth a Warn, or found only a Block (which already stopped the download
+    /// and is shown through <see cref="DownloadErrorDetail"/> instead).</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasInstallEnvironmentHint))]
+    private string _installEnvironmentHint = "";
+
+    public bool HasInstallEnvironmentHint => !string.IsNullOrEmpty(InstallEnvironmentHint);
 
     // ─── Language ─────────────────────────────────────────────────────────
 
@@ -1126,8 +1360,23 @@ public sealed partial class PlayViewModel : ViewModelBase
         // Offline-first: start from the last known phase so client identity is sane pre-network.
         _activePhase = Progression.BySlug(cfg.LastPhase) ?? Progression.Default;
 
-        // The manifest is the source of truth for the globally active phase + coordinates.
-        var manifest = await _manifest.FetchAsync();
+        // Both manifests are fetched AT THE SAME TIME. They are independent documents on two
+        // addresses and nothing in one decides the other, but until 2026-09-03 they were awaited one
+        // after the other — and on a connection that hangs rather than refuses, each costs its full
+        // 30-second timeout (DependencyInjection.cs:362). A player on such a line waited a full minute
+        // for two answers that could have arrived together, in front of a client that was already
+        // installed. Measured in a real report (ST-PB2B-QZ17, 2026-08-31): 75 s from start to play,
+        // nearly all of it waiting on the network.
+        //
+        // Awaited separately rather than through Task.WhenAll on purpose: WhenAll surfaces the FIRST
+        // exception and leaves the other task's fault unobserved — exactly the
+        // TaskScheduler.UnobservedTaskException shape this codebase has been chasing. Both fetches are
+        // offline-first (null on timeout and on transport failure, ManifestService.FetchFromAsync), so
+        // neither await here throws for a network reason at all.
+        var realmManifestFetch = _manifest.FetchAsync();
+        var launcherManifestFetch = _manifest.FetchLauncherManifestAsync();
+        // The realm manifest is the source of truth for the globally active phase + coordinates.
+        var manifest = await realmManifestFetch;
         _lastManifest = manifest;
 
         // Launcher self-update first: newer, hash-verified build? → swap + relaunch.
@@ -1136,7 +1385,7 @@ public sealed partial class PlayViewModel : ViewModelBase
         // dahin bekam ein Spieler, der einen eigenen Realm ausgewaehlt hatte, gar keine
         // Launcher-Updates mehr - lautlos, ohne Fehler, ohne Meldung. Begruendung ausfuehrlich an
         // IManifestService.FetchLauncherManifestAsync.
-        var launcherManifest = await _manifest.FetchLauncherManifestAsync();
+        var launcherManifest = await launcherManifestFetch;
         if (await _update.CheckAndApplyAsync(launcherManifest))
         {
             State = LauncherState.UpdatingLauncher;
@@ -1298,12 +1547,23 @@ public sealed partial class PlayViewModel : ViewModelBase
                     // field describes the phase's own client, and lending it to a second build would
                     // compare one client's version against another's and report a phantom update.
                     : (activeBuild == _activePhase.GameBuild ? _lastManifest?.CurrentVersion ?? "" : "");
+                _patchManifestClient = coords;
             }
             else
             {
                 _downloadUrl = ""; _downloadSha256 = ""; _downloadSize = 0;
-                _filesManifestUrl = ""; _clientVersion = "";
+                _filesManifestUrl = ""; _clientVersion = ""; _patchManifestClient = null;
             }
+
+            // The action state is decided BEFORE the realm ping, not after it. It reads only the
+            // configuration and the installed client (ResolveBuildState) — the ping's answer never
+            // entered it. Behind the ping it nevertheless cost the player up to 13 seconds of "please
+            // wait" in front of a client that was ready to start: a 3-second TCP probe
+            // (ServerStatusService.cs:84) plus a 10-second HTTP call for a player count the launcher
+            // deliberately never shows (PlayViewModel.cs:442). The realm dot keeps updating below when
+            // the answer arrives; it is a status light, not a gate.
+            if (ct.IsCancellationRequested) return;
+            State = ResolveBuildState(cfg, managed);
 
             // Realm reachability ping (non-fatal).
             Realm = RealmState.Checking;
@@ -1327,9 +1587,8 @@ public sealed partial class PlayViewModel : ViewModelBase
                 Realm = RealmState.Offline;
             }
 
-            // Only the latest pick commits the action state — a stale call must not clobber it (C2).
+            // Only the latest pick commits — a stale call must not clobber the rest (C2).
             if (ct.IsCancellationRequested) return;
-            State = ResolveBuildState(cfg, managed);
             // Which languages exist depends on the build that is now active and on the install behind
             // it. The path setter refreshes the menu when the path CHANGES; this covers the case where
             // it did not (same client, different manifest or a pack installed since).
@@ -1564,6 +1823,20 @@ public sealed partial class PlayViewModel : ViewModelBase
                         State = LauncherState.Ready;
                         return;
                     }
+                    // Not one manifest file exists here: this is a client the player brought himself,
+                    // not a damaged copy of ours. Offering an 8 GB "update" for it is wrong twice over —
+                    // it would not fix anything, and on a full disk it cannot even start (report
+                    // ST-KQYG-ARA3). Let him play with what he has and say why nothing is offered.
+                    if (report.LooksLikeADifferentPackage)
+                    {
+                        _log.Information(
+                            "Located client for build {Build} is not the Stonetavern package ({Checkable} manifest files, none of them here) — leaving it alone",
+                            build, report.Checkable);
+                        State = LauncherState.Ready;
+                        ReadyDetail = Loc.T("Play_ForeignClient_NotOurs");
+                        return;
+                    }
+
                     _log.Information(
                         "Located client for build {Build} is not current ({Missing} missing, {Corrupt} corrupt) — update available",
                         build, report.Missing.Count, report.Corrupt.Count);
@@ -1645,8 +1918,192 @@ public sealed partial class PlayViewModel : ViewModelBase
         }
         LauncherUpdateHint =
             Loc.F("Play_LauncherUpdateHint", notice.Version, notice.DownloadPage);
-        _log.Information("Launcher-Update-Hinweis (nur Notify, kein Auto-Apply): {Ver} — {Page}",
+        _log.Information("Launcher-Update-Hinweis (Notify-Rueckfall, kein Auto-Apply auf diesem Kanal): {Ver} — {Page}",
             notice.Version, notice.DownloadPage);
+    }
+
+    /// <summary>True when the active manifest entry publishes the v2 per-file/delta layout AND the
+    /// engine itself is wired up (<see cref="_patchEngine"/> is only null in a construction that never
+    /// registered one, e.g. an older test double) — the single switch <see cref="DownloadAsync"/> and
+    /// <see cref="Repair"/> both read to decide patch-engine vs. whole-ZIP (ARCHITEKTUR-v2-patcher.md
+    /// §2 "S1 fertig" / §4 "S2 Patcher").</summary>
+    private bool UseV2PatchEngine =>
+        _patchEngine is not null && _patchManifestClient is { } c
+        && !string.IsNullOrWhiteSpace(c.FilesSha256) && !string.IsNullOrWhiteSpace(c.FilesBase);
+
+    /// <summary>
+    /// Runs the active build's Download/Update/Repair through <see cref="WowLauncher.Services.Patching.ClientPatchEngine"/>
+    /// instead of the whole-ZIP path (ARCHITEKTUR-v2-patcher.md §4). Repeats only the pre-flight steps
+    /// the engine cannot do itself — the first-install folder picker and the Stolperfallen-Preflight
+    /// from release 1.8.11 — everything from PLAN onward belongs to the engine. Deliberately does NOT
+    /// replicate <see cref="DownloadAsync"/>'s disk-space pre-check or its <c>_failedInstalls</c>
+    /// attempt budget: the engine does its own space check before DELTA, and PER_FILE's small,
+    /// resumable single-file transfers do not carry the same "several GB wasted on the wrong error"
+    /// risk that budget exists for (smallest clean deviation, see the S2 report for the follow-up).
+    /// </summary>
+    private async Task RunPatchEngineAsync(bool repair)
+    {
+        var client = _patchManifestClient!;
+        var build = SelectedClientChoice.Client.Build;
+        var cfgPre = _config.Load();
+        var isFreshInstall = !repair && !(cfgPre.ClientInstalls.TryGetValue(build, out var already)
+                                           && !string.IsNullOrWhiteSpace(already));
+
+        if (isFreshInstall && string.IsNullOrWhiteSpace(cfgPre.PreferredInstallRoot))
+        {
+            var picked = await _folderPicker.PickFolderAsync(Loc.T("Play_Picker_Title"));
+            if (picked is null)
+            {
+                _log.Information("Install folder picker cancelled for build {Build} — patch not started", build);
+                return;
+            }
+            cfgPre.PreferredInstallRoot = picked;
+            _config.Save(cfgPre);
+        }
+
+        var installRoot = isFreshInstall
+            ? (!string.IsNullOrWhiteSpace(cfgPre.PreferredInstallRoot)
+                ? Path.Combine(cfgPre.PreferredInstallRoot!, WowLauncher.Services.Platform.AppPathNames.ClientDirName(build))
+                : _paths.ClientInstallDir(build))
+            : (cfgPre.ClientInstalls.TryGetValue(build, out var recorded) && !string.IsNullOrWhiteSpace(recorded)
+                ? recorded
+                : _paths.ClientInstallDir(build));
+
+        // Same Stolperfallen-Preflight gate as the ZIP path (release 1.8.11) — a manifest entry
+        // carrying the v2 fields must not skip elevation/OneDrive/path-length checks just because it
+        // takes the other route afterwards.
+        var preflight = InstallEnvironmentPreflight.Evaluate(new InstallEnvironmentFacts(
+            Os: InstallEnvironmentProbes.CurrentOs(),
+            LauncherBaseDir: AppContext.BaseDirectory,
+            TargetInstallDir: installRoot,
+            IsElevated: InstallEnvironmentProbes.IsElevated(),
+            EnvironmentVars: InstallEnvironmentProbes.CollectEnvironmentVars(),
+            HasQuarantineAttr: false,
+            WriteProbeSucceeded: true,
+            LongestRelativePathInManifest: InstallEnvironmentPreflight.DefaultLongestRelativePathReserve,
+            GameProcessRunning: false));
+
+        foreach (var finding in preflight)
+            _log.Warning("Preflight {Severity} {Code} for install folder {Dir}: {Message}",
+                finding.Severity, finding.Code, installRoot, InstallEnvironmentPreflight.DisplayText(finding));
+
+        var blockingFinding = preflight.FirstOrDefault(f => f.Severity == PreflightSeverity.Block);
+        if (blockingFinding is not null)
+        {
+            DownloadErrorDetail = InstallEnvironmentPreflight.DisplayText(blockingFinding);
+            State = LauncherState.DownloadError;
+            return;
+        }
+        var warningFinding = preflight.FirstOrDefault(f => f.Severity == PreflightSeverity.Warn);
+        if (warningFinding is not null)
+            InstallEnvironmentHint = InstallEnvironmentPreflight.DisplayText(warningFinding);
+
+        try
+        {
+            Directory.CreateDirectory(installRoot);
+            var probe = Path.Combine(installRoot, $".wl-write-check-{System.Guid.NewGuid():N}");
+            File.WriteAllBytes(probe, [0]);
+            File.Delete(probe);
+        }
+        catch (System.Exception ex)
+        {
+            _log.Error(ex, "Install folder not writable: {Dir}", installRoot);
+            DownloadErrorDetail = Loc.T("Play_Error_InstallDirNotWritable");
+            State = LauncherState.DownloadError;
+            return;
+        }
+
+        _downloadCts?.Dispose();
+        _downloadCts = new CancellationTokenSource();
+        var ct = _downloadCts.Token;
+
+        State = LauncherState.Downloading;
+        DownloadProgress = 0;
+        // Direct literal Loc.T("...") calls throughout this method on purpose, never a ternary
+        // choosing the key — LocalizationCatalogTests.Catalog_has_no_unused_keys finds a key only via
+        // a literal "Key" argument at the call site, so a key reachable only through a computed
+        // ternary reads as unused and fails that test even though it IS wired up.
+        DownloadDetail = (repair ? Loc.T("Patch_Status_Repairing") : Loc.T("Patch_Status_Planning")) + "…";
+
+        var progress = new System.Progress<WowLauncher.Services.Patching.PatchProgress>(p =>
+        {
+            string label;
+            if (p.State == WowLauncher.Services.Patching.PatchState.Plan) label = Loc.T("Patch_Status_Planning");
+            else if (p.State == WowLauncher.Services.Patching.PatchState.Delta) label = Loc.T("Patch_Status_Delta");
+            else if (p.State == WowLauncher.Services.Patching.PatchState.PerFile)
+                label = repair ? Loc.T("Patch_Status_Repairing") : Loc.T("Patch_Status_PerFile");
+            else if (p.State == WowLauncher.Services.Patching.PatchState.Verify) label = Loc.T("Patch_Status_Verifying");
+            else if (p.State == WowLauncher.Services.Patching.PatchState.FullZip) label = Loc.T("Play_Detail_Extracting");
+            else if (p.State == WowLauncher.Services.Patching.PatchState.UpToDate) label = Loc.T("Patch_Status_UpToDate");
+            else label = p.Detail ?? "";
+            DownloadDetail = p.TotalBytes > 0
+                ? $"{label} ({p.BytesDownloaded / 1_048_576.0:F0} / {p.TotalBytes / 1_048_576.0:F0} MB)"
+                : label;
+            if (p.TotalBytes > 0)
+                DownloadProgress = 100.0 * p.BytesDownloaded / p.TotalBytes;
+        });
+
+        WowLauncher.Services.Patching.PatchOutcome outcome;
+        try
+        {
+            outcome = await _patchEngine!.RunAsync(client, installRoot, forcePerFile: repair, progress, ct);
+        }
+        catch (OperationCanceledException)
+        {
+            _log.Information("Patch paused by the player for build {Build}", build);
+            State = LauncherState.Paused;
+            return;
+        }
+        catch (System.Exception ex)
+        {
+            _log.Error(ex, "patch: engine threw for build {Build}", build);
+            DownloadErrorDetail = Loc.T("Play_Error_ExtractFailed");
+            State = LauncherState.DownloadError;
+            return;
+        }
+
+        var foreignCount = outcome.Findings.Count(f => f.Code == WowLauncher.Services.Patching.PatchFinding.ForeignFile);
+        if (foreignCount > 0)
+            _log.Warning("patch: {Count} foreign file(s) left alone under {Root}", foreignCount, installRoot);
+
+        if (outcome.State == WowLauncher.Services.Patching.PatchState.GameRunning)
+        {
+            DownloadErrorDetail = Loc.T("Play_Error_GameRunning");
+            State = LauncherState.DownloadError;
+            return;
+        }
+
+        if (!outcome.Ok)
+        {
+            _log.Error("patch: engine failed for build {Build}: {Error} ({Findings})",
+                build, outcome.ErrorMessage, string.Join(", ", outcome.Findings.Select(f => f.Code)));
+            DownloadErrorDetail = outcome.ErrorMessage ?? Loc.T("Play_Error_ExtractFailed");
+            State = LauncherState.DownloadError;
+            return;
+        }
+
+        var installedExe = _client.FindWowExe(installRoot) ?? "";
+        if (string.IsNullOrEmpty(installedExe))
+        {
+            _log.Error("No client executable under {Dir} after patching build {Build}", installRoot, build);
+            DownloadErrorDetail = Loc.T("Play_Error_NoExeAfterExtract");
+            State = LauncherState.DownloadError;
+            return;
+        }
+
+        var cfgNow = _config.Load();
+        cfgNow.ClientInstalls[build] = Path.GetDirectoryName(installedExe) ?? installRoot;
+        if (!string.IsNullOrEmpty(client.Version))
+            cfgNow.InstalledClientVersions[build] = client.Version;
+        _config.Save(cfgNow);
+        _wowPath = installedExe;
+
+        State = LauncherState.Ready;
+        if (foreignCount > 0)
+            ReadyDetail = Loc.F("Patch_Status_ForeignFiles", foreignCount);
+        _log.Information(
+            "patch: build {Build} → {Route}, {Files} file(s) changed, {Bytes} byte(s) downloaded",
+            build, outcome.Route, outcome.FilesChanged, outcome.BytesDownloaded);
     }
 
     /// <summary>
@@ -1667,6 +2124,16 @@ public sealed partial class PlayViewModel : ViewModelBase
         if (IsBusy)
         {
             _log.Warning("Repair request ignored: an operation is already running ({State})", State);
+            return;
+        }
+
+        // S2 (ARCHITEKTUR-v2-patcher.md §4): a manifest entry with files_sha256+files_base drives
+        // Repair through the patch engine, forced straight to PER_FILE — no ZIP re-download, no
+        // whole-tree re-extract, just a hash-scan and single-file fetch of whatever actually differs.
+        // Everything below this block is exactly the pre-S2 behaviour, untouched.
+        if (UseV2PatchEngine)
+        {
+            await RunPatchEngineAsync(repair: true);
             return;
         }
 
@@ -1725,6 +2192,19 @@ public sealed partial class PlayViewModel : ViewModelBase
             return;
         }
 
+        if (report.LooksLikeADifferentPackage)
+        {
+            // Same reasoning as in the locate path: nothing of this package is installed here, so there
+            // is nothing to repair. Downloading 8 GB over a client the player brought himself is not a
+            // repair, it is a replacement he did not ask for.
+            _log.Information(
+                "Repair: build {Build} is not the Stonetavern package ({Checkable} manifest files, none of them here) — nothing to repair",
+                build, report.Checkable);
+            State = LauncherState.Ready;
+            ReadyDetail = Loc.T("Play_ForeignClient_NotOurs");
+            return;
+        }
+
         var brokenCount = report.Missing.Count + report.Corrupt.Count;
         _log.Information(
             "Repair: {Broken} of {Total} files need repair for build {Build} (missing {Missing}, corrupt {Corrupt}) — downloading a fresh client",
@@ -1747,6 +2227,26 @@ public sealed partial class PlayViewModel : ViewModelBase
         if (IsBusy && !skipBusyGuard)
         {
             _log.Warning("Download request ignored: an operation is already running ({State})", State);
+            return;
+        }
+
+        // 🔴 Every run starts without an error sentence from the previous one. DownloadErrorDetail was
+        // the only one of the three detail fields nobody ever cleared (ReadyDetail clears on every
+        // state change, LaunchFailedDetail at the top of LaunchCoreAsync) — so a player who tripped the
+        // disk-space guard once read "not enough disk space" on every LATER failure of any kind, for as
+        // long as the launcher stayed open. That is how a swallowed extraction error reaches the
+        // support mailbox as "says no disk space although there is plenty" (2026-08-26 / 2026-09-04):
+        // the sentence was true once and then outlived its cause.
+        DownloadErrorDetail = "";
+        InstallEnvironmentHint = "";
+
+        // S2 (ARCHITEKTUR-v2-patcher.md §4): a manifest entry that publishes both files_sha256 AND
+        // files_base drives Download/Update/Resume through the patch engine instead of the whole-ZIP
+        // path below. A manifest without those two fields (today's normal case, and every 1.8.x
+        // manifest) takes exactly the ZIP path unchanged — no behaviour change, no new code path.
+        if (UseV2PatchEngine)
+        {
+            await RunPatchEngineAsync(repair: repair);
             return;
         }
 
@@ -1793,6 +2293,42 @@ public sealed partial class PlayViewModel : ViewModelBase
         var size = _downloadSize;
         var version = _clientVersion;
 
+        // 🔴 Der Abbruch, der die Schleife beendet (ST-KQYG-ARA3 und die vier Extraktions-Meldungen
+        // vom 28.08.-04.09.2026). Bis hier gab es für den CLIENT-Download keine Obergrenze: jeder
+        // Versuch, der NACH dem vollständigen Transfer scheiterte — Prüfsumme falsch, Entpacken
+        // gescheitert, keine Exe im Ergebnis — hinterließ denselben Zustand wie vorher, und der
+        // nächste Klick lud dieselben Gigabyte noch einmal. Der UpdateAttemptLedger deckt das NICHT
+        // ab: der zählt ausschließlich den Selbst-Update des Launchers, und er muss dafür auf Platte
+        // schreiben, weil der Launcher zwischen zwei Versuchen beendet ist. Hier ist er es nicht —
+        // die Schleife läuft in EINER Sitzung (im gemeldeten Protokoll vier Durchläufe in vier
+        // Minuten), also ist der Zähler in dieser Sitzung das strukturell passende Messmittel.
+        // Bewusst NICHT gezählt werden Netzfehler und Pausen: die zu wiederholen ist richtig.
+        var attemptKey = (build, sha);
+        if (_failedInstalls.TryGetValue(attemptKey, out var failedSoFar) && failedSoFar.Count >= MaxInstallAttempts)
+        {
+            _log.Error(
+                "Client install for build {Build} refused: {Count} attempts already failed after a completed download — last reason: {Reason}",
+                build, failedSoFar.Count, failedSoFar.Reason);
+            // Aufgeben heißt auch aufräumen. Das behaltene Archiv nützt nur dem nächsten Versuch —
+            // gibt es keinen mehr, sind es bloß noch acht Gigabyte auf einer Platte, die schon knapp
+            // war, und auf Windows liegen sie dauerhaft neben dem Launcher (Codex-Review 2026-09-14).
+            //
+            // Ob aufgeräumt wurde, steht beim Eintrag und nicht im Ergebnis DIESES Löschversuchs:
+            // sonst trüge nur der erste abgewiesene Klick den Satz, und jeder weitere ließe ihn
+            // wieder verschwinden — dieselbe Sorte Text-ohne-Kontext, die dieser Patch an anderer
+            // Stelle gerade abgestellt hat.
+            if (!failedSoFar.CacheFreed)
+            {
+                var freedNow = DiscardCachedArchive(_paths.ClientDownloadZip(build), "install given up");
+                failedSoFar = (failedSoFar.Count, failedSoFar.Reason, failedSoFar.CacheFreed || freedNow);
+                _failedInstalls[attemptKey] = failedSoFar;
+            }
+            DownloadErrorDetail = Loc.F("Play_Error_InstallGivenUp", MaxInstallAttempts, failedSoFar.Reason)
+                + (failedSoFar.CacheFreed ? " " + Loc.T("Play_Error_CacheFreed") : "");
+            State = LauncherState.DownloadError;
+            return;
+        }
+
         var cfgPre = _config.Load();
         var isFreshInstall = !repair && !(cfgPre.ClientInstalls.TryGetValue(build, out var alreadyInstalled)
                                            && !string.IsNullOrWhiteSpace(alreadyInstalled));
@@ -1828,6 +2364,42 @@ public sealed partial class PlayViewModel : ViewModelBase
                 ? recorded
                 : _paths.ClientInstallDir(build));
 
+        // 🔴 Stolperfallen-Preflight (release 1.8.11): elevation, a system/synced/protected folder, and
+        // an install path too long for this 32-bit legacy client — caught HERE, before the first byte
+        // moves, instead of surfacing later as a failed download or a repair that can never succeed.
+        // WriteProbeSucceeded/GameProcessRunning are fed as "already fine": both are checked separately
+        // in this method (the probe immediately below, the running-game guard further up, which already
+        // returned if it found one) with their own established messages — asking the preflight to
+        // re-check them here would only duplicate work and could show two different sentences for the
+        // same fact. HasQuarantineAttr/TRANSLOCATED are a launcher-bundle concern, not a download-target
+        // one, and are wired into the self-update swap in UpdateService instead.
+        var preflight = InstallEnvironmentPreflight.Evaluate(new InstallEnvironmentFacts(
+            Os: InstallEnvironmentProbes.CurrentOs(),
+            LauncherBaseDir: AppContext.BaseDirectory,
+            TargetInstallDir: installRoot,
+            IsElevated: InstallEnvironmentProbes.IsElevated(),
+            EnvironmentVars: InstallEnvironmentProbes.CollectEnvironmentVars(),
+            HasQuarantineAttr: false,
+            WriteProbeSucceeded: true,
+            LongestRelativePathInManifest: InstallEnvironmentPreflight.DefaultLongestRelativePathReserve,
+            GameProcessRunning: false));
+
+        foreach (var finding in preflight)
+            _log.Warning("Preflight {Severity} {Code} for install folder {Dir}: {Message}",
+                finding.Severity, finding.Code, installRoot, InstallEnvironmentPreflight.DisplayText(finding));
+
+        var blockingFinding = preflight.FirstOrDefault(f => f.Severity == PreflightSeverity.Block);
+        if (blockingFinding is not null)
+        {
+            DownloadErrorDetail = InstallEnvironmentPreflight.DisplayText(blockingFinding);
+            State = LauncherState.DownloadError;
+            return;
+        }
+
+        var warningFinding = preflight.FirstOrDefault(f => f.Severity == PreflightSeverity.Warn);
+        if (warningFinding is not null)
+            InstallEnvironmentHint = InstallEnvironmentPreflight.DisplayText(warningFinding);
+
         // Writability + free-space check BEFORE the (multi-GB) transfer starts — the same "refuse
         // early, not after minutes of transfer" reasoning as the missing-SHA256 guard above.
         try
@@ -1845,26 +2417,105 @@ public sealed partial class PlayViewModel : ViewModelBase
             return;
         }
 
+        // 🔴 Erst nachsehen, ob das Archiv schon da ist — DANN den Platz verlangen. Ein vollständiges
+        // Archiv im Zwischenspeicher heißt: der Transfer findet nicht noch einmal statt, also fehlt
+        // auch sein Platz nicht mehr. Bis 2026-09-14 stand die Prüfung davor und verlangte immer die
+        // vollen ~18,4 GB des macOS-Pakets, obwohl das behaltene Archiv selbst schon 8,3 GB davon
+        // belegte — der billige zweite Versuch konnte also genau an der Sperre scheitern, die er
+        // umgehen sollte (Codex-Review 2026-09-14). „Vollständig" heißt hier: Länge wie im Manifest.
+        // Das ist kein Integritätsbeweis und soll keiner sein — der Hash weiter unten bleibt das Tor,
+        // hier geht es nur um die Frage, wie viele Bytes noch fließen müssen.
+        var cachedZipPath = _paths.ClientDownloadZip(build);
+        var archiveCached = false;
+        try
+        {
+            archiveCached = size > 0 && File.Exists(cachedZipPath)
+                            && new FileInfo(cachedZipPath).Length == size;
+        }
+        catch (System.Exception ex) { _log.Debug(ex, "Could not size the cached archive {Zip}", cachedZipPath); }
+
         if (size > 0)
         {
             try
             {
-                var driveRoot = Path.GetPathRoot(Path.GetFullPath(installRoot));
-                if (!string.IsNullOrEmpty(driveRoot))
+                // 🔴 Zwei Betraege, moeglicherweise zwei Datentraeger: das Archiv geht in den
+                // Zwischenspeicher, der entpackte Baum in den Installationsordner. Getrennt gerechnet
+                // wird nur, wenn sie NACHWEISLICH auf verschiedenen Dateisystemen liegen — bei einer
+                // fehlgeschlagenen Messung (null) bleibt es bei der vollen Summe, sonst liesse ein
+                // kaputtes Messmittel den Launcher in einen Download, fuer den der Platz nicht reicht.
+                var sameVolume = SameVolume(cachedZipPath, installRoot);
+                var separateVolumes = sameVolume == false;
+
+                var drive = DiskSpace.ForPath(installRoot);
+                if (drive is not null)
                 {
-                    var drive = new DriveInfo(driveRoot);
+                    var driveRoot = drive.Name;
                     // The extracted client is materially larger than the compressed download, and we
                     // have no per-file manifest size here (that is Repair's optional files_url, not the
                     // base client entry) — a flat multiplier plus fixed headroom is a conservative,
                     // config-free stand-in: good enough to refuse BEFORE a multi-GB transfer that could
                     // never finish, rather than failing partway through with a half-written client.
-                    var required = (long)(size * 2.2) + 500L * 1024 * 1024;
+                    var required = RequiredFreeBytes(size, archiveCached, cacheOnSameVolume: !separateVolumes);
                     if (drive.AvailableFreeSpace < required)
                     {
                         _log.Warning(
-                            "Not enough disk space for build {Build}: need ~{Need} MB, have {Have} MB on {Drive}",
-                            build, required / 1_048_576, drive.AvailableFreeSpace / 1_048_576, driveRoot);
-                        DownloadErrorDetail = Loc.T("Play_Error_NoDiskSpace");
+                            "Not enough disk space for build {Build}: need ~{Need} MB, have {Have} MB on {Drive} (target {Dir})",
+                            build, required / 1_048_576, drive.AvailableFreeSpace / 1_048_576, driveRoot, installRoot);
+                        // Der Platz reicht nicht einmal mit dem Archiv im Rücken. Es hilft also nicht
+                        // mehr — aber weggeworfen wird es nur, wenn das auf DEM gemessenen Laufwerk
+                        // etwas bringt (siehe PlanShortfall).
+                        var plan = PlanShortfall(archiveCached, cacheOnSameVolume: sameVolume == true);
+                        var cacheFreed = plan.FreeTheCache
+                                         && DiscardCachedArchive(cachedZipPath, "not enough disk space");
+
+                        // 🔴 Die Zahlen beschreiben den Zustand NACH dem Aufräumen — also genau den,
+                        // gegen den der nächste Klick rechnet. Und sie nennen den Ordner, den der
+                        // Launcher wirklich gemessen hat; der frühere Rat, in den Einstellungen einen
+                        // anderen Installationsordner zu wählen, war eine Sackgasse: bei Reparatur und
+                        // Update nimmt DownloadAsync ausdrücklich den EINGETRAGENEN Ordner
+                        // (ClientInstalls[build]) und liest PreferredInstallRoot gar nicht. Im
+                        // Protokoll zu ST-KQYG-ARA3 steht diese Warnung dreizehnmal.
+                        var requiredNext = RequirementAfterCleanup(size, archiveCached, cacheFreed,
+                            cacheOnSameVolume: !separateVolumes);
+                        var freeNow = DiskSpace.ForPath(installRoot)?.AvailableFreeSpace
+                                      ?? drive.AvailableFreeSpace;
+                        DownloadErrorDetail = Loc.F("Play_Error_NoDiskSpace",
+                            $"{requiredNext / 1_073_741_824.0:F1}",
+                            $"{freeNow / 1_073_741_824.0:F1}",
+                            installRoot);
+                        if (cacheFreed)
+                            DownloadErrorDetail += " " + Loc.T("Play_Error_CacheFreed");
+                        else if (plan.PointAtOtherDrive)
+                            // Nicht gelöscht, weil es auf dem gemessenen Laufwerk nichts brächte —
+                            // dafür gesagt, WO es liegt, damit die richtige Platte aufgeräumt wird.
+                            DownloadErrorDetail += " " + Loc.F("Play_Error_CacheOnOtherDrive", cachedZipPath);
+                        State = LauncherState.DownloadError;
+                        return;
+                    }
+                }
+
+                // 🔴 Und jetzt das Laufwerk, auf dem das Archiv wirklich landet. Es wurde bis
+                // 2026-09-14 ueberhaupt nie gemessen: liegt der Client auf einer geraeumigen zweiten
+                // Platte, waehrend die Systemplatte mit dem Zwischenspeicher voll ist, lief der
+                // Transfer minutenlang und endete an einer Wand, vor der diese Vorpruefung steht.
+                // Nur noetig, wenn die Betraege getrennt sind und ueberhaupt noch Bytes fliessen —
+                // sonst hat die Pruefung oben den Download schon mitverlangt.
+                var cacheDrive = separateVolumes ? DiskSpace.ForPath(cachedZipPath) : null;
+                if (cacheDrive is not null)
+                {
+                    var cacheNeed = CacheShortfall(size, archiveCached, separateVolumes,
+                        cacheDrive.AvailableFreeSpace);
+                    if (cacheNeed is { } need)
+                    {
+                        var cacheDir = Path.GetDirectoryName(cachedZipPath) ?? cachedZipPath;
+                        _log.Warning(
+                            "Not enough scratch space for build {Build}: need ~{Need} MB, have {Have} MB on {Drive} (cache {Dir})",
+                            build, need / 1_048_576, cacheDrive.AvailableFreeSpace / 1_048_576,
+                            cacheDrive.Name, cacheDir);
+                        DownloadErrorDetail = Loc.F("Play_Error_NoCacheSpace",
+                            $"{need / 1_073_741_824.0:F1}",
+                            $"{cacheDrive.AvailableFreeSpace / 1_073_741_824.0:F1}",
+                            cacheDir);
                         State = LauncherState.DownloadError;
                         return;
                     }
@@ -1973,7 +2624,23 @@ public sealed partial class PlayViewModel : ViewModelBase
             {
                 _log.Error("SHA256 check failed — download discarded, nothing was overwritten");
                 try { File.Delete(zipPath); } catch { /* regenerable */ }
+                // Counts against the attempt budget: a mismatching archive costs the full transfer and
+                // comes back identical on the next try when the cause is the published file, not the
+                // line. Discarded rather than kept — an unverified archive is never extracted.
+                NoteInstallFailed(attemptKey, DownloadResult.Fail(DownloadFailure.HashMismatch).UserMessage);
                 DownloadErrorDetail = DownloadResult.Fail(DownloadFailure.HashMismatch).UserMessage;
+                State = LauncherState.DownloadError;
+                return;
+            }
+
+            // The same refusal as before the download, minutes later: a player who started the game
+            // while the download ran holds locks on the very files about to be replaced, and the
+            // extraction would die half-way with a client that is neither old nor new. The zip stays
+            // in the cache for the next attempt.
+            if (_client.IsGameRunning())
+            {
+                _log.Warning("Extraction refused: WoW was started during the download");
+                DownloadErrorDetail = Loc.T("Play_Error_GameRunning");
                 State = LauncherState.DownloadError;
                 return;
             }
@@ -1991,13 +2658,71 @@ public sealed partial class PlayViewModel : ViewModelBase
                     : installRoot;
             // ExtractClientAsync preserves WTF/, Interface/AddOns/, Screenshots/, realmlist.wtf —
             // a clean update/repair never clobbers player data (Hermes Q1 preserve-list).
-            var extracted = await _download.ExtractClientAsync(zipPath, extractDir);
-            try { File.Delete(zipPath); } catch { /* regenerable */ }
+            // Fresh install: destDir is the player's answer, never a starting point for a search.
+            // The extractor must not re-root onto a neighbouring install — and it must not decide that
+            // from the state of the folder either, because a crashed first attempt leaves that folder
+            // filled and would flip the decision on the retry.
+            var outcome = await _download.ExtractClientWithReasonAsync(
+                zipPath, extractDir, freshInstall: isFreshInstall && !repair);
 
-            if (!extracted) { State = LauncherState.DownloadError; return; }
+            // 🔴 Das Archiv wird erst nach einem GELUNGENEN Entpacken weggeworfen. Bis 2026-09-14
+            // stand das Löschen VOR der Erfolgsprüfung: ein gescheitertes Entpacken warf damit das
+            // eben geprüfte Mehr-Gigabyte-Archiv weg, und der nächste Versuch musste alles noch
+            // einmal holen — um an derselben Stelle zu scheitern. Genau diese Schleife steht in vier
+            // unabhängigen Meldungen ("1.14.2 Client repeatedly downloads and fails to extract").
+            // Der Zwischenspeicher-Zweig oben ist dafür gebaut, prüft das Archiv erneut gegen den
+            // Manifest-Hash und macht den zweiten Versuch zur Sache von Minuten. Ein Archiv zu
+            // behalten ist ungefährlich: entpackt wird nur, was vorher gegen den Hash geprüft wurde.
+            if (!outcome.Ok)
+            {
+                // 🔴 Nur zählen, was sich durch Wiederholen nicht ändert. Abbruch, volle Platte,
+                // gehaltene Datei und fehlende Rechte sind die Maschine des Spielers, kein kaputtes
+                // Paket: wer nach dem dritten Fehlschlag Platz schafft oder WoW schließt, darf nicht
+                // ausgesperrt sein (Codex-Review 2026-09-14). Bis dahin reduzierte der Extraktor all
+                // das auf dasselbe `false` und jeder Grund verbrauchte einen Versuch.
+                var message = outcome.Failure switch
+                {
+                    ExtractFailure.DiskFull => Loc.T("Play_Error_ExtractDiskFull"),
+                    ExtractFailure.FileLocked or ExtractFailure.AccessDenied => Loc.T("Play_Error_ExtractBlocked"),
+                    ExtractFailure.BadArchive => Loc.T("Play_Error_ExtractBadArchive"),
+                    ExtractFailure.TargetUnusable => Loc.T("Play_Error_ExtractTargetUnusable"),
+                    _ => Loc.T("Play_Error_ExtractFailed"),
+                };
+                if (!outcome.IsEnvironmental) NoteInstallFailed(attemptKey, message);
+                _log.Error(
+                    "Extraction failed for build {Build} ({Failure}, counts against the budget: {Counts}) — the verified archive is kept at {Zip}",
+                    build, outcome.Failure, !outcome.IsEnvironmental, zipPath);
+
+                // Ein Abbruch ist kein Fehler: das Archiv liegt geprüft da und der nächste Anlauf
+                // entpackt es in Sekunden. Heute kann das nur eine Attrappe melden — der Aufruf oben
+                // reicht (noch) kein Abbruch-Token ins Entpacken —, aber der Zustand gehört hierhin
+                // und nicht in einen Fehlerzustand, sobald er es tut.
+                if (outcome.Failure == ExtractFailure.Cancelled)
+                {
+                    State = LauncherState.Paused;
+                    return;
+                }
+
+                DownloadErrorDetail = message;
+                State = LauncherState.DownloadError;
+                return;
+            }
 
             var installedExe = _client.FindWowExe(extractDir) ?? "";
-            if (string.IsNullOrEmpty(installedExe)) { State = LauncherState.DownloadError; return; }
+            if (string.IsNullOrEmpty(installedExe))
+            {
+                // Entpackt, aber es liegt keine Client-Exe im Ergebnis. Bis hier endete das in einem
+                // wortlosen "Download fehlgeschlagen" — dem Satz, mit dem die Meldungen anfangen.
+                NoteInstallFailed(attemptKey, Loc.T("Play_Error_NoExeAfterExtract"));
+                _log.Error("No client executable under {Dir} after extracting build {Build} — the archive is kept at {Zip}",
+                    extractDir, build, zipPath);
+                DownloadErrorDetail = Loc.T("Play_Error_NoExeAfterExtract");
+                State = LauncherState.DownloadError;
+                return;
+            }
+
+            try { File.Delete(zipPath); } catch { /* regenerable */ }
+            _failedInstalls.Remove(attemptKey);   // installed: the budget for this build/version is fresh again
 
             // Register the install + its version so future starts know it's current (§6.3). Keyed off
             // the CAPTURED build, never the live field: registering a path under an era the player
@@ -2098,6 +2823,55 @@ public sealed partial class PlayViewModel : ViewModelBase
             }
         }
 
+        // 1.12.1 caches the realm's item, quest and NPC text in WDB/ and never refreshes it, so a realm
+        // fix stays invisible until the cache is gone. Cleared on every start, as the communities around
+        // this client do; it refills while playing (Owner 2026-09-22, BEFUND-2026-09-22-classic-fixes).
+        if (!ClientVersion.ExeNameNeedsModernRuntime(Path.GetFileName(wow)))
+        {
+            var cleared = WdbCache.Clear(wowDir, _log);
+            if (cleared > 0) _log.Information("Cleared {Count} WDB cache files before the start", cleared);
+        }
+
+        // ── Die Laufzeitumgebung, die der Mac zum Zeichnen braucht ─────────────────────────────────
+        // Auf Windows und Linux tut das nichts. Auf dem Mac holt es beim ERSTEN Spielen den freien
+        // Werkzeugkasten nach, den der Spieler bis zum 2026-08-24 selbst finden, entpacken und mit
+        // zwei Terminal-Befehlen entsperren musste -- was ihm niemand sagte. Ein Spieler hing damit
+        // einen Abend fest und installierte am Ende ein Wine, das dieser Launcher gar nicht ansieht.
+        //
+        // Bewusst HIER und nicht beim Start des Launchers: wer nie spielt, laedt auch nichts, und der
+        // Fortschritt kann dieselbe Anzeige benutzen wie der Client-Download.
+        if (_runtime is { } runtime && runtime.NeedsRuntimeForExe(wow))
+        {
+            var runtimeProgress = new System.Progress<DownloadProgress>(p =>
+            {
+                if (p.Waiting is { } wait)
+                {
+                    DownloadDetail = Loc.F("Play_Detail_Reconnecting",
+                        (int)System.Math.Round(wait.In.TotalSeconds), wait.Attempt, wait.Of);
+                    return;
+                }
+                DownloadProgress = p.Percentage;
+                DownloadDetail = Loc.F("Play_Detail_Progress",
+                    $"{p.BytesDownloaded / 1_048_576.0:F0}",
+                    $"{p.TotalBytes / 1_048_576.0:F0}",
+                    $"{p.SpeedBytesPerSecond / 1_048_576.0:F1}");
+            });
+            var runtimeStep = new System.Progress<string>(text => LaunchFailedDetail = text);
+
+            var ready = await runtime.EnsureForExeAsync(wow, runtimeProgress, runtimeStep);
+            if (!ready.Ok)
+            {
+                // Der Satz aus dem Dienst sagt, was zu tun ist -- nicht nur, was kaputt war.
+                _log.Error("Runtime not ready: {Error}", ready.Error);
+                LaunchFailedDetail = ready.Error ?? Loc.T("Runtime_Fail_Incomplete");
+                State = LauncherState.LaunchFailed;
+                return;
+            }
+            LaunchFailedDetail = "";
+            DownloadProgress = 0;
+            DownloadDetail = "";
+        }
+
         _client.ConfigureClient(wowDir, launchLocale, RealmAddress);
         var result = await _client.LaunchAsync(wow);
 
@@ -2148,7 +2922,27 @@ public sealed partial class PlayViewModel : ViewModelBase
         try
         {
             if (_session is not null)
+            {
                 await _session.MonitorUntilExitAsync(clientExePath);
+                if (_session.ProxyDiedDuringSession)
+                    // Deliberately a log line and not a dialog: the player is already back at the
+                    // launcher and a popup about a session that is over helps nobody. What was missing
+                    // was the CAUSE in the artefact a player actually sends us — the redacted log
+                    // inside a problem report. Four reports of "when i start playing it disconnect me"
+                    // arrived without a single line explaining them.
+                    _log.Error("The realm proxy died mid-session — this is the cause of the disconnect "
+                             + "the player just experienced, and it was ours, not the realm's");
+            }
+            // Windows confirms a start at once, so a loader that Data Execution Prevention or an antivirus
+            // blocked used to bring the launcher back without a word. The continuation runs on the UI
+            // context (no ConfigureAwait above), so the state can be set here.
+            if (_session is not null && _session.ClientEndedRightAfterStart && System.OperatingSystem.IsWindows()
+                && !ClientVersion.ExeNameNeedsModernRuntime(Path.GetFileName(clientExePath)))
+            {
+                _log.Error("The 1.12.1 client ended right after its start (loader blocked?): {Path}", clientExePath);
+                LaunchFailedDetail = Loc.T("Play_Error_ClosedRightAway");
+                State = LauncherState.LaunchFailed;
+            }
             // RestoreFromTray is thread-safe (App marshals to the UI thread), so it is fine to call it
             // from this background continuation.
             _windowController?.RestoreFromTray();

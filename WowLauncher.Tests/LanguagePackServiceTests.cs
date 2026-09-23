@@ -206,6 +206,76 @@ public sealed class LanguagePackServiceTests : IDisposable
         Assert.False(Directory.Exists(staging) && Directory.EnumerateFiles(staging).Any());
     }
 
+    /// <summary>
+    /// A failed re-install must not cost the player the language they already had.
+    ///
+    /// <para>Until 2026-08-31 the unpack wrote straight into the installed file with
+    /// <c>overwrite: true</c> and the failure handler deleted that file. So a player with a working
+    /// German client who merely ran the language update again, and hit anything that made the archive
+    /// unreadable halfway through, ended up with no German at all — from an operation that should
+    /// have been a no-op. The pack is now unpacked beside the installed one and renamed over it, so
+    /// every failure before the rename leaves the old file untouched.</para>
+    /// </summary>
+    [Fact]
+    public async Task AnUnpackThatFails_LeavesTheAlreadyInstalledPackIntact()
+    {
+        var packFile = VanillaLocalePacks.PackPath(_root, "deDE");
+        Directory.CreateDirectory(Path.GetDirectoryName(packFile)!);
+        File.WriteAllText(packFile, "the-pack-the-player-already-had");
+
+        var downloads = new FakeDownloads { OnDownload = dest => WriteCorruptZip(dest) };
+        var svc = NewService(downloads);
+
+        var result = await svc.UpdateAsync(_root, "deDE", Pack("deDE"));
+
+        Assert.False(result.Ok);
+        Assert.True(File.Exists(packFile), "the language pack that was already installed was deleted");
+        Assert.Equal("the-pack-the-player-already-had", File.ReadAllText(packFile));
+    }
+
+    /// <summary>No half-written sibling may be left lying next to the pack either — a stale
+    /// <c>.new-*</c> file is several hundred megabytes of a player's disk that nothing ever
+    /// reclaims.</summary>
+    [Fact]
+    public async Task AnUnpackThatFails_LeavesNoStagingFileBehind()
+    {
+        var packFile = VanillaLocalePacks.PackPath(_root, "deDE");
+        Directory.CreateDirectory(Path.GetDirectoryName(packFile)!);
+        File.WriteAllText(packFile, "the-pack-the-player-already-had");
+
+        var svc = NewService(new FakeDownloads { OnDownload = dest => WriteCorruptZip(dest) });
+        await svc.UpdateAsync(_root, "deDE", Pack("deDE"));
+
+        var leftovers = Directory.GetFiles(Path.GetDirectoryName(packFile)!, "*.new-*");
+        Assert.Empty(leftovers);
+    }
+
+    /// <summary>A zip whose central directory is valid — so the entry is found and its declared size
+    /// is read — but whose compressed bytes are not, so extraction throws once it starts streaming.
+    /// That is the shape of a truncated or bit-rotted download.</summary>
+    private static void WriteCorruptZip(string path)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+
+        // Incompressible payload, so the deflate stream is roughly as long as the data and there is
+        // plenty of it to damage. A short compressible entry would leave the corruption offset past
+        // the end of the payload — the archive would still extract cleanly and the test would prove
+        // nothing (measured: that is exactly what a 4 KB run of 'x' did).
+        var payload = new byte[256 * 1024];
+        new Random(1312).NextBytes(payload);
+        using (var zip = ZipFile.Open(path, ZipArchiveMode.Create))
+        using (var entry = zip.CreateEntry("Data/deDE/locale-deDE.MPQ").Open())
+            entry.Write(payload, 0, payload.Length);
+
+        var bytes = File.ReadAllBytes(path);
+        Assert.True(bytes.Length > 60_000, "the fixture archive is too small to corrupt meaningfully");
+        // Well inside the compressed payload: the central directory at the end of the file stays
+        // readable, so the entry and its declared size are still found and extraction gets as far as
+        // streaming bytes — which is where it must fail.
+        for (var i = 1_000; i < 40_000; i++) bytes[i] ^= 0xFF;
+        File.WriteAllBytes(path, bytes);
+    }
+
     private sealed class FakeDownloads : IDownloadService
     {
         public int Calls { get; private set; }
@@ -234,5 +304,15 @@ public sealed class LanguagePackServiceTests : IDisposable
 
         public Task<bool> VerifyHashAsync(string path, string expectedSha256, CancellationToken ct = default) =>
             Task.FromResult(HashOk);
+    
+        /// <summary>Pflichtteil der Schnittstelle: ohne Grund gilt der Fehlschlag als nicht behebbar,
+        /// also als kaputtes Paket. Das ist die sichere Richtung fuer eine Attrappe.</summary>
+        public async System.Threading.Tasks.Task<WowLauncher.Models.ExtractOutcome> ExtractClientWithReasonAsync(
+            string zipPath, string destDir, bool freshInstall,
+            System.IProgress<string>? progress = null,
+            System.Threading.CancellationToken ct = default) =>
+            await ExtractClientAsync(zipPath, destDir, progress, ct).ConfigureAwait(false)
+                ? WowLauncher.Models.ExtractOutcome.Success
+                : WowLauncher.Models.ExtractOutcome.Fail(WowLauncher.Models.ExtractFailure.Unknown);
     }
 }

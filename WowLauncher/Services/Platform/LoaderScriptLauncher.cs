@@ -48,6 +48,8 @@ public sealed class LoaderScriptLauncher : IGameLauncher
     private readonly Serilog.ILogger _log;
     private readonly Func<string, IReadOnlyDictionary<string, string>, GameLaunchResult>? _runScript;
     private readonly Func<string?>? _realmAddress;
+    private readonly IClientDisplayService? _display;
+    private readonly Func<string?>? _legacyClientDir;
 
     /// <param name="inner">The launcher used when there is no loader script (the existing wine start).</param>
     /// <param name="realmAddress">The realm this launch goes to. The loader script writes the realmlist
@@ -61,8 +63,12 @@ public sealed class LoaderScriptLauncher : IGameLauncher
         IGameLauncher inner,
         Serilog.ILogger log,
         Func<string?>? realmAddress = null,
-        Func<string, IReadOnlyDictionary<string, string>, GameLaunchResult>? runScript = null)
+        Func<string, IReadOnlyDictionary<string, string>, GameLaunchResult>? runScript = null,
+        IClientDisplayService? display = null,
+        Func<string?>? legacyClientDir = null)
     {
+        _display = display;
+        _legacyClientDir = legacyClientDir;
         _inner = inner;
         _log = log;
         _realmAddress = realmAddress;
@@ -79,7 +85,28 @@ public sealed class LoaderScriptLauncher : IGameLauncher
     /// erst hat die Weiche den Falschen gefragt, dann hat diese Huelle gar nicht gefragt. Deshalb
     /// steht der Hinweis auch hier und nicht nur einmal.</para>
     /// </summary>
-    public Task<string?> CheckReadyAsync(string exeName) => _inner.CheckReadyAsync(exeName);
+    public async Task<string?> CheckReadyAsync(string exeName)
+    {
+        // A package that ships START.sh brings its own pinned Proton (2026-09-22): asking for a system
+        // Wine here would refuse exactly the machine the script was built for. Ask the script instead.
+        if (!WowLauncher.Models.ClientVersion.ExeNameNeedsModernRuntime(exeName)
+            && LinuxStartScript.Find(_legacyClientDir?.Invoke()) is { } start)
+        {
+            try
+            {
+                var (exit, stderr) = await LinuxStartScript.RunAsync(
+                    start, "--check", onStdout: null, timeout: TimeSpan.FromSeconds(30), CancellationToken.None)
+                    .ConfigureAwait(false);
+                return exit == 0 ? null : LinuxStartScript.PlayerMessage(stderr);
+            }
+            catch (Exception ex)
+            {
+                _log.Warning(ex, "START.sh --check could not run");
+                return $"The Linux start script could not run: {ex.Message}";
+            }
+        }
+        return await _inner.CheckReadyAsync(exeName).ConfigureAwait(false);
+    }
 
     public async Task<GameLaunchResult> LaunchAsync(string exePath, string workingDirectory)
     {
@@ -109,6 +136,22 @@ public sealed class LoaderScriptLauncher : IGameLauncher
             }
         }
 
+        // The monitor question is settled by the launcher, not by the script: the packaged
+        // detection wrote the monitor's mode on every start, which threw away the player's own
+        // resolution and refresh rate and, on a scaled Windows desktop, wrote a size no monitor
+        // has (ClientDisplayPolicy explains the black screen). Once the launcher has judged the
+        // stored values, the script is told to keep its hands off (WOW_KEEP_RESOLUTION=1, a
+        // switch both packaged scripts already honour). When the monitor cannot be read here, the
+        // script keeps doing what it did — nothing is worse than before.
+        if (_display is not null
+            && !WowLauncher.Models.ClientVersion.ExeNameNeedsModernRuntime(Path.GetFileName(exePath)))
+        {
+            var clientDirForDisplay = LoaderScriptPaths.ClientDirectory(script, exePath, workingDirectory);
+            var applied = _display.Apply(clientDirForDisplay);
+            if (applied.Handled)
+                environment = WithKeepResolution(environment);
+        }
+
         if (script is null)
             return await _inner.LaunchAsync(exePath, workingDirectory).ConfigureAwait(false);
 
@@ -128,8 +171,11 @@ public sealed class LoaderScriptLauncher : IGameLauncher
     /// The loader script for this install, or null when there is none. Looks in the working directory and
     /// next to the resolved exe (the client dir either way). Pure so a test can drive it without disk.
     /// </summary>
+    /// <summary><c>START.sh</c> wins over <c>launch.sh</c>: it runs the same <c>launch.sh</c>, but through
+    /// the pinned Proton it downloads itself instead of whatever <c>wine</c> is on PATH.</summary>
     internal static string? FindLoaderScript(string? exePath, string? workingDirectory, Func<string, bool> fileExists)
-        => LoaderScriptPaths.FindLoader(LoaderName, exePath, workingDirectory, fileExists);
+        => LoaderScriptPaths.FindLoader(LinuxStartScript.Name, exePath, workingDirectory, fileExists)
+           ?? LoaderScriptPaths.FindLoader(LoaderName, exePath, workingDirectory, fileExists);
 
     /// <summary>
     /// The realm environment for this launch: <c>REALMLIST=&lt;address&gt;</c> when a valid address is
@@ -179,6 +225,15 @@ public sealed class LoaderScriptLauncher : IGameLauncher
 
     private static readonly IReadOnlyDictionary<string, string> EmptyEnvironment =
         new Dictionary<string, string>(StringComparer.Ordinal);
+
+    internal static IReadOnlyDictionary<string, string> WithKeepResolution(IReadOnlyDictionary<string, string> environment)
+    {
+        var merged = new Dictionary<string, string>(environment, StringComparer.Ordinal)
+        {
+            [IClientDisplayService.KeepResolutionEnvVar] = "1",
+        };
+        return merged;
+    }
 
     private GameLaunchResult StartBash(string script, IReadOnlyDictionary<string, string> environment)
     {

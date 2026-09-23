@@ -93,28 +93,63 @@ public sealed class ProblemReport
 
     /// <summary>The tail of the current log file, redacted. Empty when there is no log yet — which is
     /// itself worth reporting, so it is not treated as an error.</summary>
+    /// <summary>What the receiving side will actually carry.
+    ///
+    /// <para>The report is delivered as a mail whose log field is cut to 16 000 characters. 250 log
+    /// lines can be far more than that — ten .NET stack traces alone are ~15 000 — so the launcher used
+    /// to hand over a string it knew would be cut, without deciding WHERE. Deciding here is the point:
+    /// the end of the log is the part that explains why the player pressed "report" (ST-8PXS-EGCY).
+    /// 15 000 leaves room for the marker line and a little slack against the far side's limit.</para>
+    /// </summary>
+    public const int MaxLogChars = 15_000;
+
+    /// <summary>Trim to <see cref="MaxLogChars"/> keeping the END, cut at a line boundary so the report
+    /// never starts mid-stack-trace, and say how much was dropped.</summary>
+    internal static string FitToTransportBudget(string log)
+    {
+        if (string.IsNullOrEmpty(log) || log.Length <= MaxLogChars) return log;
+
+        var tail = log[^MaxLogChars..];
+        var firstBreak = tail.IndexOf('\n');
+        if (firstBreak >= 0 && firstBreak < tail.Length - 1) tail = tail[(firstBreak + 1)..];
+
+        return $"[{log.Length - tail.Length} earlier characters left out]\n{tail}";
+    }
+
+    /// <summary>The file <c>Program.WriteCrashLog</c> appends to. It matches <c>launcher*.log</c>,
+    /// which is how it displaced the real log: whenever the launcher had crashed since the last
+    /// start, "newest launcher*.log" was the crash file, and the report arrived without the lines
+    /// that explain what the player had just seen (2026-09-05, W3).</summary>
+    public const string CrashLogName = "launcher_crash.log";
+
+    /// <summary>How much of the crash log rides along. It is append-only and never rotated, so
+    /// the tail is the recent crash; older ones are noise for the report.</summary>
+    public const int CrashLogLines = 40;
+
+    /// <summary>A crash older than this is not what the player is reporting.</summary>
+    internal static readonly TimeSpan CrashLogMaxAge = TimeSpan.FromDays(7);
+
     public string RecentLog()
     {
         try
         {
             var newest = new DirectoryInfo(_paths.LogDir)
                 .GetFiles("launcher*.log")
+                .Where(f => !string.Equals(f.Name, CrashLogName, StringComparison.OrdinalIgnoreCase))
                 .OrderByDescending(f => f.LastWriteTimeUtc)
                 .FirstOrDefault();
-            if (newest is null) return "";
 
-            // Read through a shared handle: Serilog holds the file open while the launcher runs, and
-            // a report that throws because the app is still writing its own log would be absurd.
-            using var stream = new FileStream(newest.FullName, FileMode.Open,
-                FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-            using var reader = new StreamReader(stream);
-            var lines = new Queue<string>(LogLines);
-            while (reader.ReadLine() is { } line)
-            {
-                lines.Enqueue(line);
-                if (lines.Count > LogLines) lines.Dequeue();
-            }
-            return Redact(string.Join('\n', lines));
+            var body = newest is null ? "" : ReadTail(newest.FullName, LogLines);
+
+            // The age filter only applies when there is a launcher log to speak first. If the crash
+            // file is all there is (regular logs rotate after 7 days, the crash file never does), an
+            // old crash beats an empty report — that is what the old code returned, and a report
+            // must never carry less than before (Review 2026-09-05, mittel).
+            var crash = RecentCrashTail(requireFresh: body.Length > 0);
+            if (crash.Length > 0)
+                body = body.Length == 0 ? crash : body + "\n" + crash;
+
+            return body.Length == 0 ? "" : FitToTransportBudget(Redact(body));
         }
         catch (Exception)
         {
@@ -122,6 +157,41 @@ public sealed class ProblemReport
             // reason a player cannot tell anyone that something is broken.
             return "";
         }
+    }
+
+    private string RecentCrashTail(bool requireFresh)
+    {
+        try
+        {
+            var crash = new FileInfo(Path.Combine(_paths.StateDir, CrashLogName));
+            if (!crash.Exists) return "";
+            if (requireFresh && DateTime.UtcNow - crash.LastWriteTimeUtc > CrashLogMaxAge) return "";
+
+            var tail = ReadTail(crash.FullName, CrashLogLines);
+            if (tail.Length == 0) return "";
+            return $"[{CrashLogName} — last {CrashLogLines} lines, written {crash.LastWriteTimeUtc:O}]\n{tail}";
+        }
+        catch (Exception)
+        {
+            return "";
+        }
+    }
+
+    /// <summary>The last <paramref name="maxLines"/> lines, read through a shared handle: Serilog
+    /// holds its file open while the launcher runs, and a report that throws because the app is
+    /// still writing its own log would be absurd.</summary>
+    private static string ReadTail(string path, int maxLines)
+    {
+        using var stream = new FileStream(path, FileMode.Open,
+            FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        using var reader = new StreamReader(stream);
+        var lines = new Queue<string>(maxLines);
+        while (reader.ReadLine() is { } line)
+        {
+            lines.Enqueue(line);
+            if (lines.Count > maxLines) lines.Dequeue();
+        }
+        return string.Join('\n', lines);
     }
 
     /// <summary>

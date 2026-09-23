@@ -15,6 +15,28 @@ public interface IGameProcessDetector
     bool IsGameRunning(string? expectedExePath);
 }
 
+/// <summary>Exe names a client RUNS under that are not in the install-discovery vocabulary
+/// (<see cref="ClientVersion.ExeNames"/>) — the launcher never resolves a build from them, but it
+/// must recognise them as a live client.
+///
+/// <para><b>Why this exists.</b> The tuned 1.12.1 package does not run <c>WoW.exe</c>: its documented
+/// entry point is <c>launch.bat</c>/<c>launch.sh</c>, which runs <c>VanillaFixes.exe WoW_tweaked.exe</c>
+/// (see <see cref="LoaderScriptLauncher"/> and <see cref="WindowsLoaderScriptLauncher"/>). The running
+/// process is therefore <c>WoW_tweaked.exe</c>, a name neither detector knew. Both then reported "no
+/// client" while the game was up: on Windows the 20 s appear-scan concluded the session had "already
+/// ended" the instant it launched, on Linux the 10 s grace window counted the launch as failed — and
+/// the install guard (<c>ClientService.IsGameRunning</c>) would have written into a live client
+/// directory (Hermes Q1). Reported by players 2026-08-05 and 2026-08-26.</para></summary>
+internal static class ClientRuntimeNames
+{
+    /// <summary>The tuned 1.12.1 client's real process name, started by VanillaFixes.</summary>
+    public const string TunedVanillaExe = "WoW_tweaked.exe";
+
+    /// <summary>True when <paramref name="leaf"/> is a runtime-only client exe name.</summary>
+    public static bool IsRuntimeOnlyLeaf(string leaf) =>
+        string.Equals(leaf, TunedVanillaExe, StringComparison.OrdinalIgnoreCase);
+}
+
 /// <summary>
 /// Windows detector — a case-insensitive process-name scan, derived from every known client exe
 /// name (<see cref="ClientVersion.ExeNames"/>, extension stripped: "WoW", "WowClassic", …). This
@@ -34,7 +56,11 @@ public sealed class WindowsGameProcessDetector : IGameProcessDetector
     /// vocabulary, and the custom-server exe is a launch/runtime detail, not an install the launcher
     /// resolves a build from.</summary>
     private static readonly string[] AdditionalRuntimeNames =
-        [Path.GetFileNameWithoutExtension(WindowsModernClientLayout.CustomServerExeName)];
+    [
+        Path.GetFileNameWithoutExtension(WindowsModernClientLayout.CustomServerExeName),
+        // The tuned 1.12.1 client runs as WoW_tweaked.exe, never as WoW.exe — see ClientRuntimeNames.
+        Path.GetFileNameWithoutExtension(ClientRuntimeNames.TunedVanillaExe),
+    ];
 
     private readonly Serilog.ILogger _logger;
 
@@ -164,16 +190,31 @@ public sealed class LinuxGameProcessDetector : IGameProcessDetector
 
     /// <summary>True for any known client exe leaf (<see cref="ClientVersion.ExeNames"/>), not only
     /// "WoW.exe" — a 1.14.2 Classic Era client under Wine shows up as WowClassic.exe, and matching
-    /// only the vanilla name meant the Linux detector never saw it (Codex Finding 1).</summary>
+    /// only the vanilla name meant the Linux detector never saw it (Codex Finding 1). Runtime-only
+    /// names (<see cref="ClientRuntimeNames"/>) count too: the tuned 1.12.1 client runs as
+    /// WoW_tweaked.exe.</summary>
     private static bool IsWowExeLeaf(string leaf) =>
-        ClientVersion.ExeNames.Any(exe => string.Equals(leaf, exe, StringComparison.OrdinalIgnoreCase));
+        ClientVersion.ExeNames.Any(exe => string.Equals(leaf, exe, StringComparison.OrdinalIgnoreCase))
+        || ClientRuntimeNames.IsRuntimeOnlyLeaf(leaf);
 
     // With a known expected path: exact canonical match (case-insensitive, covering the Windows part).
     // Without one: any WoW.exe counts (conservative).
-    private static bool Matches(string canonicalCandidate, string? expected) =>
-        expected is null
-            ? IsWowExeLeaf(Path.GetFileName(canonicalCandidate))
-            : string.Equals(canonicalCandidate, expected, StringComparison.OrdinalIgnoreCase);
+    //
+    // A runtime-only name can never equal the expected path — the caller expects ".../WoW.exe" while
+    // the tuned 1.12.1 client runs ".../WoW_tweaked.exe" in that same directory. Comparing the whole
+    // path there would always miss, which is exactly the false "launch failed" players reported. So
+    // for those names the DIRECTORY is the identity: same install dir means same client.
+    private static bool Matches(string canonicalCandidate, string? expected)
+    {
+        if (expected is null) return IsWowExeLeaf(Path.GetFileName(canonicalCandidate));
+        if (string.Equals(canonicalCandidate, expected, StringComparison.OrdinalIgnoreCase)) return true;
+        if (!ClientRuntimeNames.IsRuntimeOnlyLeaf(Path.GetFileName(canonicalCandidate))) return false;
+
+        var candidateDir = Path.GetDirectoryName(canonicalCandidate);
+        var expectedDir = Path.GetDirectoryName(expected);
+        return !string.IsNullOrEmpty(candidateDir) && !string.IsNullOrEmpty(expectedDir)
+            && string.Equals(candidateDir, expectedDir, StringComparison.OrdinalIgnoreCase);
+    }
 
     /// <summary>Translate a Wine cmdline path to its Linux path. Returns null when it cannot be
     /// resolved (unknown drive without a reachable prefix) → caller does a conservative basename match.</summary>

@@ -17,6 +17,17 @@ using Serilog;
 /// </summary>
 public sealed class AvaloniaFolderPickerService(ILogger log) : IFolderPickerService
 {
+    /// <summary>Where the dialog opens when the caller has no folder of its own: the player's home.
+    /// Without a start folder Avalonia's own dialog (every Linux desktop without an xdg portal) opened
+    /// at "/", a list of system folders, on the very first question a new player is asked
+    /// (E2E 2026-09-23).</summary>
+    internal static string? StartFolderOrHome(string? startAt) =>
+        !string.IsNullOrWhiteSpace(startAt) && Directory.Exists(startAt)
+            ? startAt
+            : Environment.GetFolderPath(Environment.SpecialFolder.UserProfile) is { Length: > 0 } home && Directory.Exists(home)
+                ? home
+                : startAt;
+
     public async Task<string?> PickFolderAsync(string title, string? startAt = null)
     {
         // Checked BEFORE any TopLevel/StorageProvider touch: on some backends showing a native dialog
@@ -46,6 +57,7 @@ public sealed class AvaloniaFolderPickerService(ILogger log) : IFolderPickerServ
         try
         {
             IStorageFolder? startFolder = null;
+            startAt = StartFolderOrHome(startAt);
             if (!string.IsNullOrWhiteSpace(startAt) && Directory.Exists(startAt))
             {
                 try { startFolder = await storage.TryGetFolderFromPathAsync(startAt); }

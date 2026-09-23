@@ -568,10 +568,14 @@ public sealed class WineGameLauncher : IGameLauncher, IWineHost
     private static string NoD3D12Message() =>
         "This Wine build cannot run the 1.14.2 client. It renders through D3D12, which plain system " +
         "Wine does not provide.\n" +
-        "Install a wine-ge runner through Lutris, or install umu-launcher so the launcher can fall " +
-        "back to Proton:\n" +
-        "Lutris:  https://lutris.net/downloads\n" +
-        "umu:     https://github.com/Open-Wine-Components/umu-launcher";
+        "Any of these options works, in the order the launcher tries them:\n" +
+        "1. Install Steam and place a GE-Proton build under " +
+        "~/.local/share/Steam/compatibilitytools.d/. This is the setup the client is measured on:\n" +
+        "   https://github.com/GloriousEggroll/proton-ge-custom\n" +
+        "2. Install a wine-ge runner through Lutris:\n" +
+        "   https://lutris.net/downloads\n" +
+        "3. Install umu-launcher so the launcher can fall back to Proton:\n" +
+        "   https://github.com/Open-Wine-Components/umu-launcher";
 
     private static string VulkanMessage(VulkanCapability vulkan) =>
         vulkan.DriverFound

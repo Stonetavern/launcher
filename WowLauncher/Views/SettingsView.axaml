@@ -96,6 +96,24 @@
                                Foreground="{StaticResource ParchmentFaint}"/>
                 </StackPanel>
 
+                <!-- Der Weg aus dem Schwarzbild ohne Neuinstallation (Tickets #63/#92/#98: Video-
+                     Optionen angefasst, danach nur noch Schwarz mit Ton). Eine Zeile in Config.wtf,
+                     die der Spieler nicht kennt - hier als Knopf. Nur wo der Launcher den Monitor
+                     lesen kann (Windows, Linux). -->
+                <StackPanel Spacing="6" IsVisible="{Binding ShowResetVideo}">
+                    <TextBlock Text="{loc:Tr Settings_ResetVideo}" FontSize="13"
+                               Foreground="{StaticResource ParchmentSecondary}"/>
+                    <StackPanel Orientation="Horizontal" Spacing="10">
+                        <Button Content="{loc:Tr Settings_ResetVideo_Button}" Command="{Binding ResetVideoCommand}"
+                                AutomationProperties.Name="{loc:Tr Settings_ResetVideo_Button_A11y}"/>
+                        <TextBlock Text="{Binding ResetVideoNote}" IsVisible="{Binding HasResetVideoNote}"
+                                   FontSize="12" VerticalAlignment="Center" TextWrapping="Wrap"
+                                   Foreground="{StaticResource ParchmentPrimary}"/>
+                    </StackPanel>
+                    <TextBlock Text="{loc:Tr Settings_ResetVideo_Hint}" FontSize="12" TextWrapping="Wrap"
+                               Foreground="{StaticResource ParchmentSecondary}"/>
+                </StackPanel>
+
                 <!-- Womit gestartet wird (Owner 2026-08-04, wiederholt 2026-08-05). Nur unter Linux:
                      Windows startet nativ, macOS loest ueber GPTK auf.
 

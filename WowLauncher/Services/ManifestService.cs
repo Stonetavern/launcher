@@ -97,7 +97,7 @@ public sealed class ManifestService : IManifestService
     /// Konstante im Programm, kein Konfigurationswert: eine handeditierte Datei darf nicht bestimmen,
     /// woher sich der Launcher seine eigene nächste Fassung holt.</summary>
     public Task<ServerManifest?> FetchLauncherManifestAsync(CancellationToken ct = default) =>
-        FetchFromAsync(RealmRegistry.StonetavernManifest, "launcher", ct);
+        FetchFromAsync(LauncherChannel.ManifestUrl, "launcher", ct);
 
     private async Task<ServerManifest?> FetchFromAsync(string? url, string which, CancellationToken ct)
     {

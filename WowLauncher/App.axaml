@@ -20,6 +20,9 @@
     <Application.Styles>
         <FluentTheme />
         <StyleInclude Source="avares://WowLauncher/Styles.axaml"/>
+        <!-- Motion-Tokens der 1.9-Login-/Loading-Shell (Spec 2026-09-20 §3). Nur Ressourcen, keine
+             Selektoren: kostet v1/v2/v3 nichts, und die Werte gelten fuer jede Shell gleich. -->
+        <StyleInclude Source="avares://WowLauncher/Styles/Motion.axaml"/>
         <!-- v2 skin ("Obsidian Instrument"). Its resources are O*-prefixed and its selectors are
              o*-classed, so including it costs v1 nothing — only `“ui v2”` ever binds to them. -->
         <StyleInclude Source="avares://WowLauncher/Styles.v2.axaml"/>

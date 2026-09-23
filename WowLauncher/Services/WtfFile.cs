@@ -37,7 +37,30 @@ internal static class WtfFile
         {
             lines.Add(newLine);
         }
-        File.WriteAllText(path, string.Join("\n", lines) + "\n");
+
+        WriteAtomic(path, string.Join("\n", lines) + "\n");
+    }
+
+    /// <summary>Replace a config file's contents without ever leaving a half-written one behind.
+    ///
+    /// <para>The same reason <see cref="Platform.WtfConfigWriter.Apply"/> does it: these files carry
+    /// the player's OWN settings — graphics, sound, their saved realm — not only the keys the launcher
+    /// writes. A truncate-in-place write that is interrupted (power loss, a kill, a full disk) leaves
+    /// the file cut in half, and the player loses settings nobody asked us to touch. A sibling temp
+    /// file plus a rename is atomic on the same filesystem: a reader sees the whole old file or the
+    /// whole new one, never a fragment.</para></summary>
+    public static void WriteAtomic(string path, string content)
+    {
+        var tmp = path + ".tmp-" + Guid.NewGuid().ToString("N");
+        try
+        {
+            File.WriteAllText(tmp, content);
+            File.Move(tmp, path, overwrite: true);
+        }
+        finally
+        {
+            if (File.Exists(tmp)) { try { File.Delete(tmp); } catch { /* best effort */ } }
+        }
     }
 
     /// <summary>Every value the file carries for <paramref name="key"/>, in file order. Empty when the

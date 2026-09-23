@@ -220,3 +220,73 @@ public static class LinuxRuntimeSelection
         }
     }
 }
+
+/// <summary>
+/// Which <see cref="IWineHost"/> actually runs the modern (1.14.2) client's Wine-side steps on Linux —
+/// the piece that sits ABOVE <see cref="LinuxRuntimeSelection"/>'s own Auto/explicit choice, adding
+/// KONZEPT §13's new front-of-order runner: <b>GE-Proton first, then whatever
+/// <see cref="LinuxRuntimeSelection"/> already resolved to</b> (wine-ge, then system Wine — untouched
+/// by this class). Only the ORDER changed; <see cref="LinuxRuntimeSelection.Resolve"/> itself, and
+/// therefore every explicit player setting (System Wine / wine-ge / a custom binary), is completely
+/// unaffected — GE-Proton is an Auto-only addition, never a substitute for something the player
+/// explicitly picked.
+///
+/// <para><b>Resolved FRESH on every call, not once at DI-build time</b> — the same guarantee
+/// <c>RuntimeNow</c> in <c>DependencyInjection.cs</c> already gives the wine-ge/system-Wine choice
+/// (2026-08-05 lesson: a cached choice can tell the status line something that stopped being true).
+/// Installing Steam and a GE-Proton build therefore takes effect on the player's very next Play click,
+/// no restart needed.</para>
+///
+/// <para><b>Umu is NOT reachable through this class</b> (open point, not solved here): plain
+/// <see cref="UmuGameLauncher"/> only implements <see cref="IGameLauncher"/>, not
+/// <see cref="IWineHost"/> — it has no <c>ToWindowsPathAsync</c> and no way to pass Arctium's
+/// <c>--version=ClassicEra --path</c> arguments through <c>RunAsync</c>. Wiring it into this seat would
+/// need the same amount of new work this pass just did for <see cref="ProtonGameLauncher"/>, so it
+/// stays unreachable exactly as it already was before this change, rather than being half-wired
+/// incorrectly.</para>
+/// </summary>
+internal sealed class ModernLinuxWineHost : IWineHost
+{
+    private readonly Serilog.ILogger _logger;
+    private readonly Func<string?> _geProton;
+    private readonly Func<string> _steamCompatClientInstallPath;
+    private readonly Func<IWineHost> _fallback;
+
+    /// <param name="geProton">Resolves the newest GE-Proton <c>proton</c> script, or null - normally
+    /// <see cref="GeProtonLocator.FindLatestForCurrentUser"/>, injectable so the choice is testable
+    /// without a real Steam install.</param>
+    /// <param name="steamCompatClientInstallPath">The real Steam install path for
+    /// <c>STEAM_COMPAT_CLIENT_INSTALL_PATH</c> - normally
+    /// <see cref="GeProtonLocator.SteamCompatClientInstallPathFor"/> against the user's home.</param>
+    /// <param name="fallback">Built LAZILY, and only actually invoked when GE-Proton is absent - this
+    /// is exactly today's <see cref="WineGameLauncher"/>-backed choice, untouched, so "GE-Proton not
+    /// found" behaves EXACTLY as it did before this class existed.</param>
+    public ModernLinuxWineHost(
+        Serilog.ILogger logger, Func<string?> geProton, Func<string> steamCompatClientInstallPath,
+        Func<IWineHost> fallback)
+    {
+        _logger = logger;
+        _geProton = geProton;
+        _steamCompatClientInstallPath = steamCompatClientInstallPath;
+        _fallback = fallback;
+    }
+
+    public Task<GameLaunchResult> RunAsync(string exePath, string workingDirectory, IReadOnlyList<string> args) =>
+        Resolve().RunAsync(exePath, workingDirectory, args);
+
+    public Task<string?> ToWindowsPathAsync(string unixPath) =>
+        Resolve().ToWindowsPathAsync(unixPath);
+
+    private IWineHost Resolve()
+    {
+        var proton = _geProton();
+        if (!string.IsNullOrEmpty(proton))
+        {
+            _logger.Information("Modern Linux runtime: GE-Proton ({Path})", proton);
+            return new ProtonGameLauncher(_logger, proton, _steamCompatClientInstallPath());
+        }
+
+        _logger.Debug("Modern Linux runtime: no GE-Proton found, falling back to today's wine-ge/system Wine choice");
+        return _fallback();
+    }
+}

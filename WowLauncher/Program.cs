@@ -21,6 +21,9 @@ sealed class Program
     [STAThread]
     public static void Main(string[] args)
     {
+        // The first-frame budget of the 1.9 login shell (Spec §4) is measured from here.
+        Startup.StartupClock.Start();
+
         // Global crash-shield (§7 / CLAUDE.md §7): no naked stack trace ever reaches the player.
         AppDomain.CurrentDomain.UnhandledException += (_, e) =>
             WriteCrashLog(e.ExceptionObject as Exception, "AppDomain.UnhandledException");

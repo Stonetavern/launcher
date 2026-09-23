@@ -38,12 +38,39 @@ public sealed class MacWineHost : IWineHost
     private readonly Serilog.ILogger _logger;
     private readonly WineOptions _options;
     private readonly SemaphoreSlim _probeGate = new(1, 1);
+    private readonly Func<string?>? _relocate;
+    private string? _wineBinary;
     private bool _prefixReady;
 
     public MacWineHost(Serilog.ILogger logger, WineOptions options)
+        : this(logger, options, null) { }
+
+    /// <summary>
+    /// <paramref name="relocate"/> re-resolves wine64 when the path handed in at construction does
+    /// not exist. This exists because the toolkit can be installed AFTER this object was built: the
+    /// container creates it once at startup, while <see cref="MacGptkProvisioner"/> may download the
+    /// toolkit later, on the first Play. Without a second look the launcher would keep the fallback
+    /// name "wine64" for the rest of the session and fail with a toolkit sitting right there on disk.
+    /// </summary>
+    public MacWineHost(Serilog.ILogger logger, WineOptions options, Func<string?>? relocate)
     {
         _logger = logger;
         _options = options;
+        _relocate = relocate;
+    }
+
+    /// <summary>The wine64 to run. Resolved late and cached only once it points at a real file, so a
+    /// toolkit that arrives mid-session is picked up without a restart.</summary>
+    private string WineBinary()
+    {
+        if (_wineBinary is { } cached && File.Exists(cached)) return cached;
+        if (File.Exists(_options.WineBinary)) return _wineBinary = _options.WineBinary;
+        if (_relocate?.Invoke() is { } found && File.Exists(found))
+        {
+            _logger.Information("Using Game Porting Toolkit wine64 at {Path}", found);
+            return _wineBinary = found;
+        }
+        return _options.WineBinary;   // keeps the old behaviour: fail with a clear error, not a crash
     }
 
     /// <summary>Resolve GPTK's wine64. Prefers the copy bundled in the .app
@@ -65,9 +92,9 @@ public sealed class MacWineHost : IWineHost
         string exePath, string workingDirectory, IReadOnlyList<string> args)
     {
         if (!await EnsurePrefixAsync().ConfigureAwait(false))
-            return GameLaunchResult.Failed("Wine-Prefix (GPTK) konnte nicht initialisiert werden.");
+            return GameLaunchResult.Failed(Localization.Loc.T("Runtime_Fail_Incomplete"));
         if (!File.Exists(exePath))
-            return GameLaunchResult.Failed($"Programm nicht gefunden: {exePath}");
+            return GameLaunchResult.Failed($"Program not found: {exePath}");
 
         try
         {
@@ -78,14 +105,14 @@ public sealed class MacWineHost : IWineHost
             if (process is null)
                 return GameLaunchResult.Failed("Process.Start returned null");
 
-            _logger.Information("Client via GPTK-Wine gestartet (PID={Pid}, prefix={Prefix})",
+            _logger.Information("Client started via GPTK wine (PID={Pid}, prefix={Prefix})",
                 process.Id, _options.PrefixPath);
             return GameLaunchResult.Ok(process.Id);
         }
         catch (Exception ex)
         {
-            _logger.Fatal(ex, "GPTK-Wine-Start fehlgeschlagen: {Exe}", exePath);
-            return GameLaunchResult.Failed($"GPTK-Wine-Start fehlgeschlagen: {ex.Message}");
+            _logger.Fatal(ex, "GPTK wine start failed: {Exe}", exePath);
+            return GameLaunchResult.Failed($"The Mac graphics runtime failed to start: {ex.Message}");
         }
     }
 
@@ -95,7 +122,7 @@ public sealed class MacWineHost : IWineHost
             return null;
         try
         {
-            var psi = NewWineProcess(_options.WineBinary, new[] { "winepath", "-w", unixPath },
+            var psi = NewWineProcess(WineBinary(), new[] { "winepath", "-w", unixPath },
                 overrideExeWithWine: false, captureStdout: true);
             using var process = Process.Start(psi);
             if (process is null) return null;
@@ -110,7 +137,7 @@ public sealed class MacWineHost : IWineHost
         }
         catch (Exception ex)
         {
-            _logger.Warning(ex, "winepath -w fehlgeschlagen für {Path}", unixPath);
+            _logger.Warning(ex, "winepath -w failed for {Path}", unixPath);
             return null;
         }
     }
@@ -128,7 +155,7 @@ public sealed class MacWineHost : IWineHost
             if (!File.Exists(systemReg))
             {
                 Directory.CreateDirectory(_options.PrefixPath);
-                var psi = NewWineProcess(_options.WineBinary, new[] { "wineboot", "-u" },
+                var psi = NewWineProcess(WineBinary(), new[] { "wineboot", "-u" },
                     overrideExeWithWine: false);
                 using var boot = Process.Start(psi);
                 if (boot is not null)
@@ -172,7 +199,7 @@ public sealed class MacWineHost : IWineHost
             RedirectStandardOutput = captureStdout,
         };
         foreach (var a in RosettaPrefix) psi.ArgumentList.Add(a);
-        psi.ArgumentList.Add(_options.WineBinary);          // GPTK wine64
+        psi.ArgumentList.Add(WineBinary());                 // GPTK wine64, resolved late
         if (overrideExeWithWine) psi.ArgumentList.Add(exeOrTarget);   // the Windows .exe
         foreach (var a in args) psi.ArgumentList.Add(a);
 

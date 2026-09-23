@@ -176,11 +176,35 @@ if (( ${#bliz[@]} > 0 )); then
 else
   add "Blizzard-Assets" "PASS" "keine .mpq/.blp/.m2/.wmo/.adt/.wdt/.dbc/WoW.exe/WowClassic.exe im Baum"
 fi
+# (I.a.1) Butler-Sidecar: das einzige Fremd-Binary im Baum (Go). Bevor der Substring-Sweep
+# unten ihn ausnimmt, wird er GEGEN DIE PINS geprueft (ButlerSidecar.Pins, die einzige Quelle)
+# — ein falscher Hash oder eine ungepinnte Datei daneben ist ein FAIL, kein Freifahrtschein.
+BUTLER_DIR="$(find "$PAYLOAD" -type d -path '*/tools/butler' -print -quit 2>/dev/null || true)"
+BUTLER_EXEMPT=""
+if [[ -n "$BUTLER_DIR" ]]; then
+  if pins_out="$(python3 "$ROOT/deploy/verify-butler-pins.py" "$BUTLER_DIR" \
+        "$ROOT/WowLauncher/Services/Patching/ButlerSidecar.cs" 2>&1)"; then
+    note "$pins_out"
+    add "Butler-Pins" "PASS" "$pins_out"
+    BUTLER_EXEMPT="$BUTLER_DIR/"
+  else
+    note "$pins_out"
+    fail_add "Butler-Pins" "$(printf '%s' "$pins_out" | head -1)"
+  fi
+else
+  fail_add "Butler-Pins" "kein tools/butler im Baum — ohne den Sidecar faellt PLAN still auf PER_FILE (kein Delta)"
+fi
+
 # (I.b) Secrets & Build-Pfade — Codex-Re-Gate: grep -a durchsucht auch BINÄRDATEIEN
 # (ein eingebetteter Key/Buildpfad in einer .dll darf nicht per -I übersprungen werden).
+[[ -n "$BUTLER_EXEMPT" ]] && note "Sweep nimmt den pin-geprueften Butler-Ordner aus (Go-Strings wie 'PRIVATE KEY' sind unvermeidbar)"
 secret_hits=""
 p_hits="$(grep -Rla '/AI/' "$TREE" 2>/dev/null || true)"
 k_hits="$(grep -Rla -e 'PRIVATE KEY' -e 'BEGIN OPENSSH' "$TREE" 2>/dev/null || true)"
+if [[ -n "$BUTLER_EXEMPT" ]]; then
+  p_hits="$(printf '%s\n' "$p_hits" | grep -v "^$BUTLER_EXEMPT" || true)"
+  k_hits="$(printf '%s\n' "$k_hits" | grep -v "^$BUTLER_EXEMPT" || true)"
+fi
 mapfile -t env_hits < <(find "$TREE" -type f -name '.env*' 2>/dev/null)
 [[ -n "$p_hits" ]] && secret_hits+=$'\n    Build-Pfad /AI/: '"${p_hits//$'\n'/ }"
 [[ -n "$k_hits" ]] && secret_hits+=$'\n    Key-Material: '"${k_hits//$'\n'/ }"
@@ -189,7 +213,7 @@ if [[ -n "$secret_hits" ]]; then
   printf '%s\n' "$secret_hits"
   fail_add "Secrets/Build-Pfade" "Fund im Baum:${secret_hits}"
 else
-  add "Secrets/Build-Pfade" "PASS" "kein (internal design notes, not published), kein PRIVATE KEY/OPENSSH, keine .env-Datei"
+  add "Secrets/Build-Pfade" "PASS" "kein (internal design notes, not published), kein PRIVATE KEY/OPENSSH, keine .env-Datei$([[ -n "$BUTLER_EXEMPT" ]] && echo ' (ausserhalb des pin-geprueften Butler-Sidecars)')"
 fi
 
 # ---------------------------------------------------------------------------
@@ -210,6 +234,14 @@ else
     soft_add "BUILDINFO" "WARN" "BUILDINFO ohne verwertbaren commit="
   elif [[ "$bi_commit" == "$HEAD_COMMIT" ]]; then
     add "BUILDINFO" "PASS" "commit == HEAD (${bi_commit:0:7})"
+  # /AI ist ein Monorepo, auf dessen Branch parallel andere Sessions committen: HEAD wandert, ohne
+  # dass sich die Launcher-Quelle bewegt (gemessen 2026-09-23, fb76cd4d temps-platform nach dem
+  # 1.9.1-Bau). Stale ist ein Artefakt nur, wenn sich seit seinem Commit etwas geändert hat, das in
+  # das Paket eingeht: die Quelle unter WowLauncher/ oder die Paketier-Skripte selbst.
+  elif git -C "$ROOT" cat-file -e "${bi_commit}^{commit}" 2>/dev/null \
+       && git -C "$ROOT" diff --quiet "$bi_commit" HEAD -- WowLauncher/ \
+            deploy/publish-linux.sh deploy/package-linux.sh deploy/build-appimage.sh; then
+    add "BUILDINFO" "PASS" "commit ${bi_commit:0:7} != HEAD ${HEAD_COMMIT:0:7}, aber WowLauncher/ und Paketier-Skripte seitdem unverändert"
   else
     soft_add "BUILDINFO" "WARN" "commit ${bi_commit:0:7} != HEAD ${HEAD_COMMIT:0:7} — HEAD wanderte seit dem Packen; neu packen"
   fi

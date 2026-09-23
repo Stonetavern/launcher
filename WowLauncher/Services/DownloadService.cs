@@ -31,6 +31,62 @@ public interface IDownloadService
         IProgress<string>? progress = null, CancellationToken ct = default);
 
     /// <summary>
+    /// Extract into a directory the player just chose for a NEW install, where re-rooting must never
+    /// happen: <paramref name="destDir"/> is the answer, not a starting point for a search.
+    ///
+    /// <para><b>Why this is a separate entry point instead of a check inside the other one.</b> The
+    /// first attempt at this fix asked the filesystem — "is destDir empty? then it is a fresh install"
+    /// — and that is wrong in both directions. A crash mid-extract (see the note above) leaves the
+    /// fresh target partly filled, so the SECOND attempt looked like a repair and re-rooted onto a
+    /// stranger install two levels up, which is the very failure this was meant to end. And a repair
+    /// whose directory the player had emptied by hand looked fresh and skipped the re-rooting it
+    /// needs. The caller already knows which case it is (PlayViewModel keeps <c>isFreshInstall</c>
+    /// from before the download) — so it says so, instead of leaving the extractor to guess from
+    /// evidence that a crash can rewrite.</para>
+    ///
+    /// <para>Default implementation delegates, so test doubles that do not care about re-rooting need
+    /// no change.</para>
+    /// </summary>
+    Task<bool> ExtractFreshClientAsync(string zipPath, string destDir,
+        IProgress<string>? progress = null, CancellationToken ct = default)
+        => ExtractClientAsync(zipPath, destDir, progress, ct);
+
+    /// <summary>
+    /// The same extraction, but saying WHY it failed. <paramref name="freshInstall"/> picks between the
+    /// two entry points above so the caller keeps exactly one decision point.
+    ///
+    /// <para>🔴 Bewusst OHNE Default-Implementierung. Eine solche hätte <see cref="ExtractFailure.Unknown"/>
+    /// gemeldet, und <c>Unknown</c> zählt gegen das Install-Budget: ein künftiger Dekorator, der nur die
+    /// bool-Methoden durchreicht, hätte damit einen Spieler nach drei vollen Platten ausgesperrt — still,
+    /// denn er hätte nichts zu implementieren vergessen. Als Pflichtmethode muss jeder Implementierer die
+    /// Frage beantworten (Review 2026-09-14).</para>
+    ///
+    /// <para>The caller needs the distinction to decide whether a failed attempt counts against the
+    /// install budget: a full disk or a file the game holds is the player's machine, not a broken
+    /// package, and must not lock him out (Codex review 2026-09-14).</para>
+    /// </summary>
+    Task<ExtractOutcome> ExtractClientWithReasonAsync(string zipPath, string destDir,
+        bool freshInstall, IProgress<string>? progress = null, CancellationToken ct = default);
+
+    /// <summary>
+    /// A fresh extract that drops one leading folder (<paramref name="stripTopFolder"/>, e.g.
+    /// <c>"Stonetavern-Classic-1.12.1-v1.6/"</c>) from every entry. The 1.12.1 packages carry exactly one
+    /// wrapper folder so a website download lands in a folder of its own, while their files.json is
+    /// root-relative; the patch engine installs from that same ZIP and needs the files where files.json
+    /// says they are. Without this, every file arrived one folder too deep, VERIFY found all of them
+    /// foreign and missing, and a first install ended in "verify failed" (E2E 2026-09-23).
+    ///
+    /// <para>Only the engine calls this, and only after it proved the folder is a wrapper (every entry
+    /// under it, no files.json path under it). An implementer that cannot strip must say so loudly
+    /// rather than extract one level too deep again, hence the throwing default.</para>
+    /// </summary>
+    Task<ExtractOutcome> ExtractClientWithReasonAsync(string zipPath, string destDir, bool freshInstall,
+        string? stripTopFolder, IProgress<string>? progress = null, CancellationToken ct = default)
+        => stripTopFolder is null
+            ? ExtractClientWithReasonAsync(zipPath, destDir, freshInstall, progress, ct)
+            : throw new NotSupportedException($"{GetType().Name} cannot strip a wrapper folder from a ZIP");
+
+    /// <summary>
     /// Verify a downloaded file's SHA256 against the expected hex digest from the manifest.
     /// Empty/missing expected → HARD failure (returns false): an unverifiable artefact must never
     /// be extracted or executed (Invariante §2 / Codex A2). Returns false on mismatch or read error
@@ -425,6 +481,23 @@ public sealed class DownloadService : IDownloadService
             _log.Warning(ex, "Download network error, .part kept for resume: {Url}", url);
             return DownloadResult.Fail(DownloadFailure.Network, ex.Message);
         }
+        // A connection the server drops mid-body arrives as HttpIOException — which derives from
+        // IOException and therefore used to land in the disk branch below. The player was told
+        // "writing to disk failed" about a network fault, and worse: self-healing only retries
+        // Network, so the transfer was abandoned instead of resumed. Must be caught FIRST, before
+        // the IOException branch (a player hit this on 2026-08-26 with SocketException 10054).
+        catch (System.Net.Http.HttpIOException ex)
+        {
+            _log.Warning(ex, "Download connection dropped, .part kept for resume: {Url}", url);
+            return DownloadResult.Fail(DownloadFailure.Network, ex.Message);
+        }
+        catch (IOException ex) when (HasSocketCause(ex))
+        {
+            // Same fault reaching us through a plain IOException wrapper (older/other stack paths):
+            // the inner SocketException is what makes it a network problem, not the wrapper type.
+            _log.Warning(ex, "Download connection dropped, .part kept for resume: {Url}", url);
+            return DownloadResult.Fail(DownloadFailure.Network, ex.Message);
+        }
         catch (IOException ex)
         {
             _log.Error(ex, "Download disk IO error: {Path}", destPath);
@@ -435,6 +508,15 @@ public sealed class DownloadService : IDownloadService
             _log.Error(ex, "Download failed: {Url}", url);
             return DownloadResult.Fail(DownloadFailure.Network, ex.Message);
         }
+    }
+
+    /// <summary>True when a socket fault is anywhere in the exception chain — the marker of a network
+    /// problem wearing an IOException coat.</summary>
+    private static bool HasSocketCause(Exception ex)
+    {
+        for (var e = ex.InnerException; e is not null; e = e.InnerException)
+            if (e is System.Net.Sockets.SocketException) return true;
+        return false;
     }
 
     public async Task<bool> VerifyHashAsync(string path, string expectedSha256, CancellationToken ct = default)
@@ -560,6 +642,72 @@ public sealed class DownloadService : IDownloadService
 
     public async Task<bool> ExtractClientAsync(string zipPath, string destDir,
         IProgress<string>? progress = null, CancellationToken ct = default)
+        => (await ExtractAsync(zipPath, destDir, mayReRoot: true, progress, ct).ConfigureAwait(false)).Ok;
+
+    public async Task<bool> ExtractFreshClientAsync(string zipPath, string destDir,
+        IProgress<string>? progress = null, CancellationToken ct = default)
+        => (await ExtractAsync(zipPath, destDir, mayReRoot: false, progress, ct).ConfigureAwait(false)).Ok;
+
+    /// <summary>The real classification behind <see cref="IDownloadService.ExtractClientWithReasonAsync"/>
+    /// — the same run, with the reason the bool form throws away.</summary>
+    public Task<ExtractOutcome> ExtractClientWithReasonAsync(string zipPath, string destDir,
+        bool freshInstall, IProgress<string>? progress = null, CancellationToken ct = default)
+        => ExtractAsync(zipPath, destDir, mayReRoot: !freshInstall, progress, ct);
+
+    /// <inheritdoc cref="IDownloadService.ExtractClientWithReasonAsync(string, string, bool, string?, IProgress{string}?, CancellationToken)"/>
+    public Task<ExtractOutcome> ExtractClientWithReasonAsync(string zipPath, string destDir, bool freshInstall,
+        string? stripTopFolder, IProgress<string>? progress = null, CancellationToken ct = default)
+        => ExtractAsync(zipPath, destDir, mayReRoot: !freshInstall && stripTopFolder is null, progress, ct, stripTopFolder);
+
+    /// <summary>
+    /// Which reason an exception from the extract loop stands for.
+    ///
+    /// <para>Order matters: the wrapper <see cref="ExtractEntryAsync"/> throws after its retries is an
+    /// <see cref="IOException"/> whose INNER exception carries the real cause, so the chain is
+    /// inspected rather than the outermost type. A full disk arrives as an IOException too, and on
+    /// both platforms only its error number tells it apart from a locked file — 28 (ENOSPC) on Unix,
+    /// 0x27/0x70 (ERROR_HANDLE_DISK_FULL / ERROR_DISK_FULL) on Windows.</para>
+    /// </summary>
+    internal static ExtractFailure Classify(Exception ex)
+    {
+        // 🔴 Nach Aussagekraft, nicht nach Tiefe. Der Erste-Treffer-Weg von oben nach unten wäre hier
+        // falsch: ExtractEntryAsync verpackt den echten Grund in eine eigene IOException, und die
+        // hätte als äußerste Schale JEDEN inneren Grund verdeckt — eine volle Platte mitten im
+        // Entpacken hätte sich als "etwas hält die Datei" gelesen. Deshalb erst die spezifischen
+        // Signale in der ganzen Kette suchen, und "gehaltene Datei" nur als das nehmen, was es ist:
+        // die Restmenge der IOExceptions.
+        var chain = new List<Exception>();
+        for (var e = ex; e is not null; e = e.InnerException) chain.Add(e);
+
+        if (chain.Any(e => e is OperationCanceledException)) return ExtractFailure.Cancelled;
+        if (chain.Any(e => e is IOException io && IsDiskFull(io))) return ExtractFailure.DiskFull;
+        if (chain.Any(e => e is InvalidDataException)) return ExtractFailure.BadArchive;
+        if (chain.Any(e => e is UnauthorizedAccessException)) return ExtractFailure.AccessDenied;
+        // 🔴 VOR dem Sammelbecken: das sind IOExceptions, die nie von selbst heilen. Als "gehaltene
+        // Datei" eingestuft galten sie als behebbar, verbrauchten keinen Versuch und wurden damit
+        // unbegrenzt wiederholt - mit einem Rat ("Spiel und Virenscanner schliessen"), der nichts
+        // damit zu tun hat (Review 2026-09-14).
+        if (chain.Any(e => e is DirectoryNotFoundException or FileNotFoundException
+                                or PathTooLongException)
+            || chain.Any(e => e is IOException io2 && IsInvalidName(io2)))
+            return ExtractFailure.TargetUnusable;
+        if (chain.Any(e => e is IOException)) return ExtractFailure.FileLocked;
+        return ExtractFailure.Unknown;
+    }
+
+    /// <summary>ERROR_INVALID_NAME (0x7B) — Windows nimmt den Namen nicht an. Auf Unix gibt es kein
+    /// Gegenstueck, das nicht schon ueber die Ausnahmetypen oben erfasst waere.</summary>
+    private static bool IsInvalidName(IOException ex) =>
+        OperatingSystem.IsWindows() && (ex.HResult & 0xFFFF) == 0x7B;
+
+    private static bool IsDiskFull(IOException ex)
+    {
+        var code = ex.HResult & 0xFFFF;
+        return OperatingSystem.IsWindows() ? code is 0x27 or 0x70 : code == 28;
+    }
+
+    private async Task<ExtractOutcome> ExtractAsync(string zipPath, string destDir, bool mayReRoot,
+        IProgress<string>? progress, CancellationToken ct, string? stripTopFolder = null)
     {
         try
         {
@@ -569,10 +717,18 @@ public sealed class DownloadService : IDownloadService
             // Repair/Update hand us ClientInstalls[build] — the EXE folder, which for the modern
             // client sits two levels below the package root the zip paths are relative to. Extracting
             // there would nest a second "World of Warcraft/<flavor>/" inside the existing one and
-            // leave the install doubled. Resolve against what is actually on disk instead; a fresh
-            // install has no files to match and correctly keeps destDir (ContentRoot).
-            using (var probe = System.IO.Compression.ZipFile.OpenRead(zipPath))
+            // leave the install doubled. Resolve against what is actually on disk instead.
+            //
+            // A FRESH install never takes this path (mayReRoot false, see ExtractFreshClientAsync).
+            // ContentRoot walks up to three parent levels, so an unrelated install two levels above
+            // the folder the player chose ("C:\Games\World of Warcraft\…" next to
+            // "C:\Games\WoW (Stonetavern)\WoW-Client-42597") wins the sample vote and captures the
+            // whole extraction — writing into a client the player never mentioned, and failing on its
+            // read-only files. That is what "1.14 not installing" plus "Access to the path
+            // 'C:\Games\World of Warcraft\.patch.result' is denied" was.
+            if (mayReRoot)
             {
+                using var probe = System.IO.Compression.ZipFile.OpenRead(zipPath);
                 var resolved = ContentRoot.Resolve(
                     destDir,
                     probe.Entries.Where(e => !string.IsNullOrEmpty(e.Name)).Select(e => e.FullName));
@@ -590,7 +746,7 @@ public sealed class DownloadService : IDownloadService
                 ? fullDest : fullDest + Path.DirectorySeparatorChar;
             int extracted = 0, preserved = 0;
 
-            await Task.Run(() =>
+            await Task.Run(async () =>
             {
                 using var zip = System.IO.Compression.ZipFile.OpenRead(zipPath);
                 foreach (var entry in zip.Entries)
@@ -598,8 +754,22 @@ public sealed class DownloadService : IDownloadService
                     ct.ThrowIfCancellationRequested();
                     if (string.IsNullOrEmpty(entry.Name)) continue; // directory entry
 
+                    // The wrapper folder comes off BEFORE every other rule, so zip-slip, preserve and
+                    // the target path all judge the path the file really gets.
+                    var relName = entry.FullName;
+                    if (stripTopFolder is not null)
+                    {
+                        if (!relName.StartsWith(stripTopFolder, StringComparison.Ordinal))
+                        {
+                            _log.Warning("Skipping zip entry outside the wrapper {Wrapper}: {Entry}", stripTopFolder, relName);
+                            continue;
+                        }
+                        relName = relName[stripTopFolder.Length..];
+                        if (relName.Length == 0) continue;
+                    }
+
                     // Zip-slip guard: resolve target and ensure it stays under destDir.
-                    var target = Path.GetFullPath(Path.Combine(fullDest, entry.FullName));
+                    var target = Path.GetFullPath(Path.Combine(fullDest, relName));
                     if (!target.StartsWith(destRoot, StringComparison.OrdinalIgnoreCase))
                     {
                         _log.Warning("Skipping zip entry outside dest (zip-slip): {Entry}", entry.FullName);
@@ -607,32 +777,88 @@ public sealed class DownloadService : IDownloadService
                     }
 
                     // Preserve existing player data — never clobber config/addons/screenshots/realmlist.
-                    if (IsPreserved(entry.FullName) && File.Exists(target))
+                    if (IsPreserved(relName) && File.Exists(target))
                     {
                         preserved++;
                         continue;
                     }
 
                     Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-                    entry.ExtractToFile(target, overwrite: true);
+                    await ExtractEntryAsync(entry, target, ct).ConfigureAwait(false);
                     extracted++;
                 }
-            }, ct);
+            }, ct).ConfigureAwait(false);
 
             progress?.Report("Entpacken fertig");
             _log.Information("ExtractClient: {Zip} → {Dir} ({Ex} files, {Pr} preserved)",
                 zipPath, destDir, extracted, preserved);
-            return true;
+            return ExtractOutcome.Success;
         }
         catch (OperationCanceledException)
         {
             _log.Information("ExtractClient abgebrochen: {Zip}", zipPath);
-            return false;
+            return ExtractOutcome.Fail(ExtractFailure.Cancelled);
         }
         catch (Exception ex)
         {
-            _log.Error(ex, "ExtractClient failed: {Zip}", zipPath);
-            return false;
+            var failure = Classify(ex);
+            _log.Error(ex, "ExtractClient failed ({Failure}): {Zip}", failure, zipPath);
+            return ExtractOutcome.Fail(failure);
+        }
+    }
+
+    /// <summary>Pauses between attempts at ONE entry. A scanner, a file indexer or the game's own
+    /// updater holds a file for a moment, not for minutes; after these three the file is genuinely
+    /// held or protected and the player must hear which one.</summary>
+    internal static readonly int[] EntryRetryDelaysMs = { 250, 500, 1000 };
+
+    /// <summary>
+    /// Writes one entry, or says which file could not be written. Until 2026-09-05 a single held
+    /// or read-only file — <c>chrome_elf.dll</c> in a Windows client with an antivirus on it — threw
+    /// out of the loop on the first try, after a multi-gigabyte download, and the log named the zip
+    /// rather than the file. Read-only is cleared first: Blizzard's own installer and some backup
+    /// tools set it, and overwriting such a file is exactly what an update is for.
+    /// </summary>
+    private async Task ExtractEntryAsync(System.IO.Compression.ZipArchiveEntry entry, string target,
+        CancellationToken ct)
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            try
+            {
+                ClearReadOnly(target);
+                entry.ExtractToFile(target, overwrite: true);
+                return;
+            }
+            catch (Exception ex) when (ex is UnauthorizedAccessException or IOException
+                                       && attempt < EntryRetryDelaysMs.Length)
+            {
+                _log.Warning("ExtractClient: {Target} held or protected ({Reason}) — retry {Attempt}/{Max}",
+                    target, ex.Message, attempt + 1, EntryRetryDelaysMs.Length);
+                await Task.Delay(EntryRetryDelaysMs[attempt], ct).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is UnauthorizedAccessException or IOException)
+            {
+                throw new IOException(
+                    $"Could not write '{target}' after {EntryRetryDelaysMs.Length + 1} attempts " +
+                    $"({ex.GetType().Name}: {ex.Message}). The file is held by another program " +
+                    "(the game, an antivirus scanner) or write-protected.", ex);
+            }
+        }
+    }
+
+    private static void ClearReadOnly(string target)
+    {
+        try
+        {
+            if (!File.Exists(target)) return;
+            var attrs = File.GetAttributes(target);
+            if ((attrs & FileAttributes.ReadOnly) != 0)
+                File.SetAttributes(target, attrs & ~FileAttributes.ReadOnly);
+        }
+        catch (Exception)
+        {
+            // The extract right after this reports the real error, with the file name.
         }
     }
 }

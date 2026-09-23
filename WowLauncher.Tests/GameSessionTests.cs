@@ -44,6 +44,18 @@ public sealed class GameSessionTests
         public Task StopAsync() { Interlocked.Increment(ref StopCount); return Task.CompletedTask; }
     }
 
+    /// <summary>A proxy whose liveness the test drives, including the honest "not measured" (null) that
+    /// every implementation without a process of its own reports.</summary>
+    private sealed class LivenessProxy : IGameProxy
+    {
+        public int StopCount;
+        public bool? Alive { get; set; } = true;
+        public Task<GameProxyResult> StartAndWaitForPortAsync(int port, TimeSpan timeout, CancellationToken ct = default)
+            => Task.FromResult(GameProxyResult.Ok(1));
+        public Task StopAsync() { Interlocked.Increment(ref StopCount); return Task.CompletedTask; }
+        public bool? IsProcessAlive => Alive;
+    }
+
     private static GameSession NewSession(IGameProcessDetector detector) =>
         // Tiny windows + a real short delay: the polling logic runs against wall-clock deadlines (as in
         // production) but the test does not sit for whole seconds.
@@ -229,6 +241,148 @@ public sealed class GameSessionTests
         Assert.Equal(1, proxy.StopCount);
         Assert.False(session.HasProxy);
     }
+
+    // ── The proxy dying UNDER a playing user (four player reports, 2026-08 to 2026-09) ─────────────
+
+    [Fact]
+    public async Task Monitor_RecordsThatTheProxyDied_WhileTheClientWasStillRunning()
+    {
+        // Client up, up, up, gone — and the proxy dies while it is still up.
+        var detector = new ScriptedDetector(true, true, true, false);
+        var proxy = new LivenessProxy();
+        var session = NewSession(detector);
+        session.AttachProxy(proxy);
+
+        proxy.Alive = false; // the crash happens during the session, before the client quits
+        await session.MonitorUntilExitAsync("/opt/wow/WowClassic.exe");
+
+        Assert.True(session.ProxyDiedDuringSession);
+    }
+
+    [Fact]
+    public async Task Monitor_DoesNotClaimADeath_WhenTheProxyStayedAlive()
+    {
+        var detector = new ScriptedDetector(true, true, false);
+        var proxy = new LivenessProxy { Alive = true };
+        var session = NewSession(detector);
+        session.AttachProxy(proxy);
+
+        await session.MonitorUntilExitAsync("/opt/wow/WowClassic.exe");
+
+        Assert.False(session.ProxyDiedDuringSession);
+    }
+
+    /// <summary>The three-valued liveness earns its keep here: a runner that does not measure reports
+    /// null, and null must stay silence. A bool-shaped default of false would turn every proxy that
+    /// cannot answer into a reported mid-game disconnect.</summary>
+    [Fact]
+    public async Task Monitor_TreatsAnUnmeasuredProxyAsSilence_NotAsADeath()
+    {
+        var detector = new ScriptedDetector(true, true, false);
+        var proxy = new LivenessProxy { Alive = null };
+        var session = NewSession(detector);
+        session.AttachProxy(proxy);
+
+        await session.MonitorUntilExitAsync("/opt/wow/WowClassic.exe");
+
+        Assert.False(session.ProxyDiedDuringSession);
+    }
+
+    /// <summary>A new launch must not inherit the previous session's incident.</summary>
+    [Fact]
+    public async Task AttachProxy_ClearsTheIncidentOfTheSessionBefore()
+    {
+        var session = NewSession(new ScriptedDetector(true, true, false));
+        var dead = new LivenessProxy { Alive = false };
+        session.AttachProxy(dead);
+        await session.MonitorUntilExitAsync("/opt/wow/WowClassic.exe");
+        Assert.True(session.ProxyDiedDuringSession);
+
+        session.AttachProxy(new LivenessProxy { Alive = true });
+        Assert.False(session.ProxyDiedDuringSession);
+    }
+
+    // ── A client that was gone again at once (Windows confirms a start without looking) ────────────
+
+    /// <summary>Instant delay, 5-second polls: lifetime is counted in poll intervals, so a scripted
+    /// detector answer sequence IS the client's lifetime.</summary>
+    private static GameSession FiveSecondPolls(IGameProcessDetector detector) =>
+        new(detector, Log(), appearTimeout: TimeSpan.FromMilliseconds(200),
+            pollInterval: TimeSpan.FromSeconds(5), delay: (_, _) => Task.CompletedTask);
+
+    [Fact]
+    public async Task ClientThatNeverAppears_EndedRightAfterStart()
+    {
+        var session = NewSession(new ScriptedDetector(false));
+        await session.MonitorUntilExitAsync("C:/g/WoW.exe");
+        Assert.True(session.ClientEndedRightAfterStart);
+    }
+
+    [Fact]
+    public async Task ClientGoneAfterTenSeconds_EndedRightAfterStart()
+    {
+        // appear check, then alive for two 5 s polls, then gone
+        var session = FiveSecondPolls(new ScriptedDetector(true, true, true, false));
+        await session.MonitorUntilExitAsync("C:/g/WoW.exe");
+        Assert.True(session.ClientEndedRightAfterStart);
+    }
+
+    [Fact]
+    public async Task ClientThatPlayed_IsANormalSession_AndClearsTheOldFlag()
+    {
+        var session = FiveSecondPolls(new ScriptedDetector(false));
+        await session.MonitorUntilExitAsync("C:/g/WoW.exe");
+        Assert.True(session.ClientEndedRightAfterStart);
+
+        // the next session lives 20 s: the flag of the previous one must not stick
+        var longer = new ScriptedDetector(true, true, true, true, true, false);
+        var session2 = FiveSecondPolls(longer);
+        await session2.MonitorUntilExitAsync("C:/g/WoW.exe");
+        Assert.False(session2.ClientEndedRightAfterStart);
+    }
+
+    /// <summary>Answers from whichever script is current, so one session can be watched twice.</summary>
+    private sealed class SwitchableDetector : IGameProcessDetector
+    {
+        public IGameProcessDetector Current { get; set; } = new ScriptedDetector(false);
+        public bool IsGameRunning(string? expectedExePath) => Current.IsGameRunning(expectedExePath);
+    }
+
+    [Fact]
+    public async Task SameSession_ResetsTheFlag_OnTheNextWatch()
+    {
+        var detector = new SwitchableDetector();
+        var session = FiveSecondPolls(detector);
+        await session.MonitorUntilExitAsync("C:/g/WoW.exe");
+        Assert.True(session.ClientEndedRightAfterStart);
+
+        detector.Current = new ScriptedDetector(true, true, true, true, true, false);
+        await session.MonitorUntilExitAsync("C:/g/WoW.exe");
+        Assert.False(session.ClientEndedRightAfterStart);
+    }
+
+    [Fact]
+    public void WdbCache_Clear_DeletesOnlyWdbFiles()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "st-wdb-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(dir, "WDB", "enUS"));
+            File.WriteAllText(Path.Combine(dir, "WDB", "itemcache.wdb"), "x");
+            File.WriteAllText(Path.Combine(dir, "WDB", "enUS", "creaturecache.wdb"), "x");
+            File.WriteAllText(Path.Combine(dir, "WDB", "keep.txt"), "x");
+            Directory.CreateDirectory(Path.Combine(dir, "WTF"));
+            File.WriteAllText(Path.Combine(dir, "WTF", "Config.wtf"), "x");
+
+            Assert.Equal(2, WdbCache.Clear(dir, Log()));
+            Assert.False(File.Exists(Path.Combine(dir, "WDB", "itemcache.wdb")));
+            Assert.False(File.Exists(Path.Combine(dir, "WDB", "enUS", "creaturecache.wdb")));
+            Assert.True(File.Exists(Path.Combine(dir, "WDB", "keep.txt")));
+            Assert.True(File.Exists(Path.Combine(dir, "WTF", "Config.wtf")));
+            Assert.Equal(0, WdbCache.Clear(Path.Combine(dir, "nothing-here"), Log()));
+        }
+        finally { try { Directory.Delete(dir, true); } catch { /* temp */ } }
+    }
 }
 
 /// <summary>The graceful-shutdown contract the owner requires: stop the proxy with SIGTERM first and
@@ -341,4 +495,5 @@ public sealed class ShellWindowControllerTests
         Assert.Equal(1, hides);
         Assert.Equal(1, restores);
     }
+
 }

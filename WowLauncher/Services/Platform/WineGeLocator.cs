@@ -12,6 +12,13 @@ namespace WowLauncher.Services.Platform;
 /// without Lutris, but it is the second choice, not the first: it downloads roughly 2.9 GB on first
 /// run and is unproven for this client.</para>
 ///
+/// <para><b>🔴 Superseded 2026-09-19 for the FRONT of the order, not the reasoning above.</b> That
+/// 2026-07-21 measurement was about D3D12 availability, which GE-Proton has too - it was never about
+/// the Wine world-entry crash <c>ProxyBinaryResolver</c> documents. The run that fixed THAT
+/// (JimsProxy v5.2.1-beta.4, Ledger run U, in the world) used GE-Proton, so KONZEPT §13 puts
+/// <see cref="GeProtonLocator"/> first in the Linux runner order and wine-ge second - still ahead of
+/// umu, on the same evidence as here.</para>
+///
 /// <para>Selection mirrors the shell script exactly - glob
 /// <c>~/.local/share/lutris/runners/wine/wine-ge-*/bin/wine</c>, highest version wins - because that
 /// is the selection the working path uses. Version ordering is numeric per segment (<c>sort -V</c>),

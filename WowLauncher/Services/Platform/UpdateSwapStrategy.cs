@@ -9,8 +9,9 @@ using System.Diagnostics;
 /// </summary>
 public interface IUpdateSwapStrategy
 {
-    /// <summary>False when this platform has no self-update swap yet (Linux until WP7) — the caller
-    /// then skips the swap instead of pretending to apply one.</summary>
+    /// <summary>False when this platform has no self-update swap — the caller then skips the swap
+    /// instead of pretending to apply one. Today every platform has one (Linux since 1.8.10, measured
+    /// 1.8.3 -> 1.8.11 on 2026-09-19); the flag stays as the seam for a future platform.</summary>
     bool IsSupported { get; }
 
     /// <summary>Stage + launch a detached process that swaps <paramref name="currentExePath"/> with
@@ -128,12 +129,30 @@ public sealed class WindowsUpdateSwapStrategy : IUpdateSwapStrategy
             "",
             "rem Wait for the launcher to be gone. ping, not timeout: timeout aborts under redirected",
             "rem stdin, which is what a detached windowless child has, and would not wait at all.",
-            "rem CSV output, and a line must START with a quote to count as a process: the plain format",
-            "rem prints an INFO sentence when nothing matches, and a failing tasklist would otherwise",
-            "rem read exactly like 'the launcher has exited' — the one wrong answer here.",
+            "rem",
+            "rem The process row is read by for /f, never piped into a quote-matching filter. Until",
+            "rem 2026-09-05 the probe matched a leading quote through such a filter, with the pattern",
+            "rem written as an escaped quote. That left cmd's own quote count odd, so the redirect",
+            "rem behind it became a FILE ARGUMENT to the filter (cannot open the redirect target,",
+            "rem exit code 1) on every tick,",
+            "rem for every launcher, measured in the win11 VM (W13). The wait therefore never waited:",
+            "rem the renames ran under the still-running launcher and the relaunch put a second one",
+            "rem beside it. tasklist is already filtered by PID; the only question is whether a row",
+            "rem came back whose PID field IS the pid. The INFO sentence has no comma, so it has no",
+            "rem second field and can never match.",
+            "",
+            "rem Positive control first: if tasklist cannot list anything, 'not found' would mean",
+            "rem 'not measured', not 'exited' — and then nothing below is safe to touch.",
+            "set \"TLOK=0\"",
+            "for /f \"usebackq tokens=2 delims=,\" %%A in (`tasklist /FO CSV /NH 2^>nul`) do set \"TLOK=1\"",
+            "if \"%TLOK%\"==\"0\" (",
+            "  echo [%DATE% %TIME%] swap SKIPPED: tasklist lists no processes at all, launcher state unknown>>\"%LOG%\"",
+            "  goto done",
+            ")",
             ":wait",
-            "tasklist /FI \"PID eq %PID%\" /FO CSV /NH 2>nul | findstr /B /C:\"\\\"\" >nul",
-            "if errorlevel 1 goto swap",
+            "set \"ALIVE=0\"",
+            "for /f \"usebackq tokens=2 delims=,\" %%A in (`tasklist /FI \"PID eq %PID%\" /FO CSV /NH 2^>nul`) do if \"%%~A\"==\"%PID%\" set \"ALIVE=1\"",
+            "if \"%ALIVE%\"==\"0\" goto swap",
             "set /a TRIES+=1",
             $"if %TRIES% GEQ {waitTicks} goto giveup",
             "ping -n 2 127.0.0.1 >nul 2>&1",
@@ -163,6 +182,11 @@ public sealed class WindowsUpdateSwapStrategy : IUpdateSwapStrategy
             "",
             ":giveup",
             "echo [%DATE% %TIME%] swap SKIPPED: launcher pid %PID% never exited>>\"%LOG%\"",
+            "rem By measurement the launcher is STILL RUNNING. Starting another one on top of it is",
+            "rem not a recovery, it is a second window fighting the first over the proxy and the",
+            "rem config (there is no single-instance lock). The player has their launcher — the one",
+            "rem that never exited. The downloaded build stays beside it; the next start retries.",
+            "goto done",
             "",
             "rem Start what EXISTS, never a path blindly. If both renames failed and the restore failed",
             "rem too, the player's launcher is sitting under the backup name — starting it is the whole",
@@ -201,8 +225,12 @@ public sealed class WindowsUpdateSwapStrategy : IUpdateSwapStrategy
             $"if %WTRIES% LSS {healthTicks} goto watchloop",
             "",
             "rem Zeit abgelaufen. Laeuft er noch? Dann ist er langsam, nicht kaputt - Finger weg.",
-            "tasklist /FI \"IMAGENAME eq %CURNAME%\" /FO CSV /NH 2>nul | findstr /B /C:\"\\\"\" >nul",
-            "if not errorlevel 1 (",
+            "rem Gleiche Lesart wie in :wait (for /f statt Filter, siehe dort): mit der alten Zeile",
+            "rem war die Antwort immer 'laeuft nicht', und ein langsamer Start wurde nach Ablauf der",
+            "rem Frist zurueckgerollt - genau das, was dieser Zweig verhindern soll.",
+            "set \"RUNNING=0\"",
+            "for /f \"usebackq tokens=1 delims=,\" %%A in (`tasklist /FI \"IMAGENAME eq %CURNAME%\" /FO CSV /NH 2^>nul`) do if /I \"%%~A\"==\"%CURNAME%\" set \"RUNNING=1\"",
+            "if \"%RUNNING%\"==\"1\" (",
             "  echo [%DATE% %TIME%] health UNKLAR: %CURNAME% laeuft noch, hat sich aber nicht" +
                 " gemeldet - kein Rueckfall>>\"%LOG%\"",
             "  goto done",
@@ -600,6 +628,16 @@ public sealed class MacUpdateSwapStrategy : IUpdateSwapStrategy
     /// update that just happened, not an archive.</summary>
     public const string PreviousSuffix = ".old";
 
+    /// <summary>Where the swap writes what it did — in the bundle's PARENT directory, not inside the
+    /// bundle. Windows and Linux have had this since day one; macOS had none until 2026-09-15, which
+    /// meant that on the one platform where the detached script's output goes nowhere at all, a failed
+    /// swap also left no trace on disk.</summary>
+    public const string SwapLogName = "update-swap.log";
+
+    /// <summary>Where a bundle goes that was rolled back: kept, not deleted, so the crash can still be
+    /// looked at afterwards. One generation, same as <see cref="PreviousSuffix"/>.</summary>
+    public const string BrokenSuffix = ".broken";
+
     public bool ApplySwap(string newExePath, string currentExePath, string appDir, Version? target = null)
     {
         // STAGING failures throw (contract, same as the other two platforms).
@@ -634,7 +672,7 @@ public sealed class MacUpdateSwapStrategy : IUpdateSwapStrategy
         var script = Path.Combine(Path.GetTempPath(),
             $"stonetavern-launcher-update-{Environment.ProcessId}.sh");
         File.WriteAllText(script,
-            BuildScript(newBundle, bundle, staging, Environment.ProcessId, executable));
+            BuildScript(newBundle, bundle, staging, Environment.ProcessId, executable, target: target));
         if (OperatingSystem.IsMacOS())
             File.SetUnixFileMode(script,
                 UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
@@ -734,12 +772,33 @@ public sealed class MacUpdateSwapStrategy : IUpdateSwapStrategy
     /// The helper. Same shape as the Linux one: literal paths, no parsing at run time, bounded wait,
     /// and the old bundle stays until the new one is in place.
     /// </summary>
+    /// <param name="target">Die Version, die hochkommen soll. Ohne sie gibt es keine Wache, und dann
+    /// steht im Skript auch nichts, was so aussieht, als gaebe es eine.</param>
+    /// <param name="healthTicks">Wie lange auf die Meldung gewartet wird, ein Tick = 1 s.</param>
     internal static string BuildScript(
         string newBundle, string currentBundle, string staging, int pid, string executable,
-        int waitTicks = 100)
+        int waitTicks = 100, Version? target = null, int healthTicks = 90,
+        string? launchLine = null)
     {
+        // Testnaht fuer den Start des getauschten Bundles. In Produktion IMMER `open` — das ist der
+        // Grund, warum es hier steht (Dock-Symbol, eigene LaunchServices-Sitzung statt eines
+        // kopflosen Kindes dieses Skripts). Auf Linux gibt es `open` nicht, und ohne diese Naht
+        // waeren genau die zwei Zweige unpruefbar, die davon abhaengen, dass der neue Build wirklich
+        // laeuft: "er meldet sich" und "er ist nur langsam". Ein Test, der sie nicht ausfuehren kann,
+        // haette den Rueckfall trotzdem gruen gemeldet — aus dem falschen Grund.
+        var start = launchLine ?? "open \"$CUR\"";
         var previous = currentBundle + PreviousSuffix;
-        return string.Join('\n',
+        // 🔴 Sentinel, Quarantaene-Notiz und Protokoll liegen NEBEN dem Bundle, nicht darin.
+        //
+        // Auf Linux wird eine DATEI getauscht und ihr Verzeichnis bleibt stehen, also darf der Sentinel
+        // dort daneben liegen. Auf macOS wird das ganze BUNDLE umbenannt — alles darin wandert mit dem
+        // alten Bundle weg. Genau das wurde am 2026-09-15 auf einem echten Mac gemessen: nach dem
+        // Tausch lag "Stonetavern.app.old/Contents/MacOS/update-health.txt" unberuehrt da, waehrend
+        // UpdateService den Sentinel brav geschrieben hatte. Ein Vertrag, den es gibt und der nichts
+        // tut. UpdateHealth legt ihn seitdem an derselben Stelle ab wie dieses Skript ihn sucht.
+        var neben = Path.GetDirectoryName(currentBundle) ?? ".";
+        var lines = new List<string>
+        {
             "#!/bin/sh",
             "# Stonetavern launcher self-update. Generated; safe to delete if the launcher is running.",
             "set -u",
@@ -750,15 +809,21 @@ public sealed class MacUpdateSwapStrategy : IUpdateSwapStrategy
             $"EXE='{Escape(executable)}'",
             $"LOCK='{Escape(currentBundle)}.updating'",
             $"PID={pid}",
+            $"LOG='{Escape(Path.Combine(neben, SwapLogName))}'",
+            "",
+            "# Ohne diese Zeile gibt es nach einem fehlgeschlagenen Tausch gar nichts: das Skript laeuft",
+            "# abgekoppelt und ohne Fenster, seine Ausgabe geht nirgendwohin.",
+            "say() { echo \"[$(date '+%Y-%m-%d %H:%M:%S')] $1\" >> \"$LOG\" 2>/dev/null; }",
             "",
             "# Every way out of this script that is not 'the launcher is still running' ends with a",
             "# launcher on screen. Getting this wrong is not a crash, it is worse: the player pressed",
             "# update, the window closed, and nothing ever came back — with a perfectly intact bundle",
             "# sitting on disk that nobody starts.",
             "give_up() {",
+            "  say 'swap FEHLGESCHLAGEN - der vorherige Build wird gestartet'",
             "  rm -rf \"$STAGE\" 2>/dev/null",
             "  rmdir \"$LOCK\" 2>/dev/null",
-            "  [ -d \"$CUR\" ] && open \"$CUR\"",
+            "  [ -d \"$CUR\" ] && " + start,
             "  rm -f \"$0\"",
             "  exit 1",
             "}",
@@ -777,7 +842,7 @@ public sealed class MacUpdateSwapStrategy : IUpdateSwapStrategy
             "# the first is halfway through moving — mkdir is the atomic test-and-set every sh has.",
             "if ! mkdir \"$LOCK\" 2>/dev/null; then",
             "  rm -rf \"$STAGE\" 2>/dev/null",
-            "  [ -d \"$CUR\" ] && open \"$CUR\"",
+            "  [ -d \"$CUR\" ] && " + start,
             "  rm -f \"$0\"",
             "  exit 0",
             "fi",
@@ -805,11 +870,62 @@ public sealed class MacUpdateSwapStrategy : IUpdateSwapStrategy
             "",
             "rm -rf \"$STAGE\" 2>/dev/null",
             "rmdir \"$LOCK\" 2>/dev/null",
+            "say 'swap OK: Bundle ersetzt, vorheriges liegt als .old daneben'",
             "# open, not the executable directly: that is what gives the relaunched launcher its Dock",
             "# icon and its own LaunchServices session instead of a headless child of this script.",
-            "open \"$CUR\"",
-            "rm -f \"$0\"",
-            "") + "\n";
+            start,
+        };
+
+        if (target is not null)
+        {
+            lines.AddRange(new[]
+            {
+                "",
+                "# ── Gesundheitsvertrag ───────────────────────────────────────────────────────────────",
+                "# Bis 2026-09-15 gab es diesen Block auf macOS NICHT. UpdateService schrieb den Sentinel",
+                "# trotzdem (auf jeder Plattform), nur las ihn hier niemand: ein neuer Bau, der vor dem",
+                "# ersten Fenster stirbt, blieb installiert, und das .old-Bundle daneben holte nie jemand",
+                "# zurueck. Genau der Fall vom 2026-08-04 (SkiaSharp, Absturz nach drei Sekunden).",
+                $"SENTINEL='{Escape(Path.Combine(neben, Services.UpdateHealth.SentinelName))}'",
+                $"QUARANTINE='{Escape(Path.Combine(neben, Services.UpdateHealth.QuarantineName))}'",
+                $"BROKEN='{Escape(currentBundle + BrokenSuffix)}'",
+                $"TARGET='{Escape(target.ToString())}'",
+                "if [ -f \"$SENTINEL\" ]; then",
+                "  w=0",
+                $"  while [ \"$w\" -lt {healthTicks} ]; do",
+                "    sleep 1",
+                "    if [ ! -f \"$SENTINEL\" ]; then say 'health OK: der neue Build hat sich gemeldet'; break; fi",
+                "    w=$((w+1))",
+                "  done",
+                "  if [ -f \"$SENTINEL\" ]; then",
+                // Kein $! wie auf Linux: `open` kehrt sofort zurueck und ist NICHT der Launcher-Prozess.
+                // Die ehrliche Frage auf macOS lautet darum "laeuft die Datei, die das Bundle nennt".
+                "    if pgrep -f \"$CUR/Contents/MacOS/$EXE\" >/dev/null 2>&1; then",
+                "      say 'health UNKLAR: der neue Build laeuft noch ohne Meldung - kein Rueckfall'",
+                "    elif [ ! -e \"$OLD\" ]; then",
+                "      say 'kein Rueckweg vorhanden - der neue Build bleibt stehen'",
+                "    else",
+                "      say 'health FEHLGESCHLAGEN: der neue Build ist ohne Meldung beendet - zurueck auf den vorherigen'",
+                "      rm -rf \"$BROKEN\" 2>/dev/null",
+                "      mv \"$CUR\" \"$BROKEN\" 2>/dev/null",
+                "      if mv \"$OLD\" \"$CUR\" 2>/dev/null && [ -d \"$CUR\" ]; then",
+                "        printf '%s\\n' \"$TARGET\" > \"$QUARANTINE\"",
+                "        rm -f \"$SENTINEL\"",
+                "        say \"zurueckgerollt auf den vorherigen Build, $TARGET in Quarantaene\"",
+                "        " + start,
+                "      else",
+                "        say 'RUECKFALL FEHLGESCHLAGEN: der vorherige Build kam nicht zurueck'",
+                "      fi",
+                "    fi",
+                "  fi",
+                "fi",
+            });
+        }
+
+        lines.Add("");
+        lines.Add("rm -f \"$0\"");
+        lines.Add("");
+        return string.Join('\n', lines) + "\n";
     }
 
     /// <summary>Single quotes are the only thing that can end a single-quoted sh string.</summary>

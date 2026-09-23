@@ -24,8 +24,8 @@ public sealed class MockFriendsPresenceService : IFriendsPresenceService
         new("Stormquill", PresenceStatus.Offline, "",                    null),
     ];
 
-    public Task<IReadOnlyList<FriendPresence>> GetFriendsAsync(CancellationToken ct = default) =>
-        Task.FromResult<IReadOnlyList<FriendPresence>>(_roster.ToList());
+    public Task<IReadOnlyList<FriendPresence>?> GetFriendsAsync(CancellationToken ct = default) =>
+        Task.FromResult<IReadOnlyList<FriendPresence>?>(_roster.ToList());
 
     public Task<AddFriendResult> AddFriendAsync(string account, CancellationToken ct = default)
     {

@@ -1,0 +1,297 @@
+<!--
+  Stonetavern Launcher — the 1.9 login/loading shell (Spec 2026-09-20 §1 to §7).
+
+  One entry screen, not two: the card takes the credentials while the init pipeline runs behind it.
+  Layers back to front (§5.1): backdrop (gradient placeholder, then the decoded picture) · dimmer ·
+  [shader: Gate 3, not here] · sigil · card · status line · chrome (the Phase-3 target) · version.
+
+  Phase 0 is what this file renders before anything else happens: the gradient, the sigil at 0.15,
+  nothing else. The code-behind waits for the first rendered frame, then the ViewModel enters Phase 1
+  (the root Border gains "warm": sigil warms up, card enters) and only then starts the pipeline.
+
+  Identity: the shipped warm-stone language (Styles.axaml tokens, IM Fell wordmark, Alegreya body,
+  JetBrains Mono for every machine value). Carved, matte, one hairline, radius 2, no glow, no glass.
+  The ONE light source is the lantern: the gradient behind it is the light it casts.
+
+  Player-facing text is English from the catalogue (VOICE.md); every Duration/Easing is a token.
+-->
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:loc="using:WowLauncher.Localization"
+        xmlns:vm="using:WowLauncher.ViewModels"
+        xmlns:controls="using:WowLauncher.Controls"
+        x:Class="WowLauncher.Views.LoginShellWindow"
+        x:DataType="vm:LoginShellViewModel"
+        Icon="avares://WowLauncher/Assets/stonetavern-logo.png"
+        Title="{loc:Tr App_WindowTitle}"
+        Width="1000" Height="640"
+        MinWidth="1000" MinHeight="640"
+        CanResize="False"
+        SizeToContent="Manual"
+        WindowStartupLocation="CenterScreen"
+        WindowDecorations="BorderOnly"
+        ExtendClientAreaToDecorationsHint="True"
+        Background="{StaticResource StoneBase}">
+
+    <Window.Styles>
+        <StyleInclude Source="avares://WowLauncher/Styles/LoginShell.axaml"/>
+    </Window.Styles>
+
+    <!-- "live" = the motion gate (code-behind, like every shell). "warm" = Phase 1 reached.
+         "leaving" = the Phase-3 storyboard is running. -->
+    <Border x:Name="Root" Classes="live"
+            Classes.warm="{Binding !IsColdStart}"
+            Classes.leaving="{Binding IsTransitioning}"
+            Background="{StaticResource StoneBase}" ClipToBounds="True">
+        <Grid>
+
+            <!-- ═══ 1. Backdrop ═══ -->
+            <!-- The placeholder: stone, lit from the point where the lantern will hang. Costs a
+                 gradient, nothing decoded, nothing fetched (§4). -->
+            <Border IsHitTestVisible="False">
+                <Border.Background>
+                    <RadialGradientBrush Center="50%,12%" GradientOrigin="50%,12%" RadiusX="60%" RadiusY="75%">
+                        <GradientStop Offset="0.0" Color="#3C8A5523"/>
+                        <GradientStop Offset="0.45" Color="#14221C17"/>
+                        <GradientStop Offset="1.0" Color="#00100D0A"/>
+                    </RadialGradientBrush>
+                </Border.Background>
+            </Border>
+            <!-- The picture, decoded off the UI thread after the first frame, cover-fit, no distortion.
+                 Source is set from code-behind; the "ready" class fades it in over Motion.Slow. -->
+            <Image x:Name="Backdrop" Classes="ls-backdrop" Stretch="UniformToFill"
+                   IsHitTestVisible="False"
+                   RenderOptions.BitmapInterpolationMode="HighQuality"/>
+            <!-- Darkening. Stays for Phase 3 and deepens: the continuity anchor (§7). -->
+            <Border Classes="ls-dimmer" Background="{StaticResource StoneBase}" IsHitTestVisible="False"/>
+
+            <!-- ═══ 7. Chrome: the Phase-4 header this storyboard lands on (declared before the column so it sits BELOW the sigil in z-order and the mark lands on it) ═══ -->
+            <!-- 40 px, wordmark left, exactly where the v3 shell draws its own; the sigil's travel
+                 target is the lantern slot in here. Invisible until "leaving". -->
+            <Border Classes="ls-chrome" Height="40" VerticalAlignment="Top"
+                    Background="{StaticResource StoneSurface}"
+                    BorderBrush="{StaticResource StoneBorder}" BorderThickness="0,0,0,1">
+                <StackPanel Orientation="Horizontal" Spacing="10" Margin="14,0,0,0" VerticalAlignment="Center">
+                    <Panel x:Name="ChromeSigilSlot" Width="22" Height="22"/>
+                    <TextBlock Text="STONETAVERN" FontFamily="{StaticResource FontDisplay}"
+                               FontSize="13" LetterSpacing="3"
+                               Foreground="{StaticResource ParchmentPrimary}" VerticalAlignment="Center"/>
+                </StackPanel>
+            </Border>
+
+            <!-- ═══ 3. Sigil + 4. Card + 5. Status: the optical column ═══ -->
+            <!-- Rows 9 : Auto : 11 put the card's centre at 45 % of the height (§5.1), at 640 as at
+                 800 (Steam Deck): the geometry is a ratio, not a margin. -->
+            <Grid RowDefinitions="9*,Auto,11*" ColumnDefinitions="*,352,*">
+
+                <!-- The sigil hangs above the card, bottom-aligned to the top row. In Phase 3 it
+                     travels to the chrome slot top-left (transform from real bounds, code-behind). -->
+                <Panel x:Name="Sigil" Classes="ls-sigil" Grid.Row="0" Grid.Column="1"
+                       Width="108" Height="108"
+                       HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,0,0,12"
+                       IsHitTestVisible="False" RenderTransformOrigin="50%,50%">
+                    <!-- The light the lantern throws. Breathes on Motion.Pulse. -->
+                    <Border Classes="ls-bloom" Width="108" Height="108">
+                        <Border.Background>
+                            <RadialGradientBrush Center="50%,50%" GradientOrigin="50%,50%" RadiusX="50%" RadiusY="50%">
+                                <GradientStop Offset="0.0" Color="#5C8A5523"/>
+                                <GradientStop Offset="0.55" Color="#1E8A5523"/>
+                                <GradientStop Offset="1.0" Color="#008A5523"/>
+                            </RadialGradientBrush>
+                        </Border.Background>
+                    </Border>
+                    <!-- The ring: the sigil placeholder until §12.4 hands over the real mark. It is
+                         the part that turns (Motion.Ambient, linear); the lantern stays upright. -->
+                    <Ellipse Classes="ls-ringtrack" Width="94" Height="94" Stroke="{StaticResource StoneBorder}" StrokeThickness="1"/>
+                    <Ellipse Classes="ls-ring" Width="94" Height="94"
+                             Stroke="{StaticResource EmberDim}" StrokeThickness="1.5"
+                             StrokeDashArray="26,14,4,14,26,90" StrokeLineCap="Round"
+                             RenderTransformOrigin="50%,50%">
+                        <Ellipse.RenderTransform>
+                            <RotateTransform Angle="0"/>
+                        </Ellipse.RenderTransform>
+                    </Ellipse>
+                    <!-- The success pulse (§6): one stronger beat of the same light, played once
+                         from code-behind over Motion.Base. Invisible otherwise. -->
+                    <Border x:Name="SuccessBloom" Width="108" Height="108" Opacity="0" IsHitTestVisible="False">
+                        <Border.Background>
+                            <RadialGradientBrush Center="50%,50%" GradientOrigin="50%,50%" RadiusX="50%" RadiusY="50%">
+                                <GradientStop Offset="0.0" Color="#8AC9772E"/>
+                                <GradientStop Offset="0.5" Color="#2EC9772E"/>
+                                <GradientStop Offset="1.0" Color="#00C9772E"/>
+                            </RadialGradientBrush>
+                        </Border.Background>
+                    </Border>
+                    <Image x:Name="SigilMark" Source="avares://WowLauncher/Assets/lantern.png"
+                           Width="44" Height="54"
+                           HorizontalAlignment="Center" VerticalAlignment="Center"
+                           RenderOptions.BitmapInterpolationMode="HighQuality"/>
+                </Panel>
+
+                <!-- Banner and card share the centre row, so a banner re-centres the composition
+                     instead of climbing out of the frame (measured 2026-09-20: bottom-anchored in
+                     the top row it left the window at 640 px). -->
+                <StackPanel Grid.Row="1" Grid.Column="1" Spacing="10">
+
+                <!-- §5.3 update banner, above the card, Motion.Slow. -->
+                <Border Classes="ls-banner" Classes.shown="{Binding HasUpdateBanner}"
+                        Background="{StaticResource LsCardFill}"
+                        BorderBrush="{StaticResource EmberDim}" BorderThickness="1"
+                        CornerRadius="{StaticResource RadiusMd}" Padding="12,8">
+                    <TextBlock Text="{Binding UpdateBanner}" FontFamily="{StaticResource FontBody}"
+                               FontSize="13" Foreground="{StaticResource ParchmentPrimary}"
+                               TextWrapping="Wrap" TextAlignment="Center"/>
+                </Border>
+
+                <!-- The card. The wrapper is what the error shake moves (a plain TranslateTransform,
+                     no styles), so the card's own transitions (enter/leave) never fight it. -->
+                <Panel x:Name="CardShaker">
+                    <Panel.RenderTransform>
+                        <TranslateTransform X="0"/>
+                    </Panel.RenderTransform>
+                <Border x:Name="Card" Classes="ls-card"
+                        Background="{StaticResource LsCardFill}"
+                        BorderBrush="{StaticResource StoneBorder}" BorderThickness="1"
+                        CornerRadius="{StaticResource RadiusMd}"
+                        Padding="28,22,28,18"
+                        RenderTransformOrigin="50%,50%">
+                    <StackPanel Spacing="0">
+
+                        <TextBlock Text="STONETAVERN"
+                                   FontFamily="{StaticResource FontDisplay}"
+                                   FontSize="20" LetterSpacing="6"
+                                   Foreground="{StaticResource ParchmentPrimary}"
+                                   HorizontalAlignment="Center" Margin="6,0,0,18"/>
+
+                        <TextBlock Classes="ls-fieldlabel" Text="{loc:Tr Login_Username}"/>
+                        <TextBox x:Name="UsernameBox" Classes="ls-field"
+                                 Text="{Binding Username}"
+                                 IsReadOnly="{Binding FieldsReadOnly}"
+                                 TabIndex="0"/>
+
+                        <TextBlock Classes="ls-fieldlabel" Text="{loc:Tr Login_Password}" Margin="0,14,0,6"/>
+                        <TextBox x:Name="PasswordBox" Classes="ls-field"
+                                 Classes.invalid="{Binding IsFieldError}"
+                                 Text="{Binding Password}"
+                                 PasswordChar="●"
+                                 IsReadOnly="{Binding FieldsReadOnly}"
+                                 TabIndex="1"/>
+
+                        <!-- Inline error under the affected field (§6). Reserved height so the card
+                             never grows or shrinks when a message appears. -->
+                        <Panel MinHeight="20" Margin="0,5,0,0">
+                            <TextBlock Classes="ls-error" Text="{Binding Error}"
+                                       IsVisible="{Binding HasError}"/>
+                        </Panel>
+
+                        <!-- The action. Label and spinner share the slot; the width is the card's. -->
+                        <Button x:Name="SignInButton" Classes="ls-action"
+                                Classes.busy="{Binding IsButtonBusy}"
+                                Command="{Binding SignInCommand}"
+                                IsDefault="True" TabIndex="2" Margin="0,6,0,0">
+                            <Panel>
+                                <TextBlock Classes="ls-label" Text="{loc:Tr Login_SignIn}"
+                                           HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                <Panel Classes="ls-spinnerslot" HorizontalAlignment="Center" VerticalAlignment="Center">
+                                    <StackPanel Orientation="Horizontal" Spacing="10">
+                                        <Path Classes="ls-spinner" VerticalAlignment="Center">
+                                            <Path.RenderTransform>
+                                                <RotateTransform Angle="0"/>
+                                            </Path.RenderTransform>
+                                        </Path>
+                                        <TextBlock Text="{Binding ButtonBusyText}" VerticalAlignment="Center"
+                                                   Foreground="{StaticResource ParchmentPrimary}"/>
+                                    </StackPanel>
+                                </Panel>
+                            </Panel>
+                        </Button>
+
+                        <!-- Offline path (§6 after a timeout; always when §12.3 says so). -->
+                        <Button Classes="ls-link" Content="{loc:Tr Login_Shell_ContinueOffline}"
+                                Command="{Binding ContinueOfflineCommand}"
+                                IsVisible="{Binding ShowsOfflinePath}"
+                                Margin="0,10,0,0" TabIndex="3"/>
+
+                        <!-- Realm status: a skeleton row per shipped realm, filled in place (§5.2). -->
+                        <Border Height="1" Background="{StaticResource StoneBorder}" Margin="0,14,0,10"/>
+                        <ItemsControl ItemsSource="{Binding Realms}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="vm:RealmStatusRow">
+                                    <Grid ColumnDefinitions="Auto,*,Auto" Height="18" Margin="0,2">
+                                        <Panel Grid.Column="0" Width="7" Height="7" Margin="0,0,10,0" VerticalAlignment="Center">
+                                            <Border Classes="ls-skeleton" Width="7" Height="7" CornerRadius="4"
+                                                    IsVisible="{Binding !IsResolved}"/>
+                                            <Ellipse Classes="ls-dot" Classes.online="{Binding IsOnline}"
+                                                     IsVisible="{Binding IsResolved}"/>
+                                        </Panel>
+                                        <TextBlock Grid.Column="1" Text="{Binding Name}"
+                                                   FontFamily="{StaticResource FontBody}" FontSize="13.5"
+                                                   Foreground="{StaticResource ParchmentPrimary}"
+                                                   VerticalAlignment="Center"/>
+                                        <Panel Grid.Column="2" VerticalAlignment="Center" MinWidth="72">
+                                            <Border Classes="ls-skeleton" Width="72" HorizontalAlignment="Right"
+                                                    IsVisible="{Binding !IsResolved}">
+                                                <Border Classes="ls-shimmer" Height="10">
+                                                    <Border.RenderTransform>
+                                                        <TranslateTransform X="-64"/>
+                                                    </Border.RenderTransform>
+                                                </Border>
+                                            </Border>
+                                            <TextBlock Classes="ls-mono" Text="{Binding Detail}"
+                                                       HorizontalAlignment="Right"
+                                                       IsVisible="{Binding IsResolved}"/>
+                                        </Panel>
+                                    </Grid>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                </Border>
+                </Panel>
+                </StackPanel>
+
+                <!-- Status line under the card, small, muted, crossfading on Motion.Base (§5.2). -->
+                <StackPanel Classes="ls-below" Grid.Row="2" Grid.Column="1" Margin="0,10,0,0"
+                            HorizontalAlignment="Center">
+                    <!-- The area loader for the waits of unknown duration (init steps, sign-in):
+                         above the sentence that says what is being waited for. Fades with
+                         IsWorking; keeps its box so the status line never jumps. -->
+                    <controls:QuantumLoader Classes="ls-loader" Classes.idle="{Binding !IsWorking}"
+                                            Scale="0.5" HorizontalAlignment="Center" Margin="0,0,0,2"/>
+                    <TransitioningContentControl Content="{Binding StatusText}" HorizontalAlignment="Center">
+                        <TransitioningContentControl.PageTransition>
+                            <CrossFade Duration="{StaticResource Motion.Base}"
+                                       FadeInEasing="{StaticResource Ease.Standard}"
+                                       FadeOutEasing="{StaticResource Ease.Standard}"/>
+                        </TransitioningContentControl.PageTransition>
+                        <TransitioningContentControl.ContentTemplate>
+                            <DataTemplate x:DataType="x:String">
+                                <TextBlock Text="{Binding}" FontFamily="{StaticResource FontBody}"
+                                           FontSize="13" Foreground="{StaticResource ParchmentSecondary}" TextWrapping="Wrap" MaxWidth="352"
+                                           TextAlignment="Center" HorizontalAlignment="Center"/>
+                            </DataTemplate>
+                        </TransitioningContentControl.ContentTemplate>
+                    </TransitioningContentControl>
+                </StackPanel>
+            </Grid>
+
+            <!-- Window mechanics: the decoration is None on Linux/Windows (same reason as every
+                 shell: KWin paints a bright frame at BorderOnly), so drag and close are ours. The
+                 strip is the top 40 px, the two buttons sit far right, same class as the v3 chrome. -->
+            <Border x:Name="DragStrip" Height="40" VerticalAlignment="Top" Background="Transparent"
+                    PointerPressed="OnDragStripPressed"/>
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Top" Height="40">
+                <!-- Same glyphs and the same accessible names as the v3 chrome (ShellV3Window). -->
+                <Button Classes="chrome" Content="─" Click="OnMinimize"
+                        AutomationProperties.Name="{loc:Tr Titlebar_Minimize}"/>
+                <Button Classes="chrome close" Content="✕" Click="OnClose"
+                        AutomationProperties.Name="{loc:Tr Titlebar_Close}"/>
+            </StackPanel>
+
+            <!-- The running version, bottom right, mono: which build am I on. -->
+            <TextBlock Classes="ls-mono ls-version" Text="{Binding VersionText}"
+                       HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,14,10"
+                       />
+        </Grid>
+    </Border>
+</Window>

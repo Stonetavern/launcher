@@ -58,7 +58,8 @@ public sealed class ServerManifest
     /// but a SEPARATE top-level field — never nested under <c>launcher</c> — so the existing Windows
     /// deserialisation is untouched. Absent = the server hasn't published a Linux build yet: the Linux
     /// launcher then shows no update hint and raises no error. The Windows path IGNORES this field.
-    /// V1 is Check + Notify only (no auto-apply until artefact signing, PLAN §1.5 / WP7).
+    /// Auto-applies via <c>LinuxUpdateSwapStrategy</c> since the signature gate landed (2026-09-19,
+    /// measured 1.8.3 → 1.8.11 in a container); Check + Notify only was the pre-WP7 stage, not today's.
     /// </summary>
     [JsonPropertyName("launcher_linux")]
     public ManifestFile? LauncherLinux { get; set; }
@@ -331,6 +332,87 @@ public sealed class ManifestFile
     /// </summary>
     [JsonPropertyName("files_url")]
     public string? FilesUrl { get; set; }
+
+    /// <summary>
+    /// SHA-256 of the RAW BYTES of the <see cref="FilesUrl"/> document, carried inside this
+    /// (already signature-verified) manifest entry — ARCHITEKTUR-v2-patcher.md §2, "Hash-Bindung".
+    ///
+    /// <para><b>Why this exists.</b> The manifest's ECDSA signature covers the manifest itself, not
+    /// whatever <c>files_url</c> happens to serve at fetch time — a CDN or MITM that can swap the
+    /// files.json response controls every path/hash the delta and per-file download paths trust,
+    /// without ever touching a signed byte. This field closes that gap: it binds the exact
+    /// files.json this manifest was published with to something the signature DOES cover.</para>
+    ///
+    /// <para>Absent = no binding published for this entry. <see
+    /// cref="Services.ClientFileManifestLoader"/> then falls back to today's unauthenticated
+    /// files.json fetch UNLESS <see cref="FilesBase"/> or <see cref="Deltas"/> are also present, in
+    /// which case an unbound files.json would let an attacker redirect delta/per-file downloads
+    /// wholesale — see <see cref="Services.ManifestTrustException"/>.</para>
+    /// </summary>
+    [JsonPropertyName("files_sha256")]
+    public string? FilesSha256 { get; set; }
+
+    /// <summary>
+    /// Base URL for single-file downloads under the v2 per-file layout
+    /// (ARCHITEKTUR-v2-patcher.md §2): a file at <c>files.json</c> path <c>p</c> lives at
+    /// <c>FilesBase + p</c> (URL-encoded per segment). Always ends in <c>/</c>. Absent = no v2
+    /// per-file tree published for this client entry (today's whole-ZIP behaviour only).
+    /// </summary>
+    [JsonPropertyName("files_base")]
+    public string? FilesBase { get; set; }
+
+    /// <summary>
+    /// Available binary deltas (butler <c>.pwr</c> packages) that can bring an installed tree at
+    /// <see cref="ManifestDelta.From"/> straight to this entry's <see cref="Version"/>, skipping a
+    /// full-ZIP or per-file re-download (ARCHITEKTUR-v2-patcher.md §2/§4). Empty = no deltas
+    /// published — the patch engine falls back to PER_FILE or FULL_ZIP.
+    /// </summary>
+    [JsonPropertyName("deltas")]
+    public List<ManifestDelta> Deltas { get; set; } = [];
+
+    /// <summary>
+    /// Path prefixes/paths inside this client's install tree that the patch engine must NEVER
+    /// delete or overwrite, even during a repair (ARCHITEKTUR-v2-patcher.md §3) — player-owned data
+    /// such as <c>WTF/</c>, <c>Interface/AddOns/</c>, <c>Screenshots/</c>. A copy of the same list
+    /// travels on <see cref="ClientFileManifest.Protected"/>; this one lets the launcher act on it
+    /// before it has even fetched <see cref="FilesUrl"/>. Empty = nothing declared here (the
+    /// per-extract preserve rules in <c>DownloadService</c> still apply independently).
+    /// </summary>
+    [JsonPropertyName("protected")]
+    public List<string> Protected { get; set; } = [];
+}
+
+/// <summary>
+/// One binary delta (butler <c>.pwr</c> package) from an older installed version to the version of
+/// the <see cref="ManifestFile"/> it hangs off — ARCHITEKTUR-v2-patcher.md §2. Both the package and
+/// its detached signature are described, because the patch engine's trust chain is "SHA-256 of the
+/// package AND butler verify against the signature", never either alone.
+/// </summary>
+public sealed class ManifestDelta
+{
+    /// <summary>The version this delta starts FROM (matched against the player's
+    /// <c>client-state.json</c>). Never a build/os — a delta is always within one client entry, which
+    /// already fixes both.</summary>
+    [JsonPropertyName("from")]
+    public string From { get; set; } = "";
+
+    [JsonPropertyName("url")]
+    public string Url { get; set; } = "";
+
+    [JsonPropertyName("size")]
+    public long Size { get; set; }
+
+    [JsonPropertyName("sha256")]
+    public string Sha256 { get; set; } = "";
+
+    /// <summary>Detached signature for the <c>.pwr</c> at <see cref="Url"/>, verified by butler
+    /// itself (<c>butler apply --verify</c> / <c>butler verify</c>), independent of the SHA-256
+    /// above.</summary>
+    [JsonPropertyName("sig_url")]
+    public string SigUrl { get; set; } = "";
+
+    [JsonPropertyName("sig_sha256")]
+    public string SigSha256 { get; set; } = "";
 }
 
 public sealed class ManifestPatch

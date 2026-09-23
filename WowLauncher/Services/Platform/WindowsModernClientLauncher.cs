@@ -28,13 +28,19 @@ public sealed record WindowsModernClientLayout(
     string ProxyDir,
     string ConfigWtf)
 {
+    /// <summary>The proxy shipped since package v1.4.0. Kept as a constant because tests and the
+    /// packaging step name it, but the launch path resolves against the bundle
+    /// (<see cref="ProxyBinaryResolver.WindowsCandidates"/>) so an installation still carrying the older
+    /// <c>HermesProxy.exe</c> keeps starting.</summary>
     public const string ProxyExeName = "JimsProxy.exe";
     public const string CustomServerExeName = "WowClassic_ForCustomServers.exe";
 
     /// <summary>Derive the Windows layout from the resolved client exe, or null when the exe is not
     /// sitting in a bundle of this shape. Null is a legitimate answer, not a failure: the caller turns it
     /// into a sentence naming what is missing rather than guessing at paths that are not there.</summary>
-    public static WindowsModernClientLayout? Resolve(string clientExePath)
+    /// <param name="clientExePath">The detected <c>WowClassic.exe</c>.</param>
+    /// <param name="fileExists">Existence probe for the proxy candidates, injectable for tests.</param>
+    public static WindowsModernClientLayout? Resolve(string clientExePath, Func<string, bool>? fileExists = null)
     {
         try
         {
@@ -52,7 +58,8 @@ public sealed record WindowsModernClientLayout(
                 ClientExe: Path.GetFullPath(clientExePath),
                 CustomServerExe: Path.Combine(clientDir, CustomServerExeName),
                 ClientDir: clientDir,
-                ProxyExe: Path.Combine(proxyDir, ProxyExeName),
+                ProxyExe: ProxyBinaryResolver.Resolve(
+                    proxyDir, ProxyBinaryResolver.WindowsCandidates, fileExists).Path,
                 ProxyDir: proxyDir,
                 ConfigWtf: Path.Combine(clientDir, "WTF", "Config.wtf"));
         }
@@ -182,7 +189,8 @@ public sealed class WindowsModernClientLauncher : IGameLauncher
 
         // (c) required files present.
         if (!File.Exists(layout.ProxyExe))
-            return GameLaunchResult.Failed(MissingPartMessage("Hermes/" + WindowsModernClientLayout.ProxyExeName, layout));
+            return GameLaunchResult.Failed(
+                MissingPartMessage(ProxyBinaryResolver.DisplayName(layout.BundleRoot, layout.ProxyExe), layout));
         if (!File.Exists(layout.CustomServerExe))
             return GameLaunchResult.Failed(
                 MissingPartMessage("World of Warcraft/_classic_era_/" + WindowsModernClientLayout.CustomServerExeName, layout));

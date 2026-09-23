@@ -45,7 +45,20 @@ ASM_VERSION="${ASM_VERSION%%+*}"
 [[ "$ASM_VERSION" =~ ^[0-9]+(\.[0-9]+){1,3}$ ]] || {
   echo "FEHLER: '$VERSION' ergibt keine numerische AssemblyVersion ('$ASM_VERSION')" >&2; exit 1; }
 
-echo "== Stonetavern Launcher $VERSION -> win-x64 (single file)"
+# Welcher Auslieferungs-Ursprung in das Artefakt gestempelt wird. Leer = die Produktion.
+# STONETAVERN_CHANNEL=beta baut den Launcher fuer beta-downloads.stonetavern.app; die Entscheidung
+# faellt hier beim Paketieren und nicht zur Laufzeit, damit ein Beta- und ein Produktions-Launcher
+# zwei unterscheidbare Dateien sind und auf einem Spielerrechner nicht verwechselt werden koennen.
+# Gegenstueck im Code: WowLauncher/Services/LauncherChannel.cs.
+CHANNEL="${STONETAVERN_CHANNEL:-}"
+CHANNEL_ARG=()
+if [[ -n "$CHANNEL" ]]; then
+  [[ "$CHANNEL" == "beta" || "$CHANNEL" == "stable" ]] || {
+    echo "FEHLER: STONETAVERN_CHANNEL='$CHANNEL' — erlaubt sind 'beta' oder 'stable'" >&2; exit 1; }
+  CHANNEL_ARG=(-p:StonetavernChannel="$CHANNEL")
+fi
+
+echo "== Stonetavern Launcher $VERSION -> win-x64 (single file)${CHANNEL:+ [Kanal: $CHANNEL]}"
 rm -rf "$OUT"
 mkdir -p "$OUT"
 
@@ -60,6 +73,7 @@ dotnet publish "$PROJECT" \
   -p:Version="$VERSION" \
   -p:AssemblyVersion="$ASM_VERSION" \
   -p:FileVersion="$ASM_VERSION" \
+  "${CHANNEL_ARG[@]}" \
   -o "$OUT"
 
 echo

@@ -24,6 +24,18 @@ public sealed class ConfigService : IConfigService
 {
     private readonly string _configPath;
     private readonly string _legacyPath;
+
+    /// <summary>Die zuletzt NACHWEISLICH lesbare Konfiguration. Sie ist der Unterschied zwischen
+    /// "deine Datei ist kaputt, hier sind Voreinstellungen" und "deine Realms und Installationen sind
+    /// noch da".
+    ///
+    /// <para>Bis 2026-09-03 gab es nur die beiseitegelegte KAPUTTE Datei
+    /// (<see cref="PreserveDamagedConfig"/>). Die bewahrt zwar den Datenverlust ab, hilft dem Spieler
+    /// aber nicht: sie enthaelt genau den Inhalt, an dem das Laden gescheitert ist — sie
+    /// zurueckzubenennen erzeugt denselben Fehler noch einmal. Ein einziger falsch getippter Wert
+    /// liess damit jeden Realm und jede registrierte Installation aus der Sicht des Launchers
+    /// verschwinden, wiederherstellbar nur von Hand.</para></summary>
+    private string GoodCopyPath => _configPath + ".good";
     private bool _migrationChecked;
     private bool _saveBlocked;
 
@@ -88,6 +100,11 @@ public sealed class ConfigService : IConfigService
 
             if (MigrateLegacyServers(cfg)) Save(cfg);
 
+            // Dieses Laden hat funktioniert — also ist genau DIESER Inhalt der Stand, auf den ein
+            // spaeterer Ausfall zurueckfallen darf. Geschrieben wird nur bei echter Abweichung, damit
+            // ein Start nicht jedes Mal eine zweite Datei anfasst.
+            RememberGoodCopy(json);
+
             // Sync the flat connection fields from the selected realm.
             RealmRegistry.ApplyActiveRealm(cfg);
             return cfg;
@@ -98,16 +115,64 @@ public sealed class ConfigService : IConfigService
             // half-written save). Returning defaults is right, but SILENTLY doing so meant the next
             // save wrote defaults over it and the player lost every realm and every registered client
             // install with no way back. Keep the original before handing out defaults.
-            Serilog.Log.Error(ex, "launcher_config.json is not readable JSON — starting from defaults");
+            Serilog.Log.Error(ex, "launcher_config.json is not readable JSON");
             PreserveDamagedConfig("corrupt");
-            return Defaults();
+            return RecoverFromGoodCopy() ?? Defaults();
         }
         catch (Exception ex)
         {
             // Anything else (permissions, file locked, IO): same rule, the original must survive.
-            Serilog.Log.Error(ex, "launcher_config.json could not be loaded — starting from defaults");
+            Serilog.Log.Error(ex, "launcher_config.json could not be loaded");
             PreserveDamagedConfig("unreadable");
-            return Defaults();
+            return RecoverFromGoodCopy() ?? Defaults();
+        }
+    }
+
+    /// <summary>Halte den Inhalt fest, mit dem das Laden gerade gelungen ist. Ein Fehlschlag hier ist
+    /// bewusst folgenlos: die Sicherung ist eine Zugabe, und ein Launcher, der wegen einer nicht
+    /// schreibbaren Zusatzdatei nicht startet, waere schlimmer als gar keine Sicherung.</summary>
+    private void RememberGoodCopy(string json)
+    {
+        try
+        {
+            // Nur bei echter Abweichung schreiben. Der Vergleich liest die vorhandene Kopie, was
+            // billiger ist als sie bei jedem Start neu zu schreiben — und er haelt den Zeitstempel
+            // stabil, damit man ihr ansieht, wann der Stand zuletzt WIRKLICH anders war.
+            if (File.Exists(GoodCopyPath) && File.ReadAllText(GoodCopyPath) == json) return;
+            File.WriteAllText(GoodCopyPath, json);
+        }
+        catch (Exception ex)
+        {
+            Serilog.Log.Debug(ex, "Could not refresh the known-good config copy at {Path}", GoodCopyPath);
+        }
+    }
+
+    /// <summary>Die zuletzt lesbare Konfiguration, oder null, wenn es keine gibt oder auch sie nicht
+    /// mehr lesbar ist.
+    ///
+    /// <para>Die Rueckgabe null heisst "nicht wiederherstellbar" und fuehrt beim Aufrufer zu den
+    /// Voreinstellungen — dieselbe Wahl wie vorher, nur eben erst NACH einem echten Versuch. Die
+    /// gesunde Kopie wird beim Wiederherstellen nicht geloescht: gelingt der naechste Start wieder,
+    /// ueberschreibt <see cref="RememberGoodCopy"/> sie ohnehin, und misslingt er, ist sie noch da.</para></summary>
+    private LauncherConfig? RecoverFromGoodCopy()
+    {
+        try
+        {
+            if (!File.Exists(GoodCopyPath)) return null;
+            var json = File.ReadAllText(GoodCopyPath);
+            var cfg = System.Text.Json.JsonSerializer.Deserialize<LauncherConfig>(json, JsonOptions);
+            if (cfg is null) return null;
+
+            RealmRegistry.ApplyActiveRealm(cfg);
+            Serilog.Log.Warning(
+                "Recovered the launcher configuration from the last readable copy at {Path} — " +
+                "realms and registered installs are intact", GoodCopyPath);
+            return cfg;
+        }
+        catch (Exception ex)
+        {
+            Serilog.Log.Error(ex, "The known-good config copy at {Path} is not usable either", GoodCopyPath);
+            return null;
         }
     }
 

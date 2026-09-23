@@ -41,7 +41,7 @@ public sealed class ModernClientLauncherTests : IDisposable
         {
             var proxyDir = Path.Combine(_root, "Hermes", "linux");
             Directory.CreateDirectory(proxyDir);
-            File.WriteAllText(Path.Combine(proxyDir, ModernClientLayout.ProxyExeName), "ELF");
+            File.WriteAllText(Path.Combine(proxyDir, "JimsProxy"), "ELF");
         }
         if (withConfig)
         {
@@ -188,10 +188,31 @@ public sealed class ModernClientLauncherTests : IDisposable
         Assert.NotNull(layout);
         Assert.Equal(Path.GetFullPath(_root), layout!.BundleRoot);
         Assert.Equal(Path.Combine(_root, "Launcher", ModernClientLayout.ArctiumExeName), layout.ArctiumExe);
-        Assert.Equal(Path.Combine(_root, "Hermes", "linux", ModernClientLayout.ProxyExeName), layout.ProxyExe);
+        Assert.Equal(Path.Combine(_root, "Hermes", "linux", "JimsProxy"), layout.ProxyExe);
+        // Old per-OS tree: the fallback candidate is the binary's own directory (Hermes/linux/), same
+        // as before this pass.
+        Assert.Equal(Path.Combine(_root, "Hermes", "linux"), layout.ProxyDir);
         Assert.Equal(
             Path.Combine(_root, "World of Warcraft", "_classic_era_", "WTF", "Config.wtf"),
             layout.ConfigWtf);
+    }
+
+    [Fact]
+    public void Layout_PrefersTheSharedTreeBinary_AndUsesHermesAsItsDataDir()
+    {
+        // KONZEPT §13: the shared tree puts the Linux proxy beside the Windows/macOS binaries at
+        // Hermes/bin/, with config and CSV data staying one level up in Hermes/ - not beside the
+        // binary, unlike the old per-OS layout this test's sibling above still covers.
+        var exe = MakeBundle(withProxy: false);
+        var sharedProxyDir = Path.Combine(_root, "Hermes", "bin");
+        Directory.CreateDirectory(sharedProxyDir);
+        File.WriteAllText(Path.Combine(sharedProxyDir, "JimsProxy-linux-x64"), "ELF");
+
+        var layout = ModernClientLayout.Resolve(exe);
+
+        Assert.NotNull(layout);
+        Assert.Equal(Path.Combine(_root, "Hermes", "bin", "JimsProxy-linux-x64"), layout!.ProxyExe);
+        Assert.Equal(Path.Combine(_root, "Hermes"), layout.ProxyDir);
     }
 
     // ── The sequence ──────────────────────────────────────────────────────────────────────────

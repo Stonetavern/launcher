@@ -1,0 +1,29 @@
+butler — https://github.com/itchio/butler
+Pinned version: 15.31.0 (ref 54a2dd86ed68ab72b25a8d753fa7f88dc552ef7f)
+
+MIT License
+
+Copyright (c) itch corp.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+
+Provenance and hash pinning for the binaries under tools/butler/<rid>/:
+four independent checks against the pinned SHA-256 values recorded in the fetching notes of the
+Puck build repo (itch.io publishes no checksum file). The authoritative pin list for the launcher
+is ButlerSidecar.Pins in this repository; deploy.verify-butler-pins.py checks a release against it.

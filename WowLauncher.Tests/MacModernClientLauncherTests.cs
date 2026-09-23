@@ -38,7 +38,9 @@ public sealed class MacModernClientLauncherTests : IDisposable
         var proxyDir = Path.Combine(_root, "Hermes");
         Directory.CreateDirectory(proxyDir);
         if (withProxy)
-            File.WriteAllText(Path.Combine(proxyDir, MacModernClientLayout.ProxyExeName), "MACHO");
+            // Deliberately the OLDER spelling: these tests double as the proof that a bundle already on a
+            // player's disk keeps launching after the rename to JimsProxy.
+            File.WriteAllText(Path.Combine(proxyDir, "HermesProxy"), "MACHO");
         // HermesProxy.config beside the proxy — the fail-closed endpoint check reads its ServerAddress.
         File.WriteAllText(Path.Combine(proxyDir, "HermesProxy.config"),
             "<configuration><appSettings>" +
@@ -279,7 +281,10 @@ public sealed class MacModernClientLauncherTests : IDisposable
         var result = await h.Launcher.LaunchAsync(exe, Path.GetDirectoryName(exe)!);
 
         Assert.False(result.Started);
-        Assert.Contains("HermesProxy", result.Error);
+        // The sentence names the file the launcher WANTS to start, so a player can look for it. Since
+        // 2026-08-24 that is Hermes/HermesProxy on the Mac: JimsProxy crashes Wine clients on world entry
+        // (#132), so the legacy binary is the one the package must carry.
+        Assert.Contains("Hermes/HermesProxy", result.Error);
     }
 
     // ── Detector ──────────────────────────────────────────────────────────────────────────────

@@ -63,7 +63,14 @@ public sealed partial class ShellViewModel : ViewModelBase
             if (outcome == ProfileSyncOutcome.SignedOut && IsLoggedIn) SignOut();
             if (outcome == ProfileSyncOutcome.Synced) ReloadRealms();
         }
-        catch (Exception) { /* the local config is untouched; nothing to tell the player */ }
+        catch (Exception ex)
+        {
+            // Nothing to tell the PLAYER — the local config is untouched. But it must be in the log:
+            // this is the one of the four Safe* wrappers that used to swallow the exception whole, and
+            // a profile sync that fails silently is exactly what cannot be diagnosed afterwards. The
+            // comments above this method say so themselves.
+            Serilog.Log.Warning(ex, "Profile sync failed — the local configuration is unchanged");
+        }
     }
 
     /// <summary>Diagnostics for the report dialog. Optional for the same reason addons are: the rail
@@ -568,6 +575,21 @@ public sealed partial class ShellViewModel : ViewModelBase
         Armory.Clear(); // account scoped: signing out must not leave the previous roster on screen
     }
 
+    /// <summary>
+    /// The 1.9 login shell signed in through the launcher gateway (App.RunLoginShell), not through
+    /// the Account tab. Same state transition <see cref="LoginViewModel.SignedIn"/> triggers: flip to
+    /// signed-in, load the roster, start polling. Both account lines are re-read explicitly because a
+    /// restored session may already have set <see cref="IsLoggedIn"/>, in which case its setter alone
+    /// would not notify and the greeting would keep the previous account.
+    /// </summary>
+    public void NotifySignedIn()
+    {
+        OnSignedIn();
+        OnPropertyChanged(nameof(AccountName));
+        OnPropertyChanged(nameof(AccountInitial));
+        OnPropertyChanged(nameof(AccountButtonText));
+    }
+
     /// <summary>Login VM raised success (UI thread): flip to signed-in, load the roster, start polling.</summary>
     private void OnSignedIn()
     {
@@ -626,6 +648,9 @@ public sealed partial class ShellViewModel : ViewModelBase
         if (!IsLoggedIn) return; // signed out -> nothing to fetch (and the HTTP impl would no-op anyway)
 
         var list = await _friends.GetFriendsAsync();
+        // Null means "could not fetch", not "no friends". Reconciling it would wipe a roster that is on
+        // screen — the offline-first promise two comments up was not kept until this line existed.
+        if (list is null) return;
         Reconcile(list.OrderByDescending(x => x.IsOnline).ThenBy(x => x.Account).ToList());
         NotifyOnlineCount();
     }

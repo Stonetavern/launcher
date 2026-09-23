@@ -41,6 +41,20 @@ public interface IGameProxy
     /// a future runner inherits, and it is a claim, not a check: anything that keeps it is saying "I do
     /// not verify ownership". Do not leave it in place on something a player launches through.</para></summary>
     Task<bool> VerifyStillListeningAsync(int port, CancellationToken ct = default) => Task.FromResult(true);
+
+    /// <summary>Whether the proxy process this instance started is still running — <c>true</c> alive,
+    /// <c>false</c> gone, <c>null</c> "this implementation does not measure it".
+    ///
+    /// <para>The three-valued shape is the point. A plain <c>bool</c> forces a default to CLAIM
+    /// something: <c>true</c> would report every unmeasuring implementation as healthy and hide a dead
+    /// proxy, <c>false</c> would raise an alarm on every test double. <c>null</c> says "not measured",
+    /// which is the only honest answer for a type that does not own a process — and the watchdog in
+    /// <see cref="GameSession"/> treats it as silence, never as a verdict.</para>
+    ///
+    /// <para>Unlike <see cref="VerifyStillListeningAsync"/> this is deliberately cheap and synchronous:
+    /// it is polled every couple of seconds for the whole length of a play session, so it may only look
+    /// at the process handle the runner already holds — no port probe, no <c>lsof</c>.</para></summary>
+    bool? IsProcessAlive => null;
 }
 
 /// <summary>
@@ -69,18 +83,28 @@ public sealed class HermesProxyRunner : IGameProxy
     private readonly string _exePath;
     private readonly IReadOnlyList<string> _args;
     private readonly string _pidFilePath;
+    /// <summary>Where the proxy is STARTED from. Not derived from the binary any more: the macOS package
+    /// puts the binary in <c>Hermes/bin/</c> while its config and CSV data stay in <c>Hermes/</c>, so the
+    /// exe directory is the wrong answer there (Codex review 2026-08-24). Null keeps the old behaviour.</summary>
+    private readonly string? _workingDirectory;
     private readonly Func<int, CancellationToken, Task<bool>> _portProbe;
     private readonly Func<int, CancellationToken, Task<int?>> _portOwnerProbe;
     private readonly IReadOnlyDictionary<string, string>? _environmentOverrides;
     private readonly Func<int, bool> _sigterm;   // graceful stop; true when the signal was delivered
     private readonly Action<Process> _hardKill;  // SIGKILL fallback (own seam so a test can observe it)
     private readonly TimeSpan _stopGrace;        // how long to wait for a clean exit before escalating
+    /// <summary>Where the proxy's own stdout/stderr is recorded. Null keeps the old behaviour (drain and
+    /// discard) — the launch never depends on it. See <see cref="ProxyOutputLog"/> for why it exists.</summary>
+    private readonly string? _outputLogPath;
 
     private Process? _process;
+    private ProxyOutputLog? _outputLog;
 
     public HermesProxyRunner(Serilog.ILogger logger, string exePath, IReadOnlyList<string> args, string pidFilePath,
-        IReadOnlyDictionary<string, string>? environmentOverrides = null)
-        : this(logger, exePath, args, pidFilePath, TcpPortProbeAsync, environmentOverrides)
+        IReadOnlyDictionary<string, string>? environmentOverrides = null, string? workingDirectory = null,
+        string? outputLogPath = null)
+        : this(logger, exePath, args, pidFilePath, TcpPortProbeAsync, environmentOverrides, workingDirectory,
+            outputLogPath: outputLogPath)
     {
     }
 
@@ -91,14 +115,18 @@ public sealed class HermesProxyRunner : IGameProxy
     /// that prove SIGTERM is tried before SIGKILL.</summary>
     internal HermesProxyRunner(Serilog.ILogger logger, string exePath, IReadOnlyList<string> args,
         string pidFilePath, Func<int, CancellationToken, Task<bool>> portProbe,
-        IReadOnlyDictionary<string, string>? environmentOverrides = null, Func<int, bool>? sigterm = null,
+        IReadOnlyDictionary<string, string>? environmentOverrides = null, string? workingDirectory = null,
+        Func<int, bool>? sigterm = null,
         Action<Process>? hardKill = null, TimeSpan? stopGrace = null,
-        Func<int, CancellationToken, Task<int?>>? portOwnerProbe = null)
+        Func<int, CancellationToken, Task<int?>>? portOwnerProbe = null,
+        string? outputLogPath = null)
     {
+        _outputLogPath = outputLogPath;
         _logger = logger;
         _exePath = exePath;
         _args = args;
         _pidFilePath = pidFilePath;
+        _workingDirectory = workingDirectory;
         _portProbe = portProbe;
         _portOwnerProbe = portOwnerProbe ?? ListenerOwnerAsync;
         _environmentOverrides = environmentOverrides;
@@ -107,21 +135,27 @@ public sealed class HermesProxyRunner : IGameProxy
         _stopGrace = stopGrace ?? TimeSpan.FromSeconds(5);
     }
 
-    private static async Task<bool> TcpPortProbeAsync(int port, CancellationToken ct)
+    // Await the connect with a token instead of racing it against a delay — same shape as
+    // ServerStatusService.CheckAsync. The Task.WhenAny form left the connect running when the 300 ms
+    // delay won: the using-block disposed the TcpClient underneath it, the pending I/O faulted with
+    // SocketException 995 ("aborted by thread exit or application request"), and nobody ever observed
+    // that task. Every poll against a not-yet-open port produced one, and they surfaced together at the
+    // next GC as the TaskScheduler.UnobservedTaskException series players kept sending in — which then
+    // pushed the real launcher.log out of the problem report, because that picks the newest
+    // "launcher*.log" and launcher_crash.log grows without bound.
+    internal static async Task<bool> TcpPortProbeAsync(int port, CancellationToken ct)
     {
         try
         {
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeout.CancelAfter(TimeSpan.FromMilliseconds(300));
             using var client = new TcpClient();
-            var connectTask = client.ConnectAsync("127.0.0.1", port);
-            using var timeoutCts = new CancellationTokenSource(TimeSpan.FromMilliseconds(300));
-            using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
-            var delay = Task.Delay(Timeout.Infinite, linked.Token);
-            var completed = await Task.WhenAny(connectTask, delay).ConfigureAwait(false);
-            return completed == connectTask && client.Connected;
+            await client.ConnectAsync("127.0.0.1", port, timeout.Token).ConfigureAwait(false);
+            return true;
         }
         catch
         {
-            return false; // connection refused/reset - not open yet
+            return false; // connection refused/reset/timed out - not open yet
         }
     }
 
@@ -159,7 +193,9 @@ public sealed class HermesProxyRunner : IGameProxy
                 // DirectoryNotFoundException on Hermes/CSV/Hotfix/... - the exact crash a mis-scoped
                 // packaging exclude produced on 2026-07-21, reproduced and fixed there. Setting it
                 // here means the launcher cannot recreate that failure by accident.
-                WorkingDirectory = Path.GetDirectoryName(Path.GetFullPath(_exePath)) ?? "",
+                // Explicit directory when the caller knows it (macOS: Hermes/, while the binary sits in
+                // Hermes/bin/), otherwise the binary's own directory as before.
+                WorkingDirectory = _workingDirectory ?? Path.GetDirectoryName(Path.GetFullPath(_exePath)) ?? "",
             };
             foreach (var a in _args) psi.ArgumentList.Add(a);
             if (_environmentOverrides is not null)
@@ -175,8 +211,7 @@ public sealed class HermesProxyRunner : IGameProxy
 
         _process = process;
         WritePidFile(process.Id);
-        _ = process.StandardOutput.ReadToEndAsync(); // drain, never block a chatty child
-        _ = process.StandardError.ReadToEndAsync();
+        _outputLog = ProxyOutputLog.AttachOrDrain(process, _outputLogPath, _logger);
 
         var opened = await WaitForPortAsync(port, timeout, process, ct).ConfigureAwait(false);
         if (!opened)
@@ -222,6 +257,22 @@ public sealed class HermesProxyRunner : IGameProxy
     /// platforms this runner serves, turning an unreadable probe into "you cannot play" would take the
     /// game away from players whose setup is fine.</para>
     /// </summary>
+    /// <inheritdoc />
+    /// <remarks>Reads only the process handle this runner already holds. <c>null</c> before a start and
+    /// after a clean stop — in both cases there is no proxy of ours to be dead.</remarks>
+    public bool? IsProcessAlive
+    {
+        get
+        {
+            var process = _process;
+            if (process is null) return null;
+            // A disposed or otherwise unreadable handle is NOT proof of death: reporting false here
+            // would tell a playing user their connection dropped when nothing happened.
+            try { return !process.HasExited; }
+            catch (System.InvalidOperationException) { return null; }
+        }
+    }
+
     public async Task<bool> VerifyStillListeningAsync(int port, CancellationToken ct = default)
     {
         var process = _process;
@@ -386,6 +437,10 @@ public sealed class HermesProxyRunner : IGameProxy
 
         _process = null;
         DeletePidFile();
+        // Close the output log only once the proxy is confirmed gone — its last lines are written as it
+        // dies, and those are the ones worth reading.
+        try { _outputLog?.Dispose(); } catch { /* best effort */ }
+        _outputLog = null;
         process.Dispose();
     }
 
@@ -507,15 +562,20 @@ public sealed class HermesProxyRunner : IGameProxy
 
     private void KillStalePidFileEntry()
     {
-        int pid;
-        try
-        {
-            if (!File.Exists(_pidFilePath)) return;
-            var text = File.ReadAllText(_pidFilePath).Trim();
-            if (!int.TryParse(text, out pid)) { DeletePidFile(); return; }
-        }
-        catch { return; }
+        var entry = ProxyPidFile.Read(_pidFilePath);
+        if (entry is null) { ProxyPidFile.Delete(_pidFilePath); return; }
 
+        // Another launcher window is holding this proxy for a session that is running right now.
+        // Killing it here disconnects a player mid-game — see ProxyPidFile for how that happened.
+        if (ProxyPidFile.OwnerStillRunning(entry.Value))
+        {
+            _logger.Information(
+                "Leaving the proxy (PID={Pid}) alone: another launcher instance (PID={Owner}) is using it",
+                entry.Value.ProxyPid, entry.Value.OwnerPid);
+            return;
+        }
+
+        var pid = entry.Value.ProxyPid;
         try
         {
             using var stale = Process.GetProcessById(pid);
@@ -552,19 +612,9 @@ public sealed class HermesProxyRunner : IGameProxy
         catch { return false; }
     }
 
-    private void WritePidFile(int pid)
-    {
-        try
-        {
-            var dir = Path.GetDirectoryName(_pidFilePath);
-            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
-            File.WriteAllText(_pidFilePath, pid.ToString());
-        }
-        catch (Exception ex)
-        {
-            _logger.Debug(ex, "Could not write proxy pidfile {Path}", _pidFilePath);
-        }
-    }
+    // Records the proxy PID AND ours, so a second launcher window can tell "orphaned by a crash"
+    // from "in use by a session that is running" (ProxyPidFile).
+    private void WritePidFile(int pid) => ProxyPidFile.Write(_pidFilePath, pid, _logger);
 
     private void DeletePidFile()
     {

@@ -7,8 +7,11 @@ public sealed class LauncherConfig
     // unchanged; RealmRegistry.ApplyActiveRealm keeps them in sync on load.
     public string RealmlistAddress { get; set; } = "play.stonetavern.app";
     public string WowExecutablePath { get; set; } = "WoW.exe";
-    public string ManifestUrl { get; set; } = "https://downloads.stonetavern.app/manifest.json";
-    public string PatchServerBaseUrl { get; set; } = "https://downloads.stonetavern.app";
+    // Both follow the build's channel (Services.LauncherChannel): a beta artefact must fetch its
+    // client package and patches from the beta origin too, or an end-to-end rehearsal would only ever
+    // rehearse the launcher's own update and quietly pull everything else from live.
+    public string ManifestUrl { get; set; } = RealmRegistry.StonetavernManifest;
+    public string PatchServerBaseUrl { get; set; } = RealmRegistry.StonetavernFiles;
 
     /// <summary>
     /// Where the Stonetavern ACCOUNT API lives (login, friends, armory). Empty = the built-in default
@@ -173,4 +176,24 @@ public sealed class LauncherConfig
     /// name that build's own <c>wine</c>. See <c>LinuxRuntimeSelection</c> for why Proton has no entry
     /// of its own.</summary>
     public string LinuxRuntimeCustomPath { get; set; } = "";
+
+    // ─── 1.9 Login-/Loading-Shell (Spec 2026-09-20), hinter einem Schalter ───────────────
+    // Seit 1.9.1 (Owner 2026-09-22) ist der Login-Screen der STANDARD: er maskiert die
+    // Initialisierung und geht danach in DIESELBE v3-Shell ueber. Nur "v1" oeffnet die alte
+    // Oberflaeche (Splash -> v3-Shell) als Rueckweg. "login"/"v2" bleiben gueltig. Nicht zu
+    // verwechseln mit `--ui v2` (die Obsidian-Skin von 2026-07).
+
+    /// <summary>"" (default), "login", "v2" = the 1.9 login/loading shell; "v1" = the old start
+    /// (splash then shell) as an escape hatch.</summary>
+    public string LauncherShell { get; set; } = "";
+
+    /// <summary>QA-only: which answer the render harness's stub sign-in gives (success, reject,
+    /// timeout, unavailable). The player path signs in for real (Spec §12.1 A,
+    /// <c>Startup.LauncherAuthGateway</c>); see <c>Startup.FakeAuthGateway</c>.</summary>
+    public string LauncherShellFakeAuth { get; set; } = "success";
+
+    /// <summary>Spec §12.3 B: the login is the only way into the shell; the offline link appears only
+    /// after a timeout/unreachable answer. True flips the card to "Continue without signing in" as
+    /// well, kept as the owner's escape hatch.</summary>
+    public bool LauncherShellAllowSkipSignIn { get; set; }
 }

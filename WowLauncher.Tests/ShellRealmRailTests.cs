@@ -107,6 +107,16 @@ public sealed class ShellRealmRailTests
             Task.FromResult(false);
         public Task<bool> VerifyHashAsync(string path, string expected, CancellationToken ct = default) =>
             Task.FromResult(false);
+    
+        /// <summary>Pflichtteil der Schnittstelle: ohne Grund gilt der Fehlschlag als nicht behebbar,
+        /// also als kaputtes Paket. Das ist die sichere Richtung fuer eine Attrappe.</summary>
+        public async System.Threading.Tasks.Task<WowLauncher.Models.ExtractOutcome> ExtractClientWithReasonAsync(
+            string zipPath, string destDir, bool freshInstall,
+            System.IProgress<string>? progress = null,
+            System.Threading.CancellationToken ct = default) =>
+            await ExtractClientAsync(zipPath, destDir, progress, ct).ConfigureAwait(false)
+                ? WowLauncher.Models.ExtractOutcome.Success
+                : WowLauncher.Models.ExtractOutcome.Fail(WowLauncher.Models.ExtractFailure.Unknown);
     }
 
     private sealed class NoUpdate : IUpdateService
@@ -274,5 +284,20 @@ public sealed class ShellRealmRailTests
 
         Assert.Same(other, shell.SelectedRealm);
         Assert.Equal(other.Id, cfg.Current.SelectedRealmId);
+    }
+
+    /// <summary>AP2: the 1.9 login shell hands over through <see cref="ShellViewModel.NotifySignedIn"/>
+    /// instead of the Account tab. The shell flips exactly like a login on that tab: signed in, and the
+    /// roster opens because signing in IS the request to see it.</summary>
+    [Fact]
+    public void NotifySignedIn_FlipsTheShellToSignedIn()
+    {
+        var (shell, _, _) = NewShell();
+
+        Assert.False(shell.IsLoggedIn);
+        shell.NotifySignedIn();
+
+        Assert.True(shell.IsLoggedIn);
+        Assert.True(shell.IsFriendsOpen);
     }
 }

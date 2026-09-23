@@ -8,8 +8,9 @@ using System.Diagnostics;
 /// packaging step and mirrored by the working start script:
 ///
 /// <code>
-/// &lt;root&gt;/Hermes/linux/HermesProxy          native ELF, CSV game data BESIDE it
-/// &lt;root&gt;/Launcher/Arctium WoW Launcher.exe  in-memory patcher, starts the client
+/// &lt;root&gt;/Hermes/bin/JimsProxy-linux-x64      native ELF (shared tree, KONZEPT §13); data in Hermes/
+/// &lt;root&gt;/Hermes/linux/{JimsProxy,HermesProxy} old per-OS tree, kept as a fallback; data beside it
+/// &lt;root&gt;/Launcher/Arctium WoW Launcher.exe    in-memory patcher, starts the client
 /// &lt;root&gt;/World of Warcraft/_classic_era_/WowClassic.exe
 /// &lt;root&gt;/World of Warcraft/_classic_era_/WTF/Config.wtf
 /// </code>
@@ -25,13 +26,16 @@ public sealed record ModernClientLayout(
     string ConfigWtf)
 {
     public const string ArctiumExeName = "Arctium WoW Launcher.exe";
-    public const string ProxyExeName = "HermesProxy";
 
     /// <summary>Derive the layout from the resolved client exe, or null when the exe is not sitting in
     /// a bundle of this shape (a hand-placed client, a different packaging). Null is a legitimate
     /// answer, not a failure: the caller turns it into a sentence naming what is missing, rather than
     /// guessing at paths that are not there.</summary>
-    public static ModernClientLayout? Resolve(string clientExePath)
+    /// <param name="clientExePath">The detected <c>WowClassic.exe</c>.</param>
+    /// <param name="fileExists">Existence probe for the proxy candidates, injectable for tests. The
+    /// proxy is resolved against the bundle instead of assumed
+    /// (<see cref="ProxyBinaryResolver.LinuxCandidates"/>).</param>
+    public static ModernClientLayout? Resolve(string clientExePath, Func<string, bool>? fileExists = null)
     {
         try
         {
@@ -42,8 +46,15 @@ public sealed record ModernClientLayout(
             var root = Path.GetDirectoryName(wowDir);                                 // bundle root
             if (root is null) return null;
 
-            var proxyDir = Path.Combine(root, "Hermes", "linux");
+            // Candidates are resolved relative to Hermes/ itself now, not Hermes/linux/: the shared-tree
+            // layout's binary sits in Hermes/bin/, the old per-OS fallback in Hermes/linux/. Which of the
+            // two actually matched decides the proxy's DATA directory (config, CSV) - see
+            // ProxyBinaryResolver.LinuxDataDir - because Hermes/bin/ holds only the binary.
+            var hermesDir = Path.Combine(root, "Hermes");
             var arctiumDir = Path.Combine(root, "Launcher");
+
+            var proxy = ProxyBinaryResolver.Resolve(hermesDir, ProxyBinaryResolver.LinuxCandidates, fileExists);
+            var proxyDataDir = ProxyBinaryResolver.LinuxDataDir(hermesDir, proxy.Path);
 
             return new ModernClientLayout(
                 BundleRoot: root,
@@ -51,8 +62,8 @@ public sealed record ModernClientLayout(
                 ClientDir: clientDir,
                 ArctiumExe: Path.Combine(arctiumDir, ArctiumExeName),
                 ArctiumDir: arctiumDir,
-                ProxyExe: Path.Combine(proxyDir, ProxyExeName),
-                ProxyDir: proxyDir,
+                ProxyExe: proxy.Path,
+                ProxyDir: proxyDataDir,
                 ConfigWtf: Path.Combine(clientDir, "WTF", "Config.wtf"));
         }
         catch (Exception)
@@ -310,7 +321,8 @@ public sealed class ModernClientLauncher : IGameLauncher
         if (!File.Exists(layout.ArctiumExe))
             return GameLaunchResult.Failed(MissingPartMessage("Launcher/" + ModernClientLayout.ArctiumExeName, layout));
         if (!File.Exists(layout.ProxyExe))
-            return GameLaunchResult.Failed(MissingPartMessage("Hermes/linux/" + ModernClientLayout.ProxyExeName, layout));
+            return GameLaunchResult.Failed(
+                MissingPartMessage(ProxyBinaryResolver.DisplayName(layout.BundleRoot, layout.ProxyExe), layout));
 
         // Bitness, before any process starts — the same fail-closed gate Windows has had since the Codex
         // review, brought over because a wrong-architecture client fails LATER and in a way that looks

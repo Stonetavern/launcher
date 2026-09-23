@@ -18,6 +18,15 @@ public sealed class ClientFileManifest
     public int Build { get; set; }
     public string? Version { get; set; }
     public List<ClientFileEntry> Files { get; set; } = [];
+
+    /// <summary>
+    /// OPTIONAL copy of the client entry's <see cref="ManifestFile.Protected"/> list
+    /// (ARCHITEKTUR-v2-patcher.md §2/§3) — path prefixes the patch engine must never delete or
+    /// overwrite, even during a repair. Absent/empty = nothing declared here; the whole-ZIP extractor's
+    /// own preserve rules (<c>DownloadService.IsPreserved</c>) are unaffected either way, so an old
+    /// files.json without this field parses exactly as before.
+    /// </summary>
+    public List<string> Protected { get; set; } = [];
 }
 
 /// <summary>One file inside the client tree. <see cref="Path"/> is relative to the install root, with
@@ -28,6 +37,23 @@ public sealed class ClientFileEntry
     public string Path { get; set; } = "";
     public long Size { get; set; }
     public string Sha256 { get; set; } = "";
+
+    /// <summary>
+    /// OPTIONAL: which OS(es) this file is for — <c>"windows"</c>, <c>"linux"</c>, <c>"macos"</c>.
+    /// Null/absent (the common case, ~97% of a shared 1.14.2 tree per KONZEPT §13's live-manifest
+    /// measurement) means every OS. Present but with an unrecognised value is a trust failure caught
+    /// by <see cref="Services.ClientFilePathPolicy.ValidateOs"/> when the manifest is loaded, not
+    /// something this type itself refuses — a fail-closed default here would only hide the same bug
+    /// one layer down.
+    /// </summary>
+    public List<string>? Os { get; set; }
+
+    /// <summary>Whether this entry is part of the tree on <paramref name="os"/> ("windows"/"linux"/
+    /// "macos", case-insensitive). A file with no <see cref="Os"/> tag always applies — that is the
+    /// whole point of the shared tree, where only the ~3% of OS-specific files (a proxy binary, a
+    /// start script) opt into a narrower answer.</summary>
+    public bool AppliesTo(string os) =>
+        Os is null || Os.Count == 0 || Os.Any(o => string.Equals(o, os, StringComparison.OrdinalIgnoreCase));
 }
 
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]

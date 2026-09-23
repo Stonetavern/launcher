@@ -1,9 +1,11 @@
 namespace WowLauncher.Infrastructure;
 
+using System.Net;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Serilog;
 using WowLauncher.Services;
+using WowLauncher.Services.Patching;
 using WowLauncher.Services.Platform;
 using WowLauncher.ViewModels;
 using WowLauncher.Views;
@@ -110,12 +112,15 @@ public static class DependencyInjection
                     {
                         var logger = sp.GetRequiredService<Serilog.ILogger>();
                         var shareDir = sp.GetRequiredService<IAppPaths>().ShareDir;
+                        var proxyLog = Path.Combine(sp.GetRequiredService<IAppPaths>().LogDir,
+                            ProxyOutputLog.FileNameFor("jims"));
                         var nativeStarter = new WindowsGameLauncher(logger);
                         var detector = sp.GetRequiredService<IGameProcessDetector>();
                         var modern = new WindowsModernClientLauncher(
                             logger, nativeStarter, detector,
                             layout => new JimsProxyRunner(
-                                logger, layout.ProxyExe, [], Path.Combine(shareDir, "jims-proxy.pid")),
+                                logger, layout.ProxyExe, [], Path.Combine(shareDir, "jims-proxy.pid"),
+                                outputLogPath: proxyLog),
                             sp.GetRequiredService<IGameSession>(),
                             ActiveRealmAddress(sp));
                         // 1.12.1: when the installed client ships its own loader batch (the tuned
@@ -126,10 +131,17 @@ public static class DependencyInjection
                         // inner launcher). The modern (1.14.2) path keeps the RAW nativeStarter — it starts
                         // its own client exe, never through a legacy loader batch.
                         var legacyNative = new WindowsLoaderScriptLauncher(
-                            nativeStarter, logger, ActiveRealmAddress(sp));
+                            nativeStarter, logger, ActiveRealmAddress(sp),
+                            display: sp.GetRequiredService<IClientDisplayService>());
                         return new WindowsGameLauncherRouter(legacyNative, modern, logger);
                     });
                     services.AddSingleton<IInstallRootsProvider, WindowsInstallRootsProvider>();
+                    // Built here, inside the OperatingSystem.IsWindows() guard: CA1416 does not follow the
+                    // guard into a lambda, so constructing it inside the factory warned on every build.
+                    // The probe has no state and no constructor work, so building it eagerly costs nothing.
+                    IDisplayProbe windowsDisplayProbe = new WindowsDisplayProbe();
+                    services.AddSingleton<IClientDisplayService>(sp =>
+                        new ClientDisplayService(windowsDisplayProbe, sp.GetRequiredService<Serilog.ILogger>()));
                     services.AddSingleton<IGameProcessDetector, WindowsGameProcessDetector>();
                     services.AddSingleton<IUpdateSwapStrategy, WindowsUpdateSwapStrategy>();
                     // Windows start is authoritative → exit immediately (shipped behaviour, unchanged).
@@ -205,7 +217,13 @@ public static class DependencyInjection
                                 // System-Wine.
                                 () => RuntimeNow(preferWineGe: false).Path),
                             logger,
-                            ActiveRealmAddress(sp));
+                            ActiveRealmAddress(sp),
+                            display: sp.GetRequiredService<IClientDisplayService>(),
+                            // The 1.12.1 install, for the START.sh readiness check (the package brings
+                            // its own pinned Proton since 2026-09-22). Read fresh: the path changes on
+                            // install/move without a restart.
+                            legacyClientDir: () => cfgSvc.Load().ClientInstalls.TryGetValue(
+                                5875, out var d) ? d : null);
 
                         var detector = sp.GetRequiredService<IGameProcessDetector>();
                         var display = new XrandrDisplayResolution(logger);
@@ -223,15 +241,39 @@ public static class DependencyInjection
                         // custom runtime in Settings has to restart before the router stops refusing the
                         // modern client. Its readiness probe supplies the actionable missing-Wine error.
                         var initialModernBinary = runtime.Found ? runtime.Path : "wine";
-                        var modernWine = new WineGameLauncher(
+                        var wineGeBackedModernWine = new WineGameLauncher(
                             logger, WineOptions.ModernForShareDir(shareDir, initialModernBinary),
                             // Und hier bevorzugt "Automatisch" wine-ge - der Runner, auf dem der
                             // moderne Client die meisten Belege hat.
                             () => RuntimeNow(preferWineGe: true).Path);
+                        // KONZEPT §13 (owner measurement 2026-09-19, Ledger run U): GE-Proton first,
+                        // ahead of wine-ge/system Wine - JimsProxy v5.2.1-beta.4 no longer crashes on
+                        // world entry, and that fix was measured under GE-Proton specifically. Resolved
+                        // fresh on every launch (GeProtonLocator.FindLatestForCurrentUser is called
+                        // inside ModernLinuxWineHost.Resolve, not here), the same "no restart needed"
+                        // guarantee RuntimeNow already gives wine-ge/system Wine. When no GE-Proton is
+                        // installed this falls straight through to wineGeBackedModernWine - the EXACT
+                        // object constructed above, unchanged - so a player without Steam sees no
+                        // behaviour difference at all from before this pass.
+                        IWineHost modernWine = new ModernLinuxWineHost(
+                            logger,
+                            geProton: GeProtonLocator.FindLatestForCurrentUser,
+                            steamCompatClientInstallPath: () => GeProtonLocator.SteamCompatClientInstallPathFor(
+                                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)),
+                            fallback: () => wineGeBackedModernWine);
                         IGameLauncher modernLauncher = new ModernClientLauncher(
                             logger, modernWine, detector, display,
                             layout => new HermesProxyRunner(
-                                logger, layout.ProxyExe, [], Path.Combine(shareDir, "hermes-proxy.pid")),
+                                logger, layout.ProxyExe, [], Path.Combine(shareDir, "hermes-proxy.pid"),
+                                // The shared-tree layout (KONZEPT §13) puts the binary in Hermes/bin/
+                                // while CSV/config stay in Hermes/ - starting from the binary's own
+                                // directory (the old default) would make it die looking for
+                                // Hermes/bin/CSV/... that is not there. layout.ProxyDir is already the
+                                // resolved DATA directory (ProxyBinaryResolver.LinuxDataDir), correct
+                                // for both the new and the old per-OS tree.
+                                workingDirectory: layout.ProxyDir,
+                                outputLogPath: Path.Combine(
+                                    sp.GetRequiredService<IAppPaths>().LogDir, ProxyOutputLog.FileNameFor("hermes"))),
                             // The session the launcher hands the live proxy to, so it (alive in the
                             // tray now) reaps it when the game ends instead of leaving it detached.
                             sp.GetRequiredService<IGameSession>(),
@@ -241,6 +283,8 @@ public static class DependencyInjection
                         return new LinuxGameLauncherRouter(legacyWine, modernLauncher, logger);
                     });
                     services.AddSingleton<IInstallRootsProvider, LinuxInstallRootsProvider>();
+                    services.AddSingleton<IClientDisplayService>(sp =>
+                        new ClientDisplayService(new LinuxDisplayProbe(), sp.GetRequiredService<Serilog.ILogger>()));
                     services.AddSingleton<IGameProcessDetector, LinuxGameProcessDetector>();
                     services.AddSingleton<IUpdateSwapStrategy, LinuxUpdateSwapStrategy>();
                     services.AddSingleton<ILaunchExitPolicy>(sp => new GraceWindowLaunchExitPolicy(
@@ -273,24 +317,51 @@ public static class DependencyInjection
                         var bundleResourcesDir = Path.GetFullPath(
                             Path.Combine(AppContext.BaseDirectory, "..", "Resources"));
                         var wine64 = MacWineHost.ResolveWine64(shareDir, bundleResourcesDir) ?? "wine64";
-                        var wine = new MacWineHost(logger, WineOptions.ModernForShareDir(shareDir, wine64));
+                        // Die Aufloesung oben laeuft EINMAL, beim Bau des Containers. Der Werkzeugkasten
+                        // kann aber spaeter kommen: MacGptkProvisioner laedt ihn beim ersten Spielen
+                        // nach. Ohne den zweiten Blick behielte der Launcher fuer den Rest der Sitzung
+                        // den Platzhalternamen "wine64" -- und scheiterte an etwas, das daneben liegt.
+                        var wine = new MacWineHost(
+                            logger, WineOptions.ModernForShareDir(shareDir, wine64),
+                            () => MacWineHost.ResolveWine64(shareDir, bundleResourcesDir));
+                        // OpenSSL is required by the BINARY, not by the platform. The old native
+                        // HermesProxy linked against a system OpenSSL 3 — for it the check stays
+                        // fail-closed, because starting it without gives the player a vague "proxy did not
+                        // start" instead of a precise sentence. The JimsProxy builds we ship are
+                        // self-contained .NET 10 and use Apple's own crypto: BOTH macOS binaries of build
+                        // 5.2.0 contain 487 references to AppleCrypto and ZERO to Native.OpenSsl, while the
+                        // linux-x64 binary of the same build has 335 — the probe demonstrably measures
+                        // (2026-08-24). For those, a missing OpenSSL is not a reason to refuse: doing so
+                        // blocked players over a dependency the proxy does not have (report ST-9YBC-Y1BX).
+                        // Which of the two it is comes from the resolver, not from a guess here.
                         var openSslRuntime = new MacOpenSslRuntime(AppContext.BaseDirectory);
                         var openSslEnvironment = openSslRuntime.ResolveEnvironmentOverrides();
-                        if (openSslEnvironment is null)
-                            logger.Error("{Message}", MacOpenSslRuntime.MissingRuntimeMessage);
 
                         return new MacModernClientLauncher(
                             logger, wine, detector,
-                            layout => openSslEnvironment is null
+                            layout => layout.ProxyRequiresOpenSsl && openSslEnvironment is null
                                 ? new UnavailableGameProxy(MacOpenSslRuntime.MissingRuntimeMessage)
                                 : new HermesProxyRunner(
-                                    logger, layout.ProxyExe, [], Path.Combine(shareDir, "hermes-proxy.pid"), openSslEnvironment),
+                                    logger, layout.ProxyExe, [], Path.Combine(shareDir, "hermes-proxy.pid"),
+                                    openSslEnvironment,
+                                    // The macOS package keeps config and CSV data in Hermes/ while the
+                                    // binary lives in Hermes/bin/ — starting it from the binary's own
+                                    // directory would make it die on a missing Hermes/CSV/... path.
+                                    workingDirectory: layout.ProxyDir,
+                                    // The Mac is the platform where the proxy's own words are hardest to
+                                    // come by (2026-08-24: a login that bounced back to the login screen
+                                    // left nothing behind but a flawless launcher log).
+                                    outputLogPath: Path.Combine(
+                                        sp.GetRequiredService<IAppPaths>().LogDir,
+                                        ProxyOutputLog.FileNameFor("hermes"))),
                             sp.GetRequiredService<IGameSession>(),
                             ActiveRealmAddress(sp));
                     });
                     // Install discovery + self-update are not wired for macOS yet (the client is obtained
                     // through the launcher's own download/install into ShareDir); neutral for now.
                     services.AddSingleton<IInstallRootsProvider, NeutralInstallRootsProvider>();
+                    services.AddSingleton<IClientDisplayService>(sp =>
+                        new ClientDisplayService(probe: null, sp.GetRequiredService<Serilog.ILogger>()));
                     services.AddSingleton<IUpdateSwapStrategy>(sp =>
                         new MacUpdateSwapStrategy(sp.GetRequiredService<Serilog.ILogger>()));
                     // A GPTK-Wine start is not proof the client runs (same as Linux) — grace-window the exit.
@@ -301,6 +372,8 @@ public static class DependencyInjection
                 {
                     services.AddSingleton<IGameLauncher, UnsupportedGameLauncher>();
                     services.AddSingleton<IInstallRootsProvider, NeutralInstallRootsProvider>();
+                    services.AddSingleton<IClientDisplayService>(sp =>
+                        new ClientDisplayService(probe: null, sp.GetRequiredService<Serilog.ILogger>()));
                     services.AddSingleton<IGameProcessDetector, StubGameProcessDetector>();
                     services.AddSingleton<IUpdateSwapStrategy, UnsupportedUpdateSwapStrategy>();
                     // Never reached with Started=true (the launcher stub returns Failed), but wired for
@@ -334,6 +407,19 @@ public static class DependencyInjection
                 services.AddSingleton<IDownloadService>(sp => new DownloadService(
                     LongLivedClient(TimeSpan.FromMinutes(30), retries: 2, delay: TimeSpan.FromSeconds(5)),
                     sp.GetRequiredService<Serilog.ILogger>()));
+                // Nur macOS braucht eine nachgeladene Laufzeitumgebung: Windows startet nativ, Linux
+                // findet Wine im System. Die Entscheidung faellt hier, damit das Ansichtsmodell auf
+                // jeder Plattform denselben einen Aufruf macht und kein "wenn macOS" traegt.
+                // Linux (2026-09-22): the 1.12.1 package ships START.sh, which fetches its pinned Proton
+                // itself; the provisioner only runs its --prepare step with visible progress.
+                services.AddSingleton<IGameRuntimeProvisioner>(sp => OperatingSystem.IsMacOS()
+                    ? new MacGptkProvisioner(
+                        sp.GetRequiredService<IDownloadService>(),
+                        sp.GetRequiredService<IAppPaths>(),
+                        sp.GetRequiredService<Serilog.ILogger>())
+                    : OperatingSystem.IsLinux()
+                        ? new LinuxStartScriptProvisioner(sp.GetRequiredService<Serilog.ILogger>())
+                        : new NoGameRuntimeProvisioner());
                 services.AddSingleton<IServerStatusService>(sp => new ServerStatusService(
                     LongLivedClient(TimeSpan.FromSeconds(10), retries: 1, delay: TimeSpan.FromSeconds(2)),
                     sp.GetRequiredService<IConfigService>(), sp.GetRequiredService<Serilog.ILogger>()));
@@ -349,6 +435,24 @@ public static class DependencyInjection
                 // Phase 1 repair-without-redownload (deploy/MANIFEST-SCHEMA.md §files_url): pure
                 // file-system/hash logic, no HTTP, so it needs nothing but the logger.
                 services.AddSingleton<IClientVerifyService>(sp => new ClientVerifyService(
+                    sp.GetRequiredService<Serilog.ILogger>()));
+                // S2 patcher engine (ARCHITEKTUR-v2-patcher.md §4/§5): fetches+trust-binds files.json,
+                // then drives Delta/PerFile/FullZip. Its own HTTP client — files.json and per-file
+                // downloads are a different traffic shape (many small/medium GETs) than the client ZIP
+                // and manifest clients above, but the same long-lived-handler reasoning applies.
+                services.AddSingleton<IClientFileManifestLoader>(sp => new ClientFileManifestLoader(
+                    LongLivedClient(TimeSpan.FromSeconds(30), retries: 2, delay: TimeSpan.FromSeconds(2)),
+                    sp.GetRequiredService<Serilog.ILogger>()));
+                services.AddSingleton<IButlerSidecar>(sp => new ButlerSidecar(
+                    sp.GetRequiredService<IDownloadService>(),
+                    sp.GetRequiredService<IAppPaths>(),
+                    sp.GetRequiredService<Serilog.ILogger>()));
+                services.AddSingleton(sp => new ClientPatchEngine(
+                    sp.GetRequiredService<IClientFileManifestLoader>(),
+                    sp.GetRequiredService<IDownloadService>(),
+                    sp.GetRequiredService<IClientVerifyService>(),
+                    sp.GetRequiredService<IButlerSidecar>(),
+                    sp.GetRequiredService<IGameProcessDetector>(),
                     sp.GetRequiredService<Serilog.ILogger>()));
                 // WP4: the update channel decides which manifest field this process reads and whether it
                 // may auto-apply. Windows → launcher (auto-apply, shipped behaviour); Linux → launcher_linux
@@ -372,7 +476,6 @@ public static class DependencyInjection
                     sp.GetRequiredService<IManifestTrustStore>(), sp.GetRequiredService<Serilog.ILogger>()));
                 services.AddSingleton<IManifestSignatureGate>(sp => new ManifestSignatureGate(
                     LongLivedClient(TimeSpan.FromSeconds(30), retries: 2, delay: TimeSpan.FromSeconds(2)),
-                    sp.GetRequiredService<IConfigService>(),
                     sp.GetRequiredService<ManifestSignature>(),
                     sp.GetRequiredService<ManifestReleasePolicy>(),
                     sp.GetRequiredService<Serilog.ILogger>()));
@@ -396,7 +499,12 @@ public static class DependencyInjection
                     // hier „es kam an und startet nicht". Ohne das Argument tauscht der Launcher
                     // ohne Netz — ein Build, der beim Start abstürzt, bliebe für immer stehen.
                     health: sp.GetRequiredService<IUpdateHealth>(),
-                    checkLog: sp.GetRequiredService<IUpdateCheckLog>()));
+                    checkLog: sp.GetRequiredService<IUpdateCheckLog>(),
+                    // Release 1.8.11 (Stolperfallen-Preflight): TRANSLOCATED / PATH_NOT_WRITABLE before
+                    // the self-update swap. No dependency of its own (probes call straight into the
+                    // OS), so a plain instance is enough — see IInstallEnvironmentGate for why this is
+                    // optional on the constructor rather than required.
+                    envGate: new InstallEnvironmentGate()));
                 // Singleton so the in-memory news cache is shared by both the rail (PlayVM) and
                 // the PatchNotes section (one fetch, not two).
                 services.AddSingleton<INewsService>(sp => new NewsService(
@@ -451,6 +559,11 @@ public static class DependencyInjection
                         sp.GetRequiredService<ILauncherAuthService>(),
                         sp.GetRequiredService<Serilog.ILogger>()));
                 }
+                // The 1.9 login shell signs in over the same launcher auth (Spec §12.1 A), through the
+                // narrow gateway seam. Registered for the player path; tests and the QA render harness
+                // substitute the fake.
+                services.AddSingleton<Startup.IAuthGateway>(sp =>
+                    new Startup.LauncherAuthGateway(sp.GetRequiredService<ILauncherAuthService>()));
                 // Addon catalog + installer. Singleton so the catalog is fetched once per session and
                 // shared; it reuses the download service so the hash-verify-before-extract rule is the
                 // same one the client download obeys, not a second copy of it.
@@ -526,7 +639,8 @@ public static class DependencyInjection
                     sp.GetService<IDesktopIntegrationService>(),
                     sp.GetRequiredService<StartReport>(),
                     sp.GetRequiredService<IClipboardService>(),
-                    sp.GetRequiredService<IUpdateCheckLog>()));
+                    sp.GetRequiredService<IUpdateCheckLog>(),
+                    display: sp.GetRequiredService<IClientDisplayService>()));
                 services.AddSingleton<ShellViewModel>();
             })
             .Build();
@@ -572,6 +686,13 @@ public sealed class RetryHandler : DelegatingHandler
 {
     private readonly int _max; private readonly TimeSpan _delay;
     public RetryHandler(int maxRetries, TimeSpan baseDelay) { _max = maxRetries; _delay = baseDelay; }
+    /// <summary>Only these are worth sending again. A 401/403/404 is a decided answer — repeating it
+    /// doubles the load and the log for a result that cannot change (Codex review 2026-08-24).</summary>
+    private static bool WorthRetrying(HttpStatusCode status) =>
+        status == HttpStatusCode.RequestTimeout ||
+        status == HttpStatusCode.TooManyRequests ||
+        (int)status >= 500;
+
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage req, CancellationToken ct)
     {
         for (int i = 0; i <= _max; i++)
@@ -579,11 +700,15 @@ public sealed class RetryHandler : DelegatingHandler
             try
             {
                 var resp = await base.SendAsync(req, ct);
-                if (resp.IsSuccessStatusCode || i == _max) return resp;
+                if (resp.IsSuccessStatusCode || i == _max || !WorthRetrying(resp.StatusCode)) return resp;
                 Log.Warning("HTTP {Method} {Url} → {Status} ({A}/{M})", req.Method, req.RequestUri, (int)resp.StatusCode, i + 1, _max + 1);
             }
+            // No exception object here on purpose. This line fires once per attempt per poll, and with a
+            // stack trace it is ~1500 characters each — enough of them and the problem report a player
+            // sends carries nothing BUT retry noise, which is how report ST-8PXS-EGCY arrived without the
+            // error it was about. The caller still logs the final failure with its stack.
             catch (HttpRequestException ex) when (i < _max)
-            { Log.Warning(ex, "HTTP {Method} {Url} failed ({A}/{M})", req.Method, req.RequestUri, i + 1, _max + 1); }
+            { Log.Warning("HTTP {Method} {Url} failed ({A}/{M}): {Reason}", req.Method, req.RequestUri, i + 1, _max + 1, ex.Message); }
             if (i < _max) await Task.Delay(_delay * Math.Pow(2, i), ct);
         }
         throw new HttpRequestException("All retries exhausted");

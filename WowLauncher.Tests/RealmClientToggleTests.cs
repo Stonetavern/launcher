@@ -302,6 +302,16 @@ public sealed class RealmClientToggleTests
             Task.FromResult(false);
         public Task<bool> VerifyHashAsync(string path, string expected, CancellationToken ct = default) =>
             Task.FromResult(false);
+    
+        /// <summary>Pflichtteil der Schnittstelle: ohne Grund gilt der Fehlschlag als nicht behebbar,
+        /// also als kaputtes Paket. Das ist die sichere Richtung fuer eine Attrappe.</summary>
+        public async System.Threading.Tasks.Task<WowLauncher.Models.ExtractOutcome> ExtractClientWithReasonAsync(
+            string zipPath, string destDir, bool freshInstall,
+            System.IProgress<string>? progress = null,
+            System.Threading.CancellationToken ct = default) =>
+            await ExtractClientAsync(zipPath, destDir, progress, ct).ConfigureAwait(false)
+                ? WowLauncher.Models.ExtractOutcome.Success
+                : WowLauncher.Models.ExtractOutcome.Fail(WowLauncher.Models.ExtractFailure.Unknown);
     }
 
     /// <summary>Parks inside DownloadFileAsync until the test releases it - the same shape as
@@ -325,6 +335,16 @@ public sealed class RealmClientToggleTests
             Task.FromResult(false);
         public Task<bool> VerifyHashAsync(string path, string expected, CancellationToken ct = default) =>
             Task.FromResult(false);
+    
+        /// <summary>Pflichtteil der Schnittstelle: ohne Grund gilt der Fehlschlag als nicht behebbar,
+        /// also als kaputtes Paket. Das ist die sichere Richtung fuer eine Attrappe.</summary>
+        public async System.Threading.Tasks.Task<WowLauncher.Models.ExtractOutcome> ExtractClientWithReasonAsync(
+            string zipPath, string destDir, bool freshInstall,
+            System.IProgress<string>? progress = null,
+            System.Threading.CancellationToken ct = default) =>
+            await ExtractClientAsync(zipPath, destDir, progress, ct).ConfigureAwait(false)
+                ? WowLauncher.Models.ExtractOutcome.Success
+                : WowLauncher.Models.ExtractOutcome.Fail(WowLauncher.Models.ExtractFailure.Unknown);
     }
 
     /// <summary>Like <see cref="GatedDownload"/>, but also records the URL it was handed - "a download
@@ -349,6 +369,16 @@ public sealed class RealmClientToggleTests
             Task.FromResult(false);
         public Task<bool> VerifyHashAsync(string path, string expected, CancellationToken ct = default) =>
             Task.FromResult(false);
+    
+        /// <summary>Pflichtteil der Schnittstelle: ohne Grund gilt der Fehlschlag als nicht behebbar,
+        /// also als kaputtes Paket. Das ist die sichere Richtung fuer eine Attrappe.</summary>
+        public async System.Threading.Tasks.Task<WowLauncher.Models.ExtractOutcome> ExtractClientWithReasonAsync(
+            string zipPath, string destDir, bool freshInstall,
+            System.IProgress<string>? progress = null,
+            System.Threading.CancellationToken ct = default) =>
+            await ExtractClientAsync(zipPath, destDir, progress, ct).ConfigureAwait(false)
+                ? WowLauncher.Models.ExtractOutcome.Success
+                : WowLauncher.Models.ExtractOutcome.Fail(WowLauncher.Models.ExtractFailure.Unknown);
     }
 
     /// <summary>Records which build every lookup asked for, so a test can prove the toggle queries the

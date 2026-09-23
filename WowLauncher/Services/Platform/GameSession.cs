@@ -55,6 +55,28 @@ public interface IGameSession
     /// name-scan. A default no-op keeps every existing implementer valid.</para>
     /// </summary>
     void BindClientProcess(int pid) { }
+
+    /// <summary>True when the realm proxy died while the client was STILL running during the last
+    /// watched session — the shape of a mid-game disconnect the player experiences as "the server
+    /// threw me out".
+    ///
+    /// <para>Why this exists: <see cref="MonitorUntilExitAsync"/> watched only the client. A proxy that
+    /// crashed under a playing user produced no log line, no message and no reap — the player was
+    /// dropped into the login screen and every artefact the launcher left behind said the session had
+    /// been fine. Four player reports of "when i start playing it disconnect me" have this shape.
+    /// Restarting the proxy would not help (the client's TCP connection is already gone), so the
+    /// launcher does the one useful thing instead: it names the cause.</para>
+    ///
+    /// <para>Default <c>false</c> for implementations that do not watch a proxy — that is an absence of
+    /// measurement, and it must not be dressed up as an incident.</para></summary>
+    bool ProxyDiedDuringSession => false;
+
+    /// <summary>True when the last watched client never became visible, or was gone again within a few
+    /// seconds of appearing. On Windows the launch policy confirms at once and the launcher hides into
+    /// the tray, so a loader that is blocked (Data Execution Prevention, an antivirus quarantining
+    /// VanillaFixes) looked exactly like a normal session: the launcher came back and said nothing.
+    /// Default <c>false</c>: an implementation that does not watch the client measured nothing.</summary>
+    bool ClientEndedRightAfterStart => false;
 }
 
 /// <inheritdoc cref="IGameSession"/>
@@ -69,6 +91,12 @@ public sealed class GameSession : IGameSession
     private readonly object _gate = new();
     private IGameProxy? _proxy;
     private int? _clientPid;
+    private bool _proxyDiedDuringSession;
+    private bool _clientEndedRightAfterStart;
+
+    /// <summary>A client that lives shorter than this after appearing did not really start. The 1.12.1
+    /// client needs longer than this just to show its login screen.</summary>
+    internal static readonly TimeSpan ShortLivedClient = TimeSpan.FromSeconds(15);
 
     public GameSession(IGameProcessDetector detector, Serilog.ILogger logger)
         : this(detector, logger, TimeSpan.FromSeconds(20), TimeSpan.FromSeconds(2),
@@ -96,8 +124,41 @@ public sealed class GameSession : IGameSession
 
     public void AttachProxy(IGameProxy proxy)
     {
-        lock (_gate) { _proxy = proxy; }
+        // The flag belongs to THIS session. Clearing it here rather than at the end of the previous one
+        // means a caller that reads it after the watchdog returns still sees the truth about the session
+        // that just ended, and a fresh launch never inherits an old incident.
+        lock (_gate) { _proxy = proxy; _proxyDiedDuringSession = false; }
         _logger.Information("Game session: proxy attached — the launcher now owns its shutdown");
+    }
+
+    /// <inheritdoc />
+    public bool ProxyDiedDuringSession { get { lock (_gate) { return _proxyDiedDuringSession; } } }
+
+    /// <inheritdoc />
+    public bool ClientEndedRightAfterStart { get { lock (_gate) { return _clientEndedRightAfterStart; } } }
+
+    /// <summary>One poll of the proxy's liveness while the client is still up. Only a measured
+    /// <c>false</c> counts: <c>null</c> means the runner does not report liveness, and a missing
+    /// measurement must never become an incident. Logs once per session, not once per poll.</summary>
+    private void NoteProxyDeathWhilePlaying()
+    {
+        IGameProxy? proxy;
+        lock (_gate)
+        {
+            if (_proxyDiedDuringSession) return; // already recorded — do not log it every two seconds
+            proxy = _proxy;
+        }
+        if (proxy is null) return;               // 1.12.1, or already reaped: nothing of ours to die
+        if (proxy.IsProcessAlive != false) return;
+
+        lock (_gate)
+        {
+            if (_proxyDiedDuringSession) return;
+            _proxyDiedDuringSession = true;
+        }
+        _logger.Error(
+            "The realm proxy died while the game was still running — the player was disconnected. " +
+            "This is the launcher's side of a mid-game drop, not a server outage.");
     }
 
     public void BindClientProcess(int pid)
@@ -163,6 +224,7 @@ public sealed class GameSession : IGameSession
 
     public async Task MonitorUntilExitAsync(string clientExePath, CancellationToken ct = default)
     {
+        lock (_gate) { _clientEndedRightAfterStart = false; }
         try
         {
             // Phase 1 — wait (bounded) for the client to actually be visible as a process. The launcher
@@ -172,13 +234,32 @@ public sealed class GameSession : IGameSession
             var appeared = await WaitUntilAsync(() => ClientIsAlive(clientExePath), _appearTimeout, ct)
                 .ConfigureAwait(false);
             if (!appeared)
+            {
                 _logger.Warning(
                     "Game process never became visible within {T:F0}s — treating the session as already ended",
                     _appearTimeout.TotalSeconds);
+                lock (_gate) { _clientEndedRightAfterStart = true; }
+            }
             else
-                // Phase 2 — wait until it is gone. Only here does a reap become allowed.
+            {
+                // Phase 2 — wait until it is gone. Only here does a reap become allowed. The proxy is
+                // watched alongside the client: it is the one failure that takes the game away from a
+                // player who did nothing wrong, and until now it left no trace at all.
+                // Lifetime is counted in poll intervals, not wall-clock, so the test seam proves it.
+                var alive = TimeSpan.Zero;
                 while (!ct.IsCancellationRequested && ClientIsAlive(clientExePath))
+                {
+                    NoteProxyDeathWhilePlaying();
                     await _delay(_pollInterval, ct).ConfigureAwait(false);
+                    alive += _pollInterval;
+                }
+                if (!ct.IsCancellationRequested && alive < ShortLivedClient)
+                {
+                    _logger.Warning("Game process was gone again after about {S:F0}s — it did not really start",
+                        alive.TotalSeconds);
+                    lock (_gate) { _clientEndedRightAfterStart = true; }
+                }
+            }
         }
         catch (OperationCanceledException)
         {

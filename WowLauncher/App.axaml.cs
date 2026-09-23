@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Threading;
 using Avalonia;
 using Avalonia.Controls;
@@ -34,6 +36,13 @@ public partial class App : Application
     private bool _trayAvailable;
     private bool _shuttingDown;
 
+    // ─── Agent control surface (opt-in, --agent-control) ──────────────────────
+    // Null on every normal run. Held for the app lifetime so the listener can be torn down and its
+    // handshake file removed on the way out; a leftover file would advertise a dead port.
+    private Services.AgentControl.AgentControlServer? _agentControl;
+    private string? _agentControlStateDir;
+    private readonly List<PosixSignalRegistration> _agentControlSignals = new();
+
     // ─── Start screen state ───────────────────────────────────────────────────
     // _startupSettled flips once RunStartupAsync has an outcome: before that, a close on the splash is
     // the player asking to abort the start (_splashAborted → quit); afterwards it is our own close in
@@ -47,7 +56,9 @@ public partial class App : Application
 
     public override void OnFrameworkInitializationCompleted()
     {
+        var tFramework = Startup.StartupClock.Elapsed;
         _host = DependencyInjection.BuildHost([]);
+        var tHost = Startup.StartupClock.Elapsed;
 
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
@@ -62,15 +73,33 @@ public partial class App : Application
                 ? Localization.Loc.ForClientLocale.GetValueOrDefault(startCfg.Locale, "en")
                 : startCfg.LauncherLanguage);
 
-            var shell = _host.Services.GetRequiredService<ShellViewModel>();
-
-            // Three skins, one binary. v3 is what ships (default); v1 and v2 stay reachable via
-            // `--ui v1` / `--ui v2`. Same ViewModels throughout, so they compare on one machine.
-            Window window = Ui.V2 ? new ShellV2Window { DataContext = shell }
-                : Ui.V1 ? new MainWindow { DataContext = shell }
-                : new ShellV3Window { DataContext = shell };
-
             var args = desktop.Args ?? [];
+
+            // The shell (ViewModels + the v3 window) costs ~450 ms of the cold start (measured
+            // 2026-09-20, Release: view models 132 ms, ShellV3Window 317 ms). The shipped path builds
+            // it here, before anything is on screen. The 1.9 login shell (flag below) defers it until
+            // the player signs in, so its first frame is not paying for a window nobody sees yet.
+            (ShellViewModel Shell, Window Window) BuildShell()
+            {
+                var shellVm = _host.Services.GetRequiredService<ShellViewModel>();
+                var tShellVm = Startup.StartupClock.Elapsed;
+
+                // Three skins, one binary. v3 is what ships (default); v1 and v2 stay reachable via
+                // `--ui v1` / `--ui v2`. Same ViewModels throughout, so they compare on one machine.
+                Window shellWindow = Ui.V2 ? new ShellV2Window { DataContext = shellVm }
+                    : Ui.V1 ? new MainWindow { DataContext = shellVm }
+                    : new ShellV3Window { DataContext = shellVm };
+                // Where the cold start goes (Spec §4 budget): framework up, DI host, ViewModels, window.
+                Serilog.Log.Information("Startup clock: framework {F:F0} ms, host {H:F0} ms, view models {V:F0} ms, shell window {W:F0} ms",
+                    tFramework.TotalMilliseconds, tHost.TotalMilliseconds, tShellVm.TotalMilliseconds,
+                    Startup.StartupClock.Elapsed.TotalMilliseconds);
+                return (shellVm, shellWindow);
+            }
+
+            var loginShell = !args.Contains("--screenshot") && Startup.LoginShellFlag.IsEnabled(startCfg);
+            ShellViewModel shell = null!;
+            Window window = null!;
+            if (!loginShell) (shell, window) = BuildShell();
 
             // ─── QA render path (unchanged) ───────────────────────────────────
             // A --screenshot render seeds state and Environment.Exit(0)s without ever closing a
@@ -84,6 +113,34 @@ public partial class App : Application
                 if (SectionArg(args) == "splash")
                 {
                     var shot = new SplashWindow { DataContext = SplashShotViewModel(args) };
+                    desktop.MainWindow = shot;
+                    HandleScreenshotMode(desktop, shot);
+                }
+                else if (SectionArg(args) == "login")
+                {
+                    // The 1.9 login/loading shell, seeded (Startup.LoginShellQa): `--state cold|
+                    // checking|ready|offline|banner|error|timeout|transition`. Fake pipeline, fake
+                    // gateway, shipped window. Same 3 s settle as every other still.
+                    var state = StateArg(args);
+                    var shot = new LoginShellWindow
+                    {
+                        DataContext = Startup.LoginShellQa.ViewModelFor(state, args.Contains("--allow-skip")),
+                        HoldAtPhase0 = Startup.LoginShellQa.HoldsAtPhase0(state),
+                    };
+                    // The shipped window is fixed at 1000x640 (brand constraint). For a still at
+                    // another size (Steam Deck 1280x800) the window itself is resized, otherwise the
+                    // layout would render at 1000x640 inside a larger canvas and prove nothing about
+                    // how the ratio-based composition holds.
+                    var sizeIdx = Array.IndexOf(args, "--size");
+                    if (sizeIdx >= 0 && sizeIdx + 1 < args.Length)
+                    {
+                        var parts = args[sizeIdx + 1].Split('x', 'X');
+                        if (parts.Length == 2 && int.TryParse(parts[0], out var w) && int.TryParse(parts[1], out var h))
+                        {
+                            shot.MinWidth = shot.Width = w;
+                            shot.MinHeight = shot.Height = h;
+                        }
+                    }
                     desktop.MainWindow = shot;
                     HandleScreenshotMode(desktop, shot);
                 }
@@ -109,19 +166,6 @@ public partial class App : Application
                 // moment the window disappears into the tray). We drive shutdown ourselves from QuitApp.
                 desktop.ShutdownMode = ShutdownMode.OnExplicitShutdown;
                 SetUpTrayIcon();
-                window.Closing += OnMainWindowClosing;
-
-                // Wire the hide-to-tray / restore seam the Play flow uses — but only when a real tray
-                // exists (otherwise a hidden window could never be brought back, so PlayViewModel keeps
-                // its hard-exit fallback). The callbacks marshal to the UI thread themselves, so the
-                // controller and the ViewModel stay free of any window/dispatcher reference.
-                if (_trayAvailable)
-                {
-                    var controller = _host.Services.GetRequiredService<IShellWindowController>() as ShellWindowController;
-                    controller?.Configure(
-                        hideToTray: () => Dispatcher.UIThread.Post(window.Hide),
-                        restoreFromTray: () => Dispatcher.UIThread.Post(ShowMainWindow));
-                }
 
                 // Automatic one-time AppImage first-run setup (owner UX 2026-07-24): relocate into
                 // ~/Applications, drop a trusted desktop shortcut, register the menu entry. Runs off the
@@ -129,6 +173,24 @@ public partial class App : Application
                 // interactive budget; a no-op off an AppImage / after the first run / on non-Linux.
                 var firstRun = _host.Services.GetRequiredService<Services.Platform.IFirstRunSetup>();
                 _ = Task.Run(() => firstRun.RunAsync());
+
+                // 1.9 login/loading shell behind its flag (Models.LauncherConfig.LauncherShell). The
+                // default stays the splash path below, byte for byte. The shell is built lazily in
+                // there; everything that needs it (close interception, tray seam, agent control) is
+                // wired the moment it exists.
+                if (loginShell)
+                {
+                    RunLoginShell(desktop, startCfg, () =>
+                    {
+                        var built = BuildShell();
+                        WireShellWindow(built.Shell, built.Window, args);
+                        return built;
+                    });
+                    base.OnFrameworkInitializationCompleted();
+                    return;
+                }
+
+                WireShellWindow(shell, window, args);
 
                 // The start screen owns the boot. The shell is built but NOT shown: the splash is the
                 // window the lifetime opens, and the shell only appears once the startup work has an
@@ -146,6 +208,30 @@ public partial class App : Application
         }
 
         base.OnFrameworkInitializationCompleted();
+    }
+
+    /// <summary>Everything the interactive path hooks onto the shell window: close interception, the
+    /// hide-to-tray seam, the agent control surface. One place, called by both start paths.</summary>
+    private void WireShellWindow(ShellViewModel shell, Window window, string[] args)
+    {
+        window.Closing += OnMainWindowClosing;
+
+        // Wire the hide-to-tray / restore seam the Play flow uses — but only when a real tray
+        // exists (otherwise a hidden window could never be brought back, so PlayViewModel keeps
+        // its hard-exit fallback). The callbacks marshal to the UI thread themselves, so the
+        // controller and the ViewModel stay free of any window/dispatcher reference.
+        if (_trayAvailable)
+        {
+            var controller = _host!.Services.GetRequiredService<IShellWindowController>() as ShellWindowController;
+            controller?.Configure(
+                hideToTray: () => Dispatcher.UIThread.Post(window.Hide),
+                restoreFromTray: () => Dispatcher.UIThread.Post(ShowMainWindow));
+        }
+
+        // Die Steuerflaeche fuer Pruefstaende — aus, solange sie niemand anfordert.
+        // Absichtlich hier: das Fenster steht, die ViewModels leben, ein Aufruf trifft also
+        // denselben Zustand, den ein Mensch vor sich haette.
+        StartAgentControlIfRequested(shell, args);
     }
 
     // ─── Start screen ─────────────────────────────────────────────────────────
@@ -218,6 +304,99 @@ public partial class App : Application
     {
         var i = Array.IndexOf(args, "--section");
         return i >= 0 && i + 1 < args.Length ? args[i + 1].ToLowerInvariant() : "";
+    }
+
+    /// <summary>The lowercased <c>--state</c> argument, or null when absent.</summary>
+    private static string? StateArg(string[] args)
+    {
+        var i = Array.IndexOf(args, "--state");
+        return i >= 0 && i + 1 < args.Length ? args[i + 1].ToLowerInvariant() : null;
+    }
+
+    // ─── 1.9 login/loading shell (config LauncherShell=login) ──────────────────
+
+    /// <summary>
+    /// The login screen that is also the loading screen (design/SPEC-2026-09-20). Replaces the splash
+    /// on this path; the shell it hands over to is the SAME v3 window as always, built above.
+    ///
+    /// <para>Three ways out, all of them here: the Phase-3 storyboard completed (show the shell, close
+    /// the login window, run the shell's own init); the self-update swap started (the process ends,
+    /// exactly like PlayViewModel.InitAsync does it); the player closed the window before any of that
+    /// (that is "I do not want to start": quit).</para>
+    /// </summary>
+    private void RunLoginShell(IClassicDesktopStyleApplicationLifetime desktop, Models.LauncherConfig cfg,
+                               Func<(ShellViewModel Shell, Window Window)> buildShell)
+    {
+        var services = _host!.Services;
+
+        // Built once, on the first phase that needs it (Phase 2 or the offline path): the ~450 ms it
+        // costs then hides behind the sign-in wait instead of in front of the first frame.
+        (ShellViewModel Shell, Window Window)? built = null;
+        (ShellViewModel Shell, Window Window) EnsureShell() => built ??= buildShell();
+        var (pipeline, facts) = Startup.LauncherInitSteps.Build(
+            services.GetRequiredService<IConfigService>(),
+            services.GetRequiredService<IManifestService>(),
+            services.GetRequiredService<IUpdateService>(),
+            services.GetRequiredService<IServerStatusService>(),
+            services.GetRequiredService<IClientService>());
+
+        // §12.1 A is decided: the player path signs in against the launcher service (the adapter is
+        // registered in DI). The QA render harness (--screenshot) seeds the fake instead.
+        var gateway = services.GetRequiredService<Startup.IAuthGateway>();
+        var vm = new LoginShellViewModel(pipeline, facts, gateway, cfg.LauncherShellAllowSkipSignIn);
+        var tBeforeWindow = Startup.StartupClock.Elapsed;
+        var login = new LoginShellWindow { DataContext = vm };
+        // 🔴 The self-update health contract is answered at the FIRST FRAME of the login window, the
+        // same "a window really stands" moment the splash path uses. Answering only after sign-in
+        // (as until 1.9.1) meant: a player who updated and closed the launcher at the login screen
+        // within the 90 s window was rolled back and the new version quarantined for good
+        // (measured E2E 2026-09-23, 1.8.11 -> 1.9.1: "health FEHLGESCHLAGEN ... in Quarantaene").
+        login.FirstFrameRendered += () => services.GetService<IUpdateHealth>()?.ReportHealthy();
+        Serilog.Log.Information("Startup clock: login shell window built at {W:F0} ms (started at {S:F0} ms)",
+            Startup.StartupClock.Elapsed.TotalMilliseconds, tBeforeWindow.TotalMilliseconds);
+        var handedOver = false;
+        // Spec §12.1 A: a real sign-in ends in the same state the Account tab reaches, so the shell
+        // has to be told about it (it may have been built while the attempt was still in flight).
+        var signedIn = false;
+
+        vm.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName != nameof(LoginShellViewModel.Phase)) return;
+            if (vm.Phase == LoginPhase.Succeeded) signedIn = true;
+            if (vm.Phase is LoginPhase.Authenticating or LoginPhase.Transition)
+                EnsureShell();
+        };
+
+        vm.TransitionCompleted += () =>
+        {
+            handedOver = true;
+            var (shell, shellWindow) = EnsureShell();
+            if (signedIn) shell.NotifySignedIn();
+            shellWindow.Show();
+            desktop.MainWindow = shellWindow;
+            login.Close();
+            // The shell's own startup (news, manifest, installed client, realm dot), as before.
+            _ = Dispatcher.UIThread.InvokeAsync(shell.InitAsync);
+            // Same contract as the splash path: healthy means the main window really stands.
+            services.GetService<IUpdateHealth>()?.ReportHealthy();
+        };
+
+        vm.HaltRequested += () =>
+        {
+            handedOver = true;
+            // Mirrors PlayViewModel.InitAsync: a moment for the sentence to be seen, then the swap
+            // helper needs the file lock released.
+            DispatcherTimer.RunOnce(() => Environment.Exit(0), TimeSpan.FromMilliseconds(500));
+        };
+
+        login.Closing += async (_, _) =>
+        {
+            if (handedOver) return;
+            _startupSettled = true;
+            await QuitAppAsync();
+        };
+
+        desktop.MainWindow = login;
     }
 
     /// <summary>QA-only: a splash ViewModel for a still render. <c>--state update</c> shows the
@@ -348,7 +527,89 @@ public partial class App : Application
         catch (Exception ex) { Serilog.Log.Warning(ex, "Stopping the realm proxy on quit failed"); }
         try { if (_trayIcon is not null) _trayIcon.IsVisible = false; }
         catch (Exception ex) { Serilog.Log.Warning(ex, "Hiding the tray icon on quit failed"); }
+        await StopAgentControlAsync();
         _desktop?.Shutdown();
+    }
+
+    /// <summary>
+    /// Starts the loopback control surface — only when <c>--agent-control</c> was passed.
+    ///
+    /// <para>🔴 Never on a normal run. A failure here must not cost the player his launcher, so it is
+    /// contained: a port already taken, a read-only state directory or a blocked socket downgrades to a
+    /// log line, and the app carries on exactly as if the switch had been absent.</para>
+    /// </summary>
+    private void StartAgentControlIfRequested(ShellViewModel shell, string[] args)
+    {
+        Services.AgentControl.AgentControlOptions options;
+        try
+        {
+            options = Services.AgentControl.AgentControlOptions.Parse(args);
+        }
+        catch (ArgumentException ex)
+        {
+            // A malformed port is the operator's mistake, and staying silent about it would send a
+            // harness looking for a door that was never opened.
+            Serilog.Log.Error("Agent control not started: {Reason}", ex.Message);
+            return;
+        }
+
+        if (!options.Enabled) return;
+
+        try
+        {
+            var surface = new Services.AgentControl.PlayViewModelAgentSurface(shell.Play);
+            var server = new Services.AgentControl.AgentControlServer(surface, Serilog.Log.Logger);
+            server.Start(options.Port);
+
+            var stateDir = _host!.Services
+                .GetRequiredService<Services.Platform.IAppPaths>().StateDir;
+            var handshake = Services.AgentControl.AgentControlHandshake.Write(
+                stateDir, server.Port, server.Token);
+
+            _agentControl = server;
+            _agentControlStateDir = stateDir;
+
+            // Auch wenn der Weg nicht ueber QuitApp fuehrt, darf keine Datei zurueckbleiben, die
+            // einen toten Port bewirbt.
+            //
+            // ProcessExit allein genuegt nicht: unter Avalonia auf Linux beendet SIGTERM den Prozess,
+            // ohne dass der Handler noch laeuft (gemessen 2026-08-24 — die Datei lag danach weiterhin
+            // da). Deshalb zusaetzlich die Signale selbst. Gegen SIGKILL hilft beides nicht; dafuer
+            // traegt die Datei die Prozessnummer, und der Client prueft sie, statt ihr zu glauben
+            // (siehe (internal design notes, not published)).
+            AppDomain.CurrentDomain.ProcessExit += (_, _) =>
+                Services.AgentControl.AgentControlHandshake.Delete(stateDir);
+
+            foreach (var signal in new[] { PosixSignal.SIGTERM, PosixSignal.SIGINT, PosixSignal.SIGHUP })
+            {
+                // Nicht Cancel setzen: das Signal soll weiterhin beenden, es soll nur vorher
+                // aufgeraeumt werden.
+                _agentControlSignals.Add(PosixSignalRegistration.Create(signal,
+                    _ => Services.AgentControl.AgentControlHandshake.Delete(stateDir)));
+            }
+
+            Serilog.Log.Information("Agent control ready — handshake at {Path}", handshake);
+        }
+        catch (Exception ex)
+        {
+            Serilog.Log.Error(ex, "Agent control could not start — continuing without it");
+            _agentControl = null;
+        }
+    }
+
+    /// <summary>Tears the surface down and removes the handshake file, so nothing advertises a dead
+    /// port. Never throws: a quit must not fail over a test hook.</summary>
+    private async Task StopAgentControlAsync()
+    {
+        if (_agentControl is null) return;
+
+        try { await _agentControl.DisposeAsync(); }
+        catch (Exception ex) { Serilog.Log.Warning(ex, "Stopping the agent control surface failed"); }
+
+        if (_agentControlStateDir is not null)
+            Services.AgentControl.AgentControlHandshake.Delete(_agentControlStateDir);
+
+        _agentControl = null;
     }
 
     /// <summary>

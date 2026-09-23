@@ -52,6 +52,43 @@ public sealed class GameProxyTests
         }
     }
 
+    [Fact]
+    public async Task StartAndWaitForPortAsync_StartsTheProxyInTheDirectoryItWasGiven()
+    {
+        // The macOS package keeps HermesProxy.config and the CSV game data in Hermes/ while the binary
+        // sits in Hermes/bin/. Deriving the working directory from the binary (the old behaviour) points
+        // the proxy at Hermes/bin/, where it finds neither — it dies on Hermes/CSV/Hotfix/... Codex found
+        // this in the 2026-08-24 review of the proxy-name fix, before it ever reached a player.
+        if (!OperatingSystem.IsLinux()) return;
+
+        var root = Path.Combine(Path.GetTempPath(), $"st-proxy-cwd-{Guid.NewGuid():N}");
+        var binDir = Path.Combine(root, "bin");
+        Directory.CreateDirectory(binDir);
+        var output = Path.Combine(root, "cwd.txt");
+        var script = Path.Combine(binDir, "JimsProxy-x86_64");
+        await File.WriteAllTextAsync(script, $"#!/bin/sh\npwd > {output}\nsleep 5\n");
+        File.SetUnixFileMode(script, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        try
+        {
+            var runner = new HermesProxyRunner(
+                Log(), script, [], TempPidPath(), OpensAfter(1),
+                environmentOverrides: null, workingDirectory: root);
+            var result = await runner.StartAndWaitForPortAsync(1119, TimeSpan.FromSeconds(5));
+            Assert.True(result.Ready);
+
+            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(2);
+            while (!File.Exists(output) && DateTime.UtcNow < deadline) await Task.Delay(20);
+            var actual = (await File.ReadAllTextAsync(output)).Trim();
+            Assert.Equal(Path.GetFullPath(root), Path.GetFullPath(actual));
+            Assert.NotEqual(Path.GetFullPath(binDir), Path.GetFullPath(actual));
+            await runner.StopAsync();
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
     /// <summary>A probe that reports "closed" for the first <paramref name="closedCount"/> calls, then
     /// "open" forever after - simulates a proxy that takes a moment to bind its listener.
     ///
@@ -188,8 +225,11 @@ public sealed class GameProxyTests
             await runner.StopAsync();
 
             Assert.True(File.Exists(pidFile), "a failed stop deleted the PID file, orphaning a live proxy");
-            Assert.Equal(pid.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                (await File.ReadAllTextAsync(pidFile)).Trim());
+            // Read through the real parser: the pidfile also carries the owning launcher's PID since
+            // 2026-08-31, so a raw string comparison here would only be testing the file format.
+            var entry = ProxyPidFile.Read(pidFile);
+            Assert.NotNull(entry);
+            Assert.Equal(pid, entry!.Value.ProxyPid);
             using var alive = Process.GetProcessById(pid);
             Assert.False(alive.HasExited);   // the premise of the test: it really did survive
         }

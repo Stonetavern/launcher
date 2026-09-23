@@ -217,4 +217,59 @@ public sealed class ConfigDurabilityTests
             "A save that never reached disk must be visible to the UI. Reporting settings as applied " +
             "while nothing persists is the failure mode this flag exists for.");
     }
+
+    // ── Wiederherstellung aus der zuletzt lesbaren Fassung ────────────────────────────────────────
+
+    /// <summary>Ein einziger falsch getippter Wert in launcher_config.json liess bis 2026-09-03 die
+    /// GESAMTE Konfiguration verwerfen: alle Realms und alle registrierten Installationen
+    /// verschwanden aus der Sicht des Launchers. Die beiseitegelegte Kopie half nicht — sie traegt
+    /// genau den Inhalt, an dem das Laden gescheitert ist.</summary>
+    [Fact]
+    public void ADamagedConfig_IsRecoveredFromTheLastReadableVersion()
+    {
+        using var paths = new TempPaths();
+        var svc = new ConfigService(paths);
+        var cfg = svc.Load();
+        cfg.ClientInstalls[5875] = "/spieler/eigener/pfad";
+        svc.Save(cfg);
+        new ConfigService(paths).Load();   // ein erfolgreicher Start haelt den guten Stand fest
+
+        File.WriteAllText(paths.ConfigFilePath, "{ \"clientInstalls\": { nicht json ");
+
+        var recovered = new ConfigService(paths).Load();
+
+        Assert.True(recovered.ClientInstalls.ContainsKey(5875),
+            "Die registrierte Installation ist verloren gegangen, obwohl ein lesbarer Stand vorlag.");
+        Assert.Equal("/spieler/eigener/pfad", recovered.ClientInstalls[5875]);
+    }
+
+    /// <summary>Ohne einen je gelungenen Start gibt es nichts wiederherzustellen — dann sind die
+    /// Voreinstellungen die richtige Antwort, und der Launcher darf daran nicht scheitern.</summary>
+    [Fact]
+    public void WithoutAReadableVersion_TheLauncherStillStarts_OnDefaults()
+    {
+        using var paths = new TempPaths();
+        File.WriteAllText(paths.ConfigFilePath, "kein json");
+
+        var cfg = new ConfigService(paths).Load();
+
+        Assert.NotNull(cfg);
+        Assert.Empty(cfg.ClientInstalls);
+    }
+
+    /// <summary>Die kaputte Datei bleibt erhalten — die Wiederherstellung ersetzt den bestehenden
+    /// Schutz, sie hebt ihn nicht auf.</summary>
+    [Fact]
+    public void TheDamagedFile_IsStillKeptAside_AfterARecovery()
+    {
+        using var paths = new TempPaths();
+        var svc = new ConfigService(paths);
+        svc.Save(svc.Load());
+        new ConfigService(paths).Load();
+
+        File.WriteAllText(paths.ConfigFilePath, "{ kaputt");
+        new ConfigService(paths).Load();
+
+        Assert.NotEmpty(Directory.GetFiles(paths.ConfigDir, "launcher_config.json.corrupt-*.bak"));
+    }
 }

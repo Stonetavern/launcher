@@ -293,23 +293,48 @@ public sealed class LanguagePackService : ILanguagePackService
                         other.FullName, locale);
 
             Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-            entry.ExtractToFile(target, overwrite: true);
 
-            // Measured, not assumed: the client is about to be told this language exists.
-            var written = new FileInfo(target);
-            if (!written.Exists || written.Length != entry.Length)
+            // 🔴 Never unpack ON TOP of the installed pack. This used to be
+            // entry.ExtractToFile(target, overwrite: true), which truncates the file that is already
+            // there and then streams several hundred megabytes into it. Anything that interrupts that
+            // — a full disk, a closed lid, a killed launcher — leaves a half file, and the catch below
+            // then DELETES it. A player who already had a working German client and merely re-ran the
+            // language update was left with no language file at all, from an operation that was
+            // supposed to be a no-op. Unpack next to it, prove the size, then swap: on the same
+            // filesystem a rename is atomic, so the old pack survives every failure up to that instant.
+            var staged = target + ".new-" + Guid.NewGuid().ToString("N");
+            try
             {
-                TryDelete(target);
-                return $"The {locale} language pack did not unpack completely.";
+                entry.ExtractToFile(staged, overwrite: true);
+
+                // Measured, not assumed: the client is about to be told this language exists.
+                var written = new FileInfo(staged);
+                if (!written.Exists || written.Length != entry.Length)
+                {
+                    TryDelete(staged);
+                    return $"The {locale} language pack did not unpack completely.";
+                }
+
+                File.Move(staged, target, overwrite: true);
+            }
+            catch
+            {
+                TryDelete(staged);
+                throw;
             }
 
-            _log.Information("Installed the {Locale} language pack ({Bytes} bytes)", locale, written.Length);
+            var installed = new FileInfo(target);
+            if (!installed.Exists || installed.Length != entry.Length)
+                return $"The {locale} language pack could not be put in place.";
+
+            _log.Information("Installed the {Locale} language pack ({Bytes} bytes)", locale, installed.Length);
             return null;
         }
         catch (Exception ex)
         {
+            // Deliberately does NOT delete target: the only file that can be there is the pack the
+            // player had before this attempt, and it is still whole (see the staged swap above).
             _log.Error(ex, "Unpacking the {Locale} language pack failed", locale);
-            TryDelete(target);
             return $"The {locale} language pack could not be unpacked.";
         }
     }

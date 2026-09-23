@@ -156,7 +156,12 @@ public static class RealmRegistry
     /// <para>Öffentlich seit 2026-08-05, weil das **Selbst-Update des Launchers** es braucht und
     /// eben NICHT das Manifest des gewählten Realms nehmen darf — siehe
     /// <c>IManifestService.FetchLauncherManifestAsync</c>.</para></summary>
-    public const string StonetavernManifest = "https://downloads.stonetavern.app/manifest.json";
+    public static string StonetavernManifest => Services.LauncherChannel.ManifestUrl;
+
+    /// <summary>Where this build's client files, patches and news come from. Same origin as the
+    /// manifest above, so a beta build rehearses the WHOLE delivery — client package, language packs,
+    /// news — and not just its own self-update.</summary>
+    public static string StonetavernFiles => Services.LauncherChannel.BaseUrl;
 
     /// <summary>
     /// The shipped presets — ONE entry (owner 2026-07-27). There used to be two, Elwynn and Barrens,
@@ -256,6 +261,16 @@ public static class RealmRegistry
                 // player COULD have deliberately changed - RealmlistAddress, the active ClientKey,
                 // ManifestUrl, IsLive - stays exactly as saved.
                 stored.ClientKeys = shipped.ClientKeys;
+                // Same rule again, for the one field that looks player-edited but usually is not: a
+                // config written by the OTHER channel's artefact carries that channel's manifest URL.
+                // Installing a beta build over a stable one would otherwise leave it fetching from
+                // live — the rehearsal would rehearse nothing — and a tester going back to stable
+                // would keep pulling beta forever. Only the two addresses WE ship are moved; anything
+                // a player actually typed is left alone.
+                if (IsShippedOrigin(stored.ManifestUrl)
+                    && !string.Equals(stored.ManifestUrl?.Trim(), StonetavernManifest,
+                        StringComparison.OrdinalIgnoreCase))
+                    stored.ManifestUrl = StonetavernManifest;
                 // Same rule, same reason: which GAME realms sit behind a preset is shipped data the
                 // player has no UI for, so the shipped list always wins over whatever was persisted.
                 stored.ArmoryRealms = shipped.ArmoryRealms;
@@ -287,6 +302,31 @@ public static class RealmRegistry
         var realm = Resolve(cfg);
         cfg.RealmlistAddress = realm.RealmlistAddress;
         cfg.ManifestUrl = realm.HasManifest ? realm.ManifestUrl! : "";
+
+        // Where client packages, patches and news come from follows the same rule as the manifest.
+        if (IsShippedOrigin(cfg.PatchServerBaseUrl)
+            && !string.Equals(cfg.PatchServerBaseUrl?.Trim().TrimEnd('/'), StonetavernFiles,
+                StringComparison.OrdinalIgnoreCase))
+            cfg.PatchServerBaseUrl = StonetavernFiles;
+    }
+
+    /// <summary>Is this one of the addresses the launcher itself ships — as opposed to something a
+    /// player typed? Only these may be moved from under a saved config when the build's channel
+    /// differs from the one that wrote it.</summary>
+    private static bool IsShippedOrigin(string? url)
+    {
+        if (string.IsNullOrWhiteSpace(url)) return false;
+        var v = url.Trim().TrimEnd('/');
+        foreach (var known in new[]
+                 {
+                     Services.LauncherChannel.StableBaseUrl,
+                     Services.LauncherChannel.BetaBaseUrl,
+                 })
+        {
+            if (string.Equals(v, known, StringComparison.OrdinalIgnoreCase)) return true;
+            if (string.Equals(v, known + "/manifest.json", StringComparison.OrdinalIgnoreCase)) return true;
+        }
+        return false;
     }
 
     /// <summary>Turn a display name into a usable id: lower case, non-alphanumerics to dashes, deduped

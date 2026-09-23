@@ -5,7 +5,7 @@ using WowLauncher.Services.Platform;
 
 /// <summary>
 /// A realm address the way the launcher carries it everywhere: a host, optionally a port
-/// (<c>play.stonetavern.app</c>, <c>10.0.0.5:3725</c>, <c>[::1]:3724</c>). Parsing is deliberately
+/// (<c>play.stonetavern.app</c>, <c>192.0.2.5:3725</c>, <c>[::1]:3724</c>). Parsing is deliberately
 /// strict — the same whitelist <see cref="ClientService.IsValidRealmlistAddress"/> applies, because this
 /// value is written into three files the client and the proxy then execute as configuration.
 /// </summary>
@@ -181,6 +181,23 @@ public static class RealmBinding
         {
             Directory.CreateDirectory(Path.GetDirectoryName(configPath)!);
             WtfFile.SetVar(configPath, "realmList", address.Value);
+
+            // Keep a copy and replace atomically — the same two precautions the other writer of this
+            // file takes (ClientService.SetRealmlist). This path had neither: an interrupted write left
+            // a truncated realmlist.wtf with no copy to fall back on, and the player is then pointed at
+            // no realm at all with nothing to restore from.
+            if (File.Exists(realmlistPath))
+            {
+                try { File.Copy(realmlistPath, realmlistPath + ".bak", overwrite: true); }
+                catch (Exception ex) { Serilog.Log.Debug(ex, "Could not back up {Path} before rewriting it", realmlistPath); }
+            }
+            // Deliberately a plain in-place write, NOT the atomic replace used for Config.wtf. A
+            // rename creates a new file and thereby steps over the permissions of the old one: a
+            // realmlist.wtf the launcher cannot read back would silently be replaced instead of
+            // producing the readable refusal that RealmBindingTests
+            // .WriteClientRealm_RefusesReadably_WhenTheReadbackItselfThrows pins down (Codex review
+            // 2026-08-09, finding 5). This file is one short line, so a torn write is a far smaller
+            // risk than losing that refusal — and the .bak above covers the recovery either way.
             File.WriteAllText(realmlistPath, $"set realmlist {address.Value}\n");
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException

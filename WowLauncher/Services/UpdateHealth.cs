@@ -84,13 +84,41 @@ public sealed class UpdateHealth : IUpdateHealth
         // schreibgeschuetzte squashfs-Einhaengung, die es nach dem Beenden nicht mehr gibt. Der
         // Sentinel waere dort nicht schreibbar (still, nur eine Warnung) und die Quarantaene-Notiz nie
         // auffindbar -- ein Vertrag, den es gibt und der nichts tut.
-        var dir = Path.GetDirectoryName(UpdateService.CurrentBinaryPath(AppContext.BaseDirectory))
-                  ?? AppContext.BaseDirectory;
+        // 🔴 Und auf macOS heisst "neben dem Programm" NICHT "neben der ausfuehrbaren Datei".
+        // Dort wird beim Tausch das ganze .app-Bundle umbenannt, also wandert alles DARIN mit dem
+        // alten Bundle weg. Gemessen auf einem echten Mac am 2026-09-15: nach einem erfolgreichen
+        // Tausch lag "Stonetavern.app.old/Contents/MacOS/update-health.txt" unberuehrt da, waehrend
+        // das Tauschskript an der Stelle nachsah, die es kennt, und dort nie etwas fand. Der Vertrag
+        // war vorhanden und wirkungslos — dieselbe Sorte Fehler wie der nicht schreibbare Sentinel
+        // unter einem AppImage, nur eine Ebene hoeher. Also: neben das BUNDLE, nicht hinein.
+        var dir = ResolveDirectory(UpdateService.CurrentBinaryPath(AppContext.BaseDirectory));
         _sentinel = Path.Combine(dir, SentinelName);
         _quarantine = Path.Combine(dir, QuarantineName);
         _log = log;
         _running = UpdateService.RunningVersion(System.Reflection.Assembly.GetExecutingAssembly());
         _ = paths;
+    }
+
+    /// <summary>
+    /// Das Verzeichnis, in dem Sentinel und Quarantaene-Notiz liegen — die EINE Stelle, an der sich
+    /// diese Klasse und das Tauschskript treffen muessen.
+    ///
+    /// <para>🔴 Eigene Methode, weil sie sonst unpruefbar waere. Der Konstruktor leitet den Pfad aus
+    /// dem laufenden Prozess ab, und in einem Testwirt ist das der Testwirt — der Schreibweg des
+    /// Vertrags war dadurch von keinem einzigen Test beruehrt. Aufgefallen ist das nicht beim
+    /// Schreiben, sondern in der Gegenprobe: eine Mutation genau hier machte nichts rot
+    /// (2026-09-15).</para>
+    ///
+    /// <para>Steckt <paramref name="laufend"/> in einem <c>.app</c>-Bundle, ist die Antwort das
+    /// Verzeichnis NEBEN dem Bundle, nicht <c>Contents/MacOS</c>: beim Tausch wird das ganze Bundle
+    /// umbenannt, also wandert alles darin mit dem alten Bundle weg und der Waechter findet nie
+    /// etwas. Ueberall sonst ist es schlicht das Verzeichnis der laufenden Datei.</para>
+    /// </summary>
+    internal static string ResolveDirectory(string laufend)
+    {
+        var bundle = Platform.MacUpdateSwapStrategy.BundleRootOf(laufend);
+        return (bundle is not null ? Path.GetDirectoryName(bundle) : Path.GetDirectoryName(laufend))
+               ?? AppContext.BaseDirectory;
     }
 
     /// <summary>Test seam: both paths given directly.</summary>

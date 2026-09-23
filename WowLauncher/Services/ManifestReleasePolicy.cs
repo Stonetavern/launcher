@@ -43,7 +43,15 @@ public sealed class ManifestTrustStore : IManifestTrustStore
 
     public ManifestTrustStore(IAppPaths paths, Serilog.ILogger log)
     {
-        _path = Path.Combine(paths.StateDir, "manifest-trust.json");
+        // One floor PER CHANNEL. A single shared file would make the two channels sabotage each
+        // other: beta necessarily runs ahead, so once a beta manifest with serial 500 had been seen
+        // on a machine, the stable manifest at serial 450 would read as a replay and stable would
+        // stop updating — a permanent, silent outage caused purely by having tested something once.
+        // The stable file keeps its historical name so existing installs keep their floor.
+        var name = LauncherChannel.IsBeta
+            ? $"manifest-trust-{LauncherChannel.Name}.json"
+            : "manifest-trust.json";
+        _path = Path.Combine(paths.StateDir, name);
         _log = log;
     }
 
@@ -128,10 +136,16 @@ public sealed class ManifestTrustStore : IManifestTrustStore
 /// </summary>
 public sealed class ManifestReleasePolicy
 {
-    /// <summary>The channel this build belongs to. A constant today because the launcher ships one
-    /// channel; when beta/canary arrive this reads from the config (and the config value is then a
-    /// player-visible setting, not a security boundary — the manifest still has to agree).</summary>
-    public const string LauncherChannel = "stable";
+    /// <summary>The channel this build belongs to — decided when the artefact was PACKAGED, never at
+    /// run time and never by the player's config.
+    ///
+    /// <para>This used to be the constant <c>"stable"</c> with a note that beta would one day read
+    /// from the config. It does not read from the config, and that is on purpose: the channel is one
+    /// half of a security boundary (a staging manifest signed with the same key must not install on a
+    /// production client), and a value a player can type is not a boundary. It now comes from
+    /// <see cref="Services.LauncherChannel"/>, which is stamped into the assembly at package time —
+    /// so a stable build cannot be talked into accepting a beta manifest at all.</para></summary>
+    public static string DefaultChannel => Services.LauncherChannel.Name;
 
     /// <summary>
     /// How far past <c>expires</c> a manifest is still accepted. 24 h, chosen against the two clocks
@@ -153,7 +167,7 @@ public sealed class ManifestReleasePolicy
     {
         _store = store;
         _log = log;
-        _channel = channel ?? LauncherChannel;
+        _channel = channel ?? DefaultChannel;
         _time = time ?? TimeProvider.System;
     }
 

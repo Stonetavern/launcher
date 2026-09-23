@@ -19,9 +19,44 @@ public sealed class VerifyReport
     public int Ok { get; set; }
     public int Total { get; set; }
 
+    /// <summary>Entries that were actually looked for on disk — everything except the preserved and the
+    /// volatile ones, which count as ok without any file access. Without this number a report of
+    /// "5 ok, 1101 missing" reads like a mostly-broken install, when in truth NOTHING was found and the
+    /// five are exemptions.</summary>
+    public int Checkable { get; set; }
+
+    /// <summary>How many of those checkable entries were found at the manifest path (whether or not
+    /// their content matched). Zero is the interesting value: it means no part of this package layout
+    /// exists here.</summary>
+    public int FoundAtManifestPath { get; set; }
+
     /// <summary>No missing and no corrupt files → the existing install already matches the manifest,
     /// nothing needs to be downloaded.</summary>
     public bool IsIntact => Missing.Count == 0 && Corrupt.Count == 0;
+
+    /// <summary>Below this, "everything is missing" is not evidence of anything — a small or partial
+    /// manifest could legitimately miss entirely.</summary>
+    public const int MinimumEntriesForLayoutVerdict = 100;
+
+    /// <summary>
+    /// The manifest describes a package that is NOT installed here — not a damaged copy of it.
+    ///
+    /// <para>The distinction matters because the two look identical from the outside and the responses
+    /// are opposites: a damaged package is repaired by downloading it again, while a client that was
+    /// never our package must be left alone. A player who brought his own Blizzard client
+    /// (<c>~/Downloads/WoW Classic 1.14.2/</c>, report ST-KQYG-ARA3) got told his client needed an 8 GB
+    /// update, over and over, because every single manifest path missed.</para>
+    ///
+    /// <para>Three conditions together, and the third carries the weight: enough entries to judge at all,
+    /// essentially all of them missing, and — decisively — <b>not one manifest file present anywhere</b>.
+    /// A genuinely damaged package still has files where the manifest says; they show up as corrupt or as
+    /// found-and-wrong, and it stays repairable. That is why a bare percentage would not do.</para>
+    /// </summary>
+    public bool LooksLikeADifferentPackage =>
+        Checkable >= MinimumEntriesForLayoutVerdict &&
+        FoundAtManifestPath == 0 &&
+        Corrupt.Count == 0 &&
+        Missing.Count >= Checkable;
 }
 
 /// <summary>Fired after each file so the ActionBar can show "Checking N of M files" instead of a
@@ -69,6 +104,16 @@ public sealed class ClientVerifyService : IClientVerifyService
         if (!string.Equals(root, installDir, StringComparison.Ordinal))
             _log.Information("Verify: manifest paths resolve against {Root}, not {InstallDir}", root, installDir);
 
+        // A backslash in a wire path is a generator bug (MANIFEST-SCHEMA.md §files[].path: "/" always).
+        // On Windows it is harmless, on Unix such an entry will read as missing — which is correct, but
+        // only useful if somebody can see WHY. Said once with a count, not once per entry.
+        var offenders = manifest.Files.Count(f => ManifestPath.ViolatesSeparatorRule(f.Path));
+        if (offenders > 0)
+            _log.Warning(
+                "Verify: {Count} of {Total} manifest paths contain a backslash — MANIFEST-SCHEMA.md requires \"/\". " +
+                "On this platform they are taken literally, so they will read as missing unless the files really carry that name",
+                offenders, manifest.Files.Count);
+
         foreach (var entry in manifest.Files)
         {
             ct.ThrowIfCancellationRequested();
@@ -83,6 +128,7 @@ public sealed class ClientVerifyService : IClientVerifyService
                 continue;
             }
 
+
             // Zustand, den der Client selbst fortschreibt (CASC-Indexgenerationen, lru_status,
             // shmem, .build.info). Er steht im Paket, kann aber nach dem ersten Spielstart nicht mehr
             // zum Manifest passen — als Defekt gezaehlt wuerde er jeden Repair in einen
@@ -93,9 +139,22 @@ public sealed class ClientVerifyService : IClientVerifyService
                 continue;
             }
 
-            // entry.Path is always "/"-separated on the wire (MANIFEST-SCHEMA.md); Path.Combine on
-            // Linux would otherwise treat a literal "\" as part of the file name instead of a separator.
-            var relative = entry.Path.Replace('/', Path.DirectorySeparatorChar);
+            // From here on the entry is really looked for on disk. Counting these separately is what
+            // makes "nothing of this package is here" distinguishable from "this package is damaged".
+            report.Checkable++;
+
+            // entry.Path is always "/"-separated on the wire (MANIFEST-SCHEMA.md §files[].path); this
+            // maps it onto the platform separator. On Windows that is all there is to it, because a
+            // backslash cannot occur IN a Windows file name — it is a separator there no matter what.
+            //
+            // 🔴 On Unix a backslash is a perfectly legal character in a file name, so it must NOT be
+            // reinterpreted as a separator: doing so would let the entry "dir\file" be satisfied by a
+            // completely different file at "dir/file" — a verifier that reports a file as present
+            // when it is not, which is the one direction this check may never fail in. An earlier
+            // version of this fix did exactly that (and its test only proved the reinterpretation, not
+            // its correctness); Codex review 2026-09-14 caught it. The schema violation is reported
+            // instead of silently papered over, see ReportSchemaViolation below.
+            var relative = ManifestPath.ToLocal(entry.Path);
             var fullPath = Path.Combine(root, relative);
 
             // Stage 1 - existence. Cheapest possible check, no I/O beyond a stat.
@@ -104,6 +163,8 @@ public sealed class ClientVerifyService : IClientVerifyService
                 report.Missing.Add(entry.Path);
                 continue;
             }
+
+            report.FoundAtManifestPath++;
 
             // Stage 2 - size. Still just a stat, no file content read. Catches truncated/replaced
             // files without ever touching the (potentially GB-sized) content.
@@ -141,8 +202,14 @@ public sealed class ClientVerifyService : IClientVerifyService
             report.Ok++;
         }
 
-        _log.Information("Verify: {Ok} ok, {Missing} missing, {Corrupt} corrupt (of {Total})",
-            report.Ok, report.Missing.Count, report.Corrupt.Count, report.Total);
+        _log.Information(
+            "Verify: {Ok} ok, {Missing} missing, {Corrupt} corrupt (of {Total}; {Checkable} really checked, {Found} found at their manifest path)",
+            report.Ok, report.Missing.Count, report.Corrupt.Count, report.Total,
+            report.Checkable, report.FoundAtManifestPath);
+        if (report.LooksLikeADifferentPackage)
+            _log.Information(
+                "Verify: not one of {Checkable} manifest files exists under {Root} — this install is not this package, so it is not damaged either",
+                report.Checkable, root);
         return report;
     }
 }

@@ -19,7 +19,14 @@ public sealed record AddFriendResult(FriendPresence? Friend, string? Error)
 /// throw.</summary>
 public interface IFriendsPresenceService
 {
-    Task<IReadOnlyList<FriendPresence>> GetFriendsAsync(CancellationToken ct = default);
+    /// <summary>The current roster, or <b>null</b> when it could not be fetched.
+    ///
+    /// <para>Null is the whole point of this signature. Returning an empty list on a network error is
+    /// indistinguishable from "this player has no friends", and the caller then wipes a roster that was
+    /// on screen a second ago — which is what happened on every failed poll (Codex review 2026-08-24),
+    /// despite the poller's comment promising the opposite. Nullable makes the compiler ask the caller
+    /// what it wants to do.</para></summary>
+    Task<IReadOnlyList<FriendPresence>?> GetFriendsAsync(CancellationToken ct = default);
 
     /// <summary>Add by account name. Returns the optimistic new entry, or a rejection reason.</summary>
     Task<AddFriendResult> AddFriendAsync(string account, CancellationToken ct = default);

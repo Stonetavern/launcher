@@ -1,0 +1,68 @@
+<!--
+  Stonetavern Launcher — Motion tokens (Spec 2026-09-20 §3, verbindlich fuer 1.9.0).
+
+  Die EINZIGE Quelle fuer Dauern, Easings und Bewegungsdistanzen der neuen Login-/Loading-Shell.
+  Kein Ad-hoc-Wert im Code oder in Markup: jede Transition und jede Animation der Login-Shell bindet
+  ueber {StaticResource Motion.*} / {StaticResource Ease.*}. MotionTokenTests pinnt jeden Namen und
+  jeden Wert hier gegen die Spezifikation und faellt rot, sobald ein Wert oder ein Name abweicht,
+  und sobald eine Datei der Login-Shell eine Duration als Literal traegt.
+
+  Die Namen sind die Spec-Namen mit Punkt (motion.fast -> Motion.Fast), weil ein Punkt im x:Key
+  in Avalonia erlaubt ist und die Zuordnung zur Spec damit ohne Uebersetzungstabelle lesbar bleibt.
+
+  Ambient-Loops (Sigil-Rotation, Shader-Drift) laufen LINEAR (Ease.Linear), nicht eased (§3).
+-->
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:sys="clr-namespace:System;assembly=System.Runtime">
+    <Styles.Resources>
+
+        <!-- ═══ Dauern (§3) ═══ -->
+        <!-- Hover, Fokus, Button-Press -->
+        <sys:TimeSpan x:Key="Motion.Fast">0:0:0.150</sys:TimeSpan>
+        <!-- Einblenden, Zustandswechsel, Fehler-Feedback -->
+        <sys:TimeSpan x:Key="Motion.Base">0:0:0.250</sys:TimeSpan>
+        <!-- Panel-Wechsel, Karten-Eintritt -->
+        <sys:TimeSpan x:Key="Motion.Slow">0:0:0.400</sys:TimeSpan>
+        <!-- Phasenwechsel (Phase 2 -> 3 -> 4) -->
+        <sys:TimeSpan x:Key="Motion.Transition">0:0:0.450</sys:TimeSpan>
+        <!-- Shimmer-Zyklus (Balken + Skeletons) -->
+        <sys:TimeSpan x:Key="Motion.Shimmer">0:0:2.000</sys:TimeSpan>
+        <!-- Sigil-Glow, Atemrhythmus -->
+        <sys:TimeSpan x:Key="Motion.Pulse">0:0:4.000</sys:TimeSpan>
+        <!-- Sigil-Rotation, Shader-Drift -->
+        <sys:TimeSpan x:Key="Motion.Ambient">0:0:20.000</sys:TimeSpan>
+
+        <!-- ═══ Easings (§3) ═══ -->
+        <!-- cubic-bezier(0.4, 0.0, 0.2, 1): alles Ein- und Ausblendende -->
+        <SplineEasing x:Key="Ease.Standard" X1="0.4" Y1="0.0" X2="0.2" Y2="1.0"/>
+        <!-- cubic-bezier(0.0, 0.0, 0.2, 1): Elemente, die eintreten -->
+        <SplineEasing x:Key="Ease.Decel" X1="0.0" Y1="0.0" X2="0.2" Y2="1.0"/>
+        <!-- Ambient-Loops laufen linear -->
+        <LinearEasing x:Key="Ease.Linear"/>
+
+        <!-- ═══ Flaechen-Loader "Quantum Cloud" (Owner-Vorlage 2026-09-20, REF-2026-09-20-quantum-cloud-loader.md) ═══
+             Vier Punkte, vier Perioden; die Zahlen sind die der Vorlage und bleiben. Nur fuer Stellen
+             mit UNBEKANNTER Dauer (Spec §1, §8.2). -->
+        <sys:TimeSpan x:Key="Motion.QuantumA">0:0:3.800</sys:TimeSpan>
+        <sys:TimeSpan x:Key="Motion.QuantumB">0:0:5.600</sys:TimeSpan>
+        <sys:TimeSpan x:Key="Motion.QuantumC">0:0:3.100</sys:TimeSpan>
+        <sys:TimeSpan x:Key="Motion.QuantumD">0:0:6.400</sys:TimeSpan>
+        <!-- cubic-bezier(0.37, 0, 0.63, 1): die Kurve der Vorlage -->
+        <SplineEasing x:Key="Ease.Quantum" X1="0.37" Y1="0.0" X2="0.63" Y2="1.0"/>
+
+        <!-- ═══ Bewegungsdistanzen (§3) ═══ -->
+        <!-- Eintritt von Karten/Listen: 12 px Versatz, nie mehr -->
+        <sys:Double x:Key="Motion.EnterOffset">12</sys:Double>
+        <!-- Fehler-Shake: max. 8 px Amplitude, 400 ms (= Motion.Slow), 2 Zyklen -->
+        <sys:Double x:Key="Motion.ShakeAmplitude">8</sys:Double>
+        <sys:Int32 x:Key="Motion.ShakeCycles">2</sys:Int32>
+        <!-- Scale bei Transition: 0.98 -> 1.0, nie darueber hinaus -->
+        <sys:Double x:Key="Motion.TransitionScale">0.98</sys:Double>
+
+        <!-- ═══ Phase-0-Shell (§4) ═══ -->
+        <!-- Sigil-Opacity im ersten Frame -->
+        <sys:Double x:Key="Motion.SigilRestOpacity">0.15</sys:Double>
+
+    </Styles.Resources>
+</Styles>

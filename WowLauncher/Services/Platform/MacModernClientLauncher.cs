@@ -1,3 +1,5 @@
+using System.Runtime.InteropServices;
+
 namespace WowLauncher.Services.Platform;
 
 /// <summary>
@@ -27,16 +29,25 @@ public sealed record MacModernClientLayout(
     string ClientDir,
     string ProxyExe,
     string ProxyDir,
-    string ConfigWtf)
+    string ConfigWtf,
+    bool ProxyRequiresOpenSsl = false)
 {
-    /// <summary>The native macOS HermesProxy binary (no <c>.exe</c>; a Mach-O universal binary).</summary>
-    public const string ProxyExeName = "HermesProxy";
+    /// <summary>The native macOS proxy. Not one fixed name: the shipped package carries
+    /// <c>Hermes/bin/JimsProxy-arm64</c> and <c>-x86_64</c>, older ones carried <c>Hermes/HermesProxy</c>.
+    /// <see cref="ProxyBinaryResolver.MacCandidates"/> holds the order.</summary>
     public const string CustomServerExeName = "WowClassic_ForCustomServers.exe";
 
     /// <summary>Derive the macOS layout from the resolved client exe, or null when the exe is not sitting
     /// in a bundle of this shape. Null is a legitimate answer, not a failure: the caller turns it into a
     /// sentence naming what is missing rather than guessing at paths that are not there.</summary>
-    public static MacModernClientLayout? Resolve(string clientExePath)
+    /// <param name="clientExePath">The detected <c>WowClassic.exe</c>.</param>
+    /// <param name="architecture">The running CPU architecture; decides which per-architecture proxy is
+    /// preferred. Injectable so the choice is testable off a Mac.</param>
+    /// <param name="fileExists">Existence probe for the proxy candidates, injectable for tests.</param>
+    public static MacModernClientLayout? Resolve(
+        string clientExePath,
+        Architecture? architecture = null,
+        Func<string, bool>? fileExists = null)
     {
         try
         {
@@ -48,15 +59,19 @@ public sealed record MacModernClientLayout(
             if (root is null) return null;
 
             var proxyDir = Path.Combine(root, "Hermes");
+            var candidates = ProxyBinaryResolver.MacCandidates(
+                architecture ?? RuntimeInformation.ProcessArchitecture);
+            var proxy = ProxyBinaryResolver.Resolve(proxyDir, candidates, fileExists);
 
             return new MacModernClientLayout(
                 BundleRoot: root,
                 ClientExe: Path.GetFullPath(clientExePath),
                 CustomServerExe: Path.Combine(clientDir, CustomServerExeName),
                 ClientDir: clientDir,
-                ProxyExe: Path.Combine(proxyDir, ProxyExeName),
+                ProxyExe: proxy.Path,
                 ProxyDir: proxyDir,
-                ConfigWtf: Path.Combine(clientDir, "WTF", "Config.wtf"));
+                ConfigWtf: Path.Combine(clientDir, "WTF", "Config.wtf"),
+                ProxyRequiresOpenSsl: proxy.RequiresOpenSsl);
         }
         catch (Exception)
         {
@@ -160,7 +175,8 @@ public sealed class MacModernClientLauncher : IGameLauncher
             return GameLaunchResult.Failed(IncompleteBundleMessage(exePath));
 
         if (!File.Exists(layout.ProxyExe))
-            return GameLaunchResult.Failed(MissingPartMessage("Hermes/" + MacModernClientLayout.ProxyExeName, layout));
+            return GameLaunchResult.Failed(
+                MissingPartMessage(ProxyBinaryResolver.DisplayName(layout.BundleRoot, layout.ProxyExe), layout));
         if (!File.Exists(layout.CustomServerExe))
             return GameLaunchResult.Failed(
                 MissingPartMessage("World of Warcraft/_classic_era_/" + MacModernClientLayout.CustomServerExeName, layout));
@@ -175,6 +191,12 @@ public sealed class MacModernClientLauncher : IGameLauncher
         // must name the expected Stonetavern realm, or the proxy would relay to the wrong (or no) server.
         if (!ProxyEndpointOk(layout, out var endpointErr))
             return GameLaunchResult.Failed(endpointErr);
+
+        // The shipped macOS package keeps the proxy's config and CSV data one directory above its binary,
+        // while the proxy itself switches into the binary's directory and reads them from there — it dies
+        // on "Config loading failed" and never binds the port. Link what is missing before starting it.
+        // Runs after the endpoint check on purpose: the config that gets linked is the validated one.
+        MacProxyDataLayout.EnsureDataBesideBinary(layout.ProxyExe, layout.ProxyDir, _logger);
 
         // ── Explicit session lifecycle with guaranteed rollback ────────────────────────────────────
         var proxy = _proxyFactory(layout);

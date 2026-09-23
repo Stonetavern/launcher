@@ -1,0 +1,417 @@
+<!--
+  Stonetavern Launcher — 1.9 login/loading shell (Spec 2026-09-20). Styles for LoginShellWindow only:
+  included from the window, never from App.axaml, so v1/v2/v3 never match a selector in here.
+
+  Motion, stated exactly. Every Duration and every Easing is a token from Styles/Motion.axaml;
+  MotionTokenTests fails on a literal. The endless animations sit under "Border.live" like every
+  endless animation in this app (the gate is the window's code-behind, same wiring as the splash):
+
+    ambient (endless, gated)
+      1. the sigil ring turns         Border.live Ellipse.ls-ring     Motion.Ambient, linear
+      2. the sigil glow breathes      Border.live Border.ls-bloom     Motion.Pulse
+      3. the skeleton shimmer         Border.live Border.ls-shimmer   Motion.Shimmer, linear
+      4. the micro spinner turns      Border.live Path.ls-spinner     Motion.Shimmer, linear
+      4b. the area loader orbits      controls:QuantumLoader (own gate: window active) Motion.QuantumA..D
+         (one loading rhythm for every "duration unknown" surface, spec §1 second principle)
+
+    finite (transitions on state)
+      5. Phase 0 -> 1: sigil warms up, card enters (12 px, decel)      Motion.Slow
+      6. status line crossfade                                          Motion.Base
+      7. button label <-> spinner                                       Motion.Fast
+      8. Phase 3 storyboard, five movements at once                     Motion.Transition
+      9. update banner fade-in                                          Motion.Slow
+     10. field focus hairline                                           Motion.Fast
+
+  The error shake is built in code-behind from the tokens (amplitude, cycles, Motion.Slow), because
+  a keyframe sheet would have to repeat the 8 px as a literal, twice, with a sign.
+-->
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:controls="using:WowLauncher.Controls">
+
+    <Styles.Resources>
+        <!-- The failure hue for TEXT. StatusDown (#A24A38) is a fill colour and reads at ~2.6:1 on
+             the card surface; this lift of it measures 6.6:1 on #161210 (WCAG AA for 13 px). -->
+        <SolidColorBrush x:Key="LsErrorText" Color="#D9836F"/>
+        <!-- The card surface: StoneSurface at a fixed alpha, so a little of the backdrop reads
+             through the slab without a blur (no glass, stitch-DESIGN-v2). -->
+        <SolidColorBrush x:Key="LsCardFill" Color="#F2161210"/>
+    </Styles.Resources>
+
+    <!-- ═══ Layers that move in Phase 0 -> 1 and in Phase 3 ═══ -->
+
+    <!-- The backdrop photograph, decoded off-thread after the first frame and faded over the
+         gradient placeholder. Stays put in Phase 3: it is the continuity anchor (§7). -->
+    <Style Selector="Image.ls-backdrop">
+        <Setter Property="Opacity" Value="0"/>
+        <Setter Property="Transitions">
+            <Transitions>
+                <DoubleTransition Property="Opacity" Duration="{StaticResource Motion.Slow}" Easing="{StaticResource Ease.Standard}"/>
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="Image.ls-backdrop.ready">
+        <Setter Property="Opacity" Value="1"/>
+    </Style>
+
+    <!-- The darkening over the backdrop. Phase 1 keeps the picture readable behind the card; Phase 3
+         "dunkelt weiter ab" towards the shell's own stage. -->
+    <Style Selector="Border.ls-dimmer">
+        <Setter Property="Opacity" Value="0.55"/>
+        <Setter Property="Transitions">
+            <Transitions>
+                <DoubleTransition Property="Opacity" Duration="{StaticResource Motion.Transition}" Easing="{StaticResource Ease.Standard}"/>
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="Border.leaving Border.ls-dimmer">
+        <Setter Property="Opacity" Value="0.82"/>
+    </Style>
+
+    <!-- The sigil: at rest (0.15) in the first frame, warms up once Phase 1 begins, travels to the
+         chrome in Phase 3 (the translate/scale is computed from real bounds in code-behind). -->
+    <Style Selector="Panel.ls-sigil">
+        <Setter Property="Opacity" Value="{StaticResource Motion.SigilRestOpacity}"/>
+        <!-- Same operation order as the code-behind's travel transform (scale, then translate), so
+             the transition interpolates operation by operation instead of decomposing matrices. -->
+        <Setter Property="RenderTransform" Value="scale(1.0) translate(0px,0px)"/>
+        <Setter Property="Transitions">
+            <Transitions>
+                <DoubleTransition Property="Opacity" Duration="{StaticResource Motion.Slow}" Easing="{StaticResource Ease.Standard}"/>
+                <TransformOperationsTransition Property="RenderTransform" Duration="{StaticResource Motion.Transition}" Easing="{StaticResource Ease.Standard}"/>
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="Border.warm Panel.ls-sigil">
+        <Setter Property="Opacity" Value="0.92"/>
+    </Style>
+    <!-- On the way to the chrome the ring and the bloom go out; the mark travels alone. -->
+    <Style Selector="Ellipse.ls-ringtrack">
+        <Setter Property="Opacity" Value="0.6"/>
+    </Style>
+    <Style Selector="Ellipse.ls-ring, Ellipse.ls-ringtrack">
+        <Setter Property="Transitions">
+            <Transitions>
+                <DoubleTransition Property="Opacity" Duration="{StaticResource Motion.Transition}" Easing="{StaticResource Ease.Standard}"/>
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="Border.leaving Ellipse.ls-ring, Border.leaving Ellipse.ls-ringtrack, Border.leaving Border.ls-bloom">
+        <Setter Property="Opacity" Value="0"/>
+    </Style>
+
+    <!-- The login card: enters from 12 px below on Phase 1, leaves at 0.98 in Phase 3. -->
+    <Style Selector="Border.ls-card">
+        <Setter Property="Opacity" Value="0"/>
+        <Setter Property="RenderTransform" Value="translateY(12px) scale(1.0)"/>
+        <Setter Property="Transitions">
+            <Transitions>
+                <DoubleTransition Property="Opacity" Duration="{StaticResource Motion.Slow}" Easing="{StaticResource Ease.Decel}"/>
+                <TransformOperationsTransition Property="RenderTransform" Duration="{StaticResource Motion.Slow}" Easing="{StaticResource Ease.Decel}"/>
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="Border.warm Border.ls-card">
+        <Setter Property="Opacity" Value="1"/>
+        <Setter Property="RenderTransform" Value="translateY(0px) scale(1.0)"/>
+    </Style>
+    <Style Selector="Border.leaving Border.ls-card">
+        <Setter Property="Opacity" Value="0"/>
+        <Setter Property="RenderTransform" Value="translateY(0px) scale(0.98)"/>
+        <Setter Property="Transitions">
+            <Transitions>
+                <DoubleTransition Property="Opacity" Duration="{StaticResource Motion.Transition}" Easing="{StaticResource Ease.Standard}"/>
+                <TransformOperationsTransition Property="RenderTransform" Duration="{StaticResource Motion.Transition}" Easing="{StaticResource Ease.Standard}"/>
+            </Transitions>
+        </Setter>
+    </Style>
+
+    <!-- The area loader fades with the wait it stands for (IsWorking); its box stays. -->
+    <Style Selector="controls|QuantumLoader.ls-loader">
+        <Setter Property="Opacity" Value="1"/>
+        <Setter Property="Transitions">
+            <Transitions>
+                <DoubleTransition Property="Opacity" Duration="{StaticResource Motion.Base}" Easing="{StaticResource Ease.Standard}"/>
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="controls|QuantumLoader.ls-loader.idle">
+        <Setter Property="Opacity" Value="0"/>
+    </Style>
+
+    <!-- Status line and version follow the card out. -->
+    <Style Selector="StackPanel.ls-below">
+        <Setter Property="Opacity" Value="0"/>
+        <Setter Property="Transitions">
+            <Transitions>
+                <DoubleTransition Property="Opacity" Duration="{StaticResource Motion.Slow}" Easing="{StaticResource Ease.Standard}"/>
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="Border.warm StackPanel.ls-below">
+        <Setter Property="Opacity" Value="1"/>
+    </Style>
+    <Style Selector="Border.leaving StackPanel.ls-below">
+        <Setter Property="Opacity" Value="0"/>
+    </Style>
+
+    <!-- The launcher chrome (Phase 4 header), the target of the storyboard: 12 px from below, decel. -->
+    <Style Selector="Border.ls-chrome">
+        <Setter Property="Opacity" Value="0"/>
+        <Setter Property="RenderTransform" Value="translateY(12px)"/>
+        <Setter Property="IsHitTestVisible" Value="False"/>
+        <Setter Property="Transitions">
+            <Transitions>
+                <DoubleTransition Property="Opacity" Duration="{StaticResource Motion.Transition}" Easing="{StaticResource Ease.Decel}"/>
+                <TransformOperationsTransition Property="RenderTransform" Duration="{StaticResource Motion.Transition}" Easing="{StaticResource Ease.Decel}"/>
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="Border.leaving Border.ls-chrome">
+        <Setter Property="Opacity" Value="1"/>
+        <Setter Property="RenderTransform" Value="translateY(0px)"/>
+    </Style>
+
+    <!-- §5.3 update banner above the card. -->
+    <Style Selector="Border.ls-banner">
+        <Setter Property="Opacity" Value="0"/>
+        <Setter Property="IsVisible" Value="False"/>
+        <Setter Property="Transitions">
+            <Transitions>
+                <DoubleTransition Property="Opacity" Duration="{StaticResource Motion.Slow}" Easing="{StaticResource Ease.Standard}"/>
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="Border.ls-banner.shown">
+        <Setter Property="Opacity" Value="1"/>
+        <Setter Property="IsVisible" Value="True"/>
+    </Style>
+
+    <!-- ═══ Ambient loops (all gated) ═══ -->
+
+    <Style Selector="Border.live Ellipse.ls-ring">
+        <Style.Animations>
+            <Animation Duration="{StaticResource Motion.Ambient}" IterationCount="INFINITE" Easing="{StaticResource Ease.Linear}">
+                <KeyFrame Cue="0%"><Setter Property="RotateTransform.Angle" Value="0"/></KeyFrame>
+                <KeyFrame Cue="100%"><Setter Property="RotateTransform.Angle" Value="360"/></KeyFrame>
+            </Animation>
+        </Style.Animations>
+    </Style>
+
+    <!-- Not while leaving: the keyframes would hold the opacity the "leaving" setter turns off. -->
+    <Style Selector="Border.live:not(.leaving) Border.ls-bloom">
+        <Style.Animations>
+            <Animation Duration="{StaticResource Motion.Pulse}" IterationCount="INFINITE" Easing="{StaticResource Ease.Standard}">
+                <KeyFrame Cue="0%"><Setter Property="Opacity" Value="0.55"/></KeyFrame>
+                <KeyFrame Cue="50%"><Setter Property="Opacity" Value="1.0"/></KeyFrame>
+                <KeyFrame Cue="100%"><Setter Property="Opacity" Value="0.55"/></KeyFrame>
+            </Animation>
+        </Style.Animations>
+    </Style>
+
+    <!-- Skeleton bar: a matte slab with one soft highlight sweeping across it. The highlight is a
+         child clipped by the slab, moved by translate, so nothing lays out per frame. -->
+    <Style Selector="Border.ls-skeleton">
+        <Setter Property="Background" Value="{StaticResource StoneHover}"/>
+        <Setter Property="CornerRadius" Value="{StaticResource RadiusSm}"/>
+        <Setter Property="ClipToBounds" Value="True"/>
+        <Setter Property="Height" Value="10"/>
+    </Style>
+    <Style Selector="Border.ls-shimmer">
+        <Setter Property="Width" Value="64"/>
+        <Setter Property="HorizontalAlignment" Value="Left"/>
+        <Setter Property="RenderTransform" Value="translateX(-64px)"/>
+        <Setter Property="Background">
+            <LinearGradientBrush StartPoint="0%,50%" EndPoint="100%,50%">
+                <GradientStop Offset="0.0" Color="#00ECE3D2"/>
+                <GradientStop Offset="0.5" Color="#22ECE3D2"/>
+                <GradientStop Offset="1.0" Color="#00ECE3D2"/>
+            </LinearGradientBrush>
+        </Setter>
+    </Style>
+    <Style Selector="Border.live Border.ls-shimmer">
+        <Style.Animations>
+            <Animation Duration="{StaticResource Motion.Shimmer}" IterationCount="INFINITE" Easing="{StaticResource Ease.Linear}">
+                <KeyFrame Cue="0%"><Setter Property="TranslateTransform.X" Value="-64"/></KeyFrame>
+                <KeyFrame Cue="100%"><Setter Property="TranslateTransform.X" Value="200"/></KeyFrame>
+            </Animation>
+        </Style.Animations>
+    </Style>
+
+    <!-- The micro spinner (§9: pure XAML, Path with an arc + RotateTransform). -->
+    <Style Selector="Path.ls-spinner">
+        <Setter Property="Stroke" Value="{StaticResource ParchmentPrimary}"/>
+        <Setter Property="StrokeThickness" Value="2"/>
+        <Setter Property="StrokeLineCap" Value="Round"/>
+        <Setter Property="Width" Value="16"/>
+        <Setter Property="Height" Value="16"/>
+        <Setter Property="RenderTransformOrigin" Value="50%,50%"/>
+        <Setter Property="Data" Value="M 8,1 A 7,7 0 1 1 1,8"/>
+    </Style>
+    <Style Selector="Border.live Path.ls-spinner">
+        <Style.Animations>
+            <Animation Duration="{StaticResource Motion.Shimmer}" IterationCount="INFINITE" Easing="{StaticResource Ease.Linear}">
+                <KeyFrame Cue="0%"><Setter Property="RotateTransform.Angle" Value="0"/></KeyFrame>
+                <KeyFrame Cue="100%"><Setter Property="RotateTransform.Angle" Value="360"/></KeyFrame>
+            </Animation>
+        </Style.Animations>
+    </Style>
+
+    <!-- ═══ The button: label and spinner share one slot, the width never changes (§6) ═══ -->
+    <Style Selector="Button.ls-action">
+        <Setter Property="Height" Value="40"/>
+        <Setter Property="HorizontalAlignment" Value="Stretch"/>
+        <Setter Property="HorizontalContentAlignment" Value="Center"/>
+        <Setter Property="VerticalContentAlignment" Value="Center"/>
+        <Setter Property="FontFamily" Value="{StaticResource FontBody}"/>
+        <Setter Property="FontSize" Value="15"/>
+        <Setter Property="Padding" Value="0"/>
+    </Style>
+    <!-- Disabled while the gate is closed or an attempt runs, but not faded to 0.4 like the shared
+         Button:disabled: the spinner IS the explanation, a ghost button would contradict it. -->
+    <Style Selector="Button.ls-action:disabled">
+        <Setter Property="Opacity" Value="1"/>
+    </Style>
+    <!-- Fluent paints a grey disabled slab; here the slab stays ember, only dimmer: the button is
+         warming up, not broken. The spinner on it is what says "wait". -->
+    <Style Selector="Button.ls-action:disabled /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{StaticResource EmberDim}"/>
+        <Setter Property="Foreground" Value="{StaticResource StoneBase}"/>
+    </Style>
+
+    <Style Selector="Border.ls-bloom">
+        <Setter Property="Transitions">
+            <Transitions>
+                <DoubleTransition Property="Opacity" Duration="{StaticResource Motion.Transition}" Easing="{StaticResource Ease.Standard}"/>
+            </Transitions>
+        </Setter>
+    </Style>
+
+    <!-- The version line belongs to Phase 1, not to the first frame (§4: gradient and sigil only). -->
+    <Style Selector="TextBlock.ls-version">
+        <Setter Property="Opacity" Value="0"/>
+        <Setter Property="Transitions">
+            <Transitions>
+                <DoubleTransition Property="Opacity" Duration="{StaticResource Motion.Slow}" Easing="{StaticResource Ease.Standard}"/>
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="Border.warm TextBlock.ls-version">
+        <Setter Property="Opacity" Value="0.8"/>
+    </Style>
+    <Style Selector="Button.ls-action TextBlock.ls-label">
+        <Setter Property="Opacity" Value="1"/>
+        <Setter Property="Transitions">
+            <Transitions>
+                <DoubleTransition Property="Opacity" Duration="{StaticResource Motion.Fast}" Easing="{StaticResource Ease.Standard}"/>
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="Button.ls-action.busy TextBlock.ls-label">
+        <Setter Property="Opacity" Value="0"/>
+    </Style>
+    <Style Selector="Button.ls-action Panel.ls-spinnerslot">
+        <Setter Property="Opacity" Value="0"/>
+        <Setter Property="Transitions">
+            <Transitions>
+                <DoubleTransition Property="Opacity" Duration="{StaticResource Motion.Fast}" Easing="{StaticResource Ease.Standard}"/>
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="Button.ls-action.busy Panel.ls-spinnerslot">
+        <Setter Property="Opacity" Value="1"/>
+    </Style>
+
+    <!-- ═══ Fields ═══ -->
+    <Style Selector="TextBox.ls-field">
+        <Setter Property="Background" Value="{StaticResource StoneBase}"/>
+        <Setter Property="BorderBrush" Value="{StaticResource StoneBorder}"/>
+        <Setter Property="BorderThickness" Value="1"/>
+        <Setter Property="CornerRadius" Value="{StaticResource RadiusMd}"/>
+        <Setter Property="Foreground" Value="{StaticResource ParchmentPrimary}"/>
+        <Setter Property="CaretBrush" Value="{StaticResource EmberBase}"/>
+        <Setter Property="SelectionBrush" Value="{StaticResource EmberDim}"/>
+        <Setter Property="FontFamily" Value="{StaticResource FontBody}"/>
+        <Setter Property="FontSize" Value="15"/>
+        <Setter Property="Height" Value="40"/>
+        <Setter Property="Padding" Value="12,0"/>
+        <Setter Property="VerticalContentAlignment" Value="Center"/>
+        <Setter Property="Transitions">
+            <Transitions>
+                <BrushTransition Property="BorderBrush" Duration="{StaticResource Motion.Fast}" Easing="{StaticResource Ease.Standard}"/>
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="TextBox.ls-field:pointerover /template/ Border#PART_BorderElement">
+        <Setter Property="BorderBrush" Value="{StaticResource ParchmentFaint}"/>
+        <Setter Property="Background" Value="{StaticResource StoneBase}"/>
+    </Style>
+    <Style Selector="TextBox.ls-field:focus /template/ Border#PART_BorderElement">
+        <Setter Property="BorderBrush" Value="{StaticResource EmberBase}"/>
+        <Setter Property="Background" Value="{StaticResource StoneBase}"/>
+    </Style>
+    <Style Selector="TextBox.ls-field.invalid /template/ Border#PART_BorderElement">
+        <Setter Property="BorderBrush" Value="{StaticResource StatusDown}"/>
+    </Style>
+    <Style Selector="TextBox.ls-field /template/ TextBlock#PART_Watermark">
+        <Setter Property="Foreground" Value="{StaticResource ParchmentFaint}"/>
+    </Style>
+
+    <Style Selector="TextBlock.ls-fieldlabel">
+        <Setter Property="FontFamily" Value="{StaticResource FontBody}"/>
+        <Setter Property="FontSize" Value="13"/>
+        <Setter Property="Foreground" Value="{StaticResource ParchmentSecondary}"/>
+        <Setter Property="Margin" Value="0,0,0,6"/>
+    </Style>
+
+    <Style Selector="TextBlock.ls-error">
+        <Setter Property="FontFamily" Value="{StaticResource FontBody}"/>
+        <Setter Property="FontSize" Value="13"/>
+        <Setter Property="Foreground" Value="{StaticResource LsErrorText}"/>
+        <Setter Property="TextWrapping" Value="Wrap"/>
+        <Setter Property="LineHeight" Value="18"/>
+    </Style>
+
+    <!-- Quiet text links (offline path, forgot password). -->
+    <Style Selector="Button.ls-link">
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="Foreground" Value="{StaticResource ParchmentSecondary}"/>
+        <Setter Property="FontFamily" Value="{StaticResource FontBody}"/>
+        <Setter Property="FontSize" Value="13"/>
+        <Setter Property="FontWeight" Value="Normal"/>
+        <Setter Property="Padding" Value="0,4"/>
+        <Setter Property="HorizontalAlignment" Value="Center"/>
+        <Setter Property="Transitions">
+            <Transitions>
+                <BrushTransition Property="Foreground" Duration="{StaticResource Motion.Fast}" Easing="{StaticResource Ease.Standard}"/>
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="Button.ls-link:pointerover">
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="Foreground" Value="{StaticResource ParchmentPrimary}"/>
+    </Style>
+    <Style Selector="Button.ls-link:pointerover /template/ ContentPresenter">
+        <Setter Property="Background" Value="Transparent"/>
+    </Style>
+    <Style Selector="Button.ls-link:pressed">
+        <Setter Property="RenderTransform" Value="none"/>
+        <Setter Property="Background" Value="Transparent"/>
+    </Style>
+
+    <!-- Machine data is mono (stitch-DESIGN-v2: if the system said it, it is mono). -->
+    <Style Selector="TextBlock.ls-mono">
+        <Setter Property="FontFamily" Value="{StaticResource FontMono}"/>
+        <Setter Property="FontSize" Value="11.5"/>
+        <Setter Property="Foreground" Value="{StaticResource ParchmentSecondary}"/>
+    </Style>
+
+    <Style Selector="Ellipse.ls-dot">
+        <Setter Property="Width" Value="7"/>
+        <Setter Property="Height" Value="7"/>
+        <Setter Property="Fill" Value="{StaticResource StatusDown}"/>
+    </Style>
+    <Style Selector="Ellipse.ls-dot.online">
+        <Setter Property="Fill" Value="{StaticResource StatusOk}"/>
+    </Style>
+</Styles>

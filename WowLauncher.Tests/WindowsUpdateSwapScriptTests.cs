@@ -77,8 +77,10 @@ public class WindowsUpdateSwapScriptTests
         var s = Script();
         Assert.Contains("if exist \"%NEW%\" goto failed", s, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("if not exist \"%CUR%\" goto failed", s, StringComparison.OrdinalIgnoreCase);
-        // The only errorlevel left is tasklist's, which reports whether the pid is still alive.
-        Assert.Contains("if errorlevel 1 goto swap", s, StringComparison.OrdinalIgnoreCase);
+        // No errorlevel decides anything any more: the liveness answer is a variable set by for /f
+        // (W13, 2026-09-05), and the swap's own outcome is read from the files.
+        Assert.Contains("if \"%ALIVE%\"==\"0\" goto swap", s, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("errorlevel", s, StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>The truth check has to come after the renames; placed before, it would describe the
@@ -208,16 +210,26 @@ public class WindowsUpdateSwapScriptTests
     }
 
     /// <summary>The liveness probe must not read "tasklist itself failed" as "the launcher has exited"
-    /// — that is the one wrong answer, because it swaps the file under a running process. CSV plus a
-    /// leading-quote match distinguishes a real process row from the INFO sentence tasklist prints
-    /// when nothing matches.</summary>
+    /// — that is the one wrong answer, because it swaps the file under a running process.
+    ///
+    /// <para>Until 2026-09-05 this test demanded <c>findstr /B</c> on CSV output, and that very line was
+    /// the failure it meant to prevent: <c>findstr /B /C:"\"" &gt;nul</c> leaves cmd's quote count odd,
+    /// the redirect becomes a file argument, findstr fails on every tick, and "failed" read as
+    /// "exited" (measured in the win11 VM: <c>FINDSTR: Cannot open &gt;nul</c>, errorlevel 1, swap
+    /// under the live process). Now a <c>for /f</c> reads the PID field itself, a positive control
+    /// checks that tasklist lists anything at all, and findstr is gone from the script.</para></summary>
     [Fact]
     public void TheLivenessProbe_CannotMistakeItsOwnFailureForAnExit()
     {
         var s = Script();
         Assert.Contains("/FO CSV /NH", s, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("findstr /B", s, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("| find \"%PID%\"", s, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("findstr", s, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("| find ", s, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("for /f \"usebackq tokens=2 delims=,\" %%A in (`tasklist /FI \"PID eq %PID%\" /FO CSV /NH 2^>nul`) do if \"%%~A\"==\"%PID%\" set \"ALIVE=1\"",
+            s, StringComparison.Ordinal);
+        // Positive control precedes the wait: a tasklist that lists nothing stops the script.
+        Assert.True(At(s, "set \"TLOK=0\"") < At(s, ":wait"));
+        Assert.Contains("if \"%TLOK%\"==\"0\" (", s, StringComparison.Ordinal);
     }
 
     /// <summary>cmd.exe requires CRLF; a batch written with bare LF misparses labels and blocks.</summary>
