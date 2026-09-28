@@ -58,6 +58,11 @@
                     </TextBox.KeyBindings>
                 </TextBox>
 
+                <CheckBox IsChecked="{Binding RememberUsername, Mode=TwoWay}"
+                          Content="{loc:Tr Login_RememberUsername}"
+                          Foreground="{StaticResource ParchmentSecondary}"
+                          AutomationProperties.Name="{loc:Tr Login_RememberUsername}"/>
+
                 <!-- Error line (calm, VOICE-compliant); only present when there is one -->
                 <TextBlock Text="{Binding Error}" FontSize="12" TextWrapping="Wrap"
                            Foreground="{StaticResource StatusDown}"

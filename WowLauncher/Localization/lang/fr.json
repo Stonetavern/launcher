@@ -252,6 +252,7 @@
   "Login_UseAccount": "Utilise ton compte Stonetavern",
   "Login_Username": "Identifiant",
   "Login_Password": "Mot de passe",
+  "Login_RememberUsername": "Se souvenir du nom d'utilisateur",
   "Login_SignIn": "Se connecter",
   "Login_SigningIn": "Connexion en cours",
   "Login_Forgot": "Mot de passe oublié ?",

@@ -252,6 +252,7 @@
   "Login_UseAccount": "Use your Stonetavern account",
   "Login_Username": "Username",
   "Login_Password": "Password",
+  "Login_RememberUsername": "Remember username",
   "Login_SignIn": "Sign in",
   "Login_SigningIn": "Signing in",
   "Login_Forgot": "Forgot your password?",

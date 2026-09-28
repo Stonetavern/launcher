@@ -535,6 +535,9 @@ public static class DependencyInjection
                 {
                     services.AddSingleton<ITokenStore>(sp => new FileTokenStore(
                         sp.GetRequiredService<IAppPaths>(), sp.GetRequiredService<Serilog.ILogger>()));
+                    // Real accounts only: the demo backend has nothing worth remembering.
+                    services.AddSingleton<IUsernameMemory>(sp => new FileUsernameMemory(
+                        sp.GetRequiredService<IAppPaths>(), sp.GetRequiredService<Serilog.ILogger>()));
                     services.AddSingleton<ILauncherAuthService>(sp => new LauncherAuthService(
                         LongLivedClient(TimeSpan.FromSeconds(15), retries: 1, delay: TimeSpan.FromSeconds(2)),
                         sp.GetRequiredService<IConfigService>(),
