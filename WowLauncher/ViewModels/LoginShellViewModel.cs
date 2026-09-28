@@ -90,9 +90,9 @@ public sealed partial class LoginShellViewModel : ViewModelBase
         _post = post ?? (a => Dispatcher.UIThread.Post(a));
         AllowSkipSignIn = allowSkipSignIn;
         _remembered = remembered;
-        var name = remembered?.Load();
-        Username = name ?? "";
-        RememberUsername = name is not null;
+        var rememberedName = remembered?.Load();
+        Username = rememberedName ?? "";
+        RememberUsername = rememberedName is not null;
 
         // Rows exist as skeletons from the first frame; step 3 fills them in place (no layout jump).
         foreach (var name in InitialRealmNames())
