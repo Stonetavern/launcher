@@ -206,7 +206,7 @@ public sealed class RegisterTests
         await vm.CreateAccountCommand.ExecuteAsync(null);
 
         Assert.Equal(0, auth.RegisterCalls);
-        Assert.Equal("Please accept the server rules to continue.", vm.Error);
+        Assert.Equal("Please confirm you are 16 or older and accept the Terms to continue.", vm.Error);
     }
 
     [Fact]

@@ -7,14 +7,15 @@
   endless animation in this app (the gate is the window's code-behind, same wiring as the splash):
 
     ambient (endless, gated)
-      1. the sigil ring turns         Border.live Ellipse.ls-ring     Motion.Ambient, linear
-      2. the sigil glow breathes      Border.live Border.ls-bloom     Motion.Pulse
-      3. the skeleton shimmer         Border.live Border.ls-shimmer   Motion.Shimmer, linear
-      4. the micro spinner turns      Border.live Path.ls-spinner     Motion.Shimmer, linear
-      4b. the area loader orbits      controls:QuantumLoader (own gate: window active) Motion.QuantumA..D
-         (one loading rhythm for every "duration unknown" surface, spec §1 second principle)
+      1. the lantern light flickers   Border.live Border.ls-bloom     Motion.Flicker
+      2. the skeleton shimmer         Border.live Border.ls-shimmer   Motion.Shimmer, linear
+      3. the micro spinner turns      Border.live Path.ls-spinner     Motion.Shimmer, linear
 
     finite (transitions on state)
+      4. the ring fills as each start check ends (KindleRing.Value)    Motion.Slow, decel
+         and rests dimmer once all of them have ("kindled")             Motion.Slow
+         (2026-09-28: replaces the dashed ring that turned forever and the orbiting area loader
+         under the card; progress IS known here, one step at a time, so it is shown as such)
       5. Phase 0 -> 1: sigil warms up, card enters (12 px, decel)      Motion.Slow
       6. status line crossfade                                          Motion.Base
       7. button label <-> spinner                                       Motion.Fast
@@ -36,6 +37,12 @@
         <!-- The card surface: StoneSurface at a fixed alpha, so a little of the backdrop reads
              through the slab without a blur (no glass, stitch-DESIGN-v2). -->
         <SolidColorBrush x:Key="LsCardFill" Color="#F2161210"/>
+        <!-- The ember at the head of the filling ring: EmberBright at the core, gone at the rim. -->
+        <RadialGradientBrush x:Key="LsSpark" Center="50%,50%" GradientOrigin="50%,50%" RadiusX="50%" RadiusY="50%">
+            <GradientStop Offset="0.0" Color="#FFF2B25C"/>
+            <GradientStop Offset="0.45" Color="#CCE2912F"/>
+            <GradientStop Offset="1.0" Color="#00C9772E"/>
+        </RadialGradientBrush>
     </Styles.Resources>
 
     <!-- ═══ Layers that move in Phase 0 -> 1 and in Phase 3 ═══ -->
@@ -85,18 +92,27 @@
     <Style Selector="Border.warm Panel.ls-sigil">
         <Setter Property="Opacity" Value="0.92"/>
     </Style>
-    <!-- On the way to the chrome the ring and the bloom go out; the mark travels alone. -->
-    <Style Selector="Ellipse.ls-ringtrack">
-        <Setter Property="Opacity" Value="0.6"/>
+    <!-- Handed over from the boot frame: the lantern was already lit there, so it is lit here from the
+         first frame instead of resting at 0.15 and warming up (that would read as a flicker). -->
+    <Style Selector="Border.booted Panel.ls-sigil">
+        <Setter Property="Opacity" Value="0.92"/>
     </Style>
-    <Style Selector="Ellipse.ls-ring, Ellipse.ls-ringtrack">
+    <!-- The ring fills as each start check ends: every step is a short decelerating advance, so the
+         arc moves like something being lit, not like a bar being pushed. -->
+    <Style Selector="controls|KindleRing.ls-ring">
         <Setter Property="Transitions">
             <Transitions>
-                <DoubleTransition Property="Opacity" Duration="{StaticResource Motion.Transition}" Easing="{StaticResource Ease.Standard}"/>
+                <DoubleTransition Property="Value" Duration="{StaticResource Motion.Slow}" Easing="{StaticResource Ease.Decel}"/>
+                <DoubleTransition Property="Opacity" Duration="{StaticResource Motion.Slow}" Easing="{StaticResource Ease.Standard}"/>
             </Transitions>
         </Setter>
     </Style>
-    <Style Selector="Border.leaving Ellipse.ls-ring, Border.leaving Ellipse.ls-ringtrack, Border.leaving Border.ls-bloom">
+    <!-- All checks done: the closed ring rests a step quieter, the lantern carries the light. -->
+    <Style Selector="Border.kindled controls|KindleRing.ls-ring">
+        <Setter Property="Opacity" Value="0.55"/>
+    </Style>
+    <!-- On the way to the chrome the ring and the bloom go out; the mark travels alone. -->
+    <Style Selector="Border.leaving controls|KindleRing.ls-ring, Border.leaving Border.ls-bloom">
         <Setter Property="Opacity" Value="0"/>
     </Style>
 
@@ -124,19 +140,6 @@
                 <TransformOperationsTransition Property="RenderTransform" Duration="{StaticResource Motion.Transition}" Easing="{StaticResource Ease.Standard}"/>
             </Transitions>
         </Setter>
-    </Style>
-
-    <!-- The area loader fades with the wait it stands for (IsWorking); its box stays. -->
-    <Style Selector="controls|QuantumLoader.ls-loader">
-        <Setter Property="Opacity" Value="1"/>
-        <Setter Property="Transitions">
-            <Transitions>
-                <DoubleTransition Property="Opacity" Duration="{StaticResource Motion.Base}" Easing="{StaticResource Ease.Standard}"/>
-            </Transitions>
-        </Setter>
-    </Style>
-    <Style Selector="controls|QuantumLoader.ls-loader.idle">
-        <Setter Property="Opacity" Value="0"/>
     </Style>
 
     <!-- Status line and version follow the card out. -->
@@ -189,22 +192,22 @@
 
     <!-- ═══ Ambient loops (all gated) ═══ -->
 
-    <Style Selector="Border.live Ellipse.ls-ring">
-        <Style.Animations>
-            <Animation Duration="{StaticResource Motion.Ambient}" IterationCount="INFINITE" Easing="{StaticResource Ease.Linear}">
-                <KeyFrame Cue="0%"><Setter Property="RotateTransform.Angle" Value="0"/></KeyFrame>
-                <KeyFrame Cue="100%"><Setter Property="RotateTransform.Angle" Value="360"/></KeyFrame>
-            </Animation>
-        </Style.Animations>
-    </Style>
-
-    <!-- Not while leaving: the keyframes would hold the opacity the "leaving" setter turns off. -->
+    <!-- The lantern light flickers like a flame: uneven steps at uneven cues, never a sine. The same
+         cycle drives the glow's size by a few percent, so the light seems to breathe with the flame.
+         Not while leaving: the keyframes would hold the opacity the "leaving" setter turns off. -->
     <Style Selector="Border.live:not(.leaving) Border.ls-bloom">
         <Style.Animations>
-            <Animation Duration="{StaticResource Motion.Pulse}" IterationCount="INFINITE" Easing="{StaticResource Ease.Standard}">
-                <KeyFrame Cue="0%"><Setter Property="Opacity" Value="0.55"/></KeyFrame>
-                <KeyFrame Cue="50%"><Setter Property="Opacity" Value="1.0"/></KeyFrame>
-                <KeyFrame Cue="100%"><Setter Property="Opacity" Value="0.55"/></KeyFrame>
+            <Animation Duration="{StaticResource Motion.Flicker}" IterationCount="INFINITE" Easing="{StaticResource Ease.Standard}">
+                <KeyFrame Cue="0%"><Setter Property="Opacity" Value="0.66"/><Setter Property="ScaleTransform.ScaleX" Value="1.0"/><Setter Property="ScaleTransform.ScaleY" Value="1.0"/></KeyFrame>
+                <KeyFrame Cue="9%"><Setter Property="Opacity" Value="0.88"/></KeyFrame>
+                <KeyFrame Cue="17%"><Setter Property="Opacity" Value="0.72"/><Setter Property="ScaleTransform.ScaleX" Value="1.03"/><Setter Property="ScaleTransform.ScaleY" Value="1.03"/></KeyFrame>
+                <KeyFrame Cue="31%"><Setter Property="Opacity" Value="1.0"/></KeyFrame>
+                <KeyFrame Cue="38%"><Setter Property="Opacity" Value="0.8"/><Setter Property="ScaleTransform.ScaleX" Value="0.99"/><Setter Property="ScaleTransform.ScaleY" Value="0.99"/></KeyFrame>
+                <KeyFrame Cue="54%"><Setter Property="Opacity" Value="0.94"/></KeyFrame>
+                <KeyFrame Cue="61%"><Setter Property="Opacity" Value="0.7"/><Setter Property="ScaleTransform.ScaleX" Value="1.04"/><Setter Property="ScaleTransform.ScaleY" Value="1.04"/></KeyFrame>
+                <KeyFrame Cue="77%"><Setter Property="Opacity" Value="0.97"/></KeyFrame>
+                <KeyFrame Cue="88%"><Setter Property="Opacity" Value="0.76"/><Setter Property="ScaleTransform.ScaleX" Value="1.01"/><Setter Property="ScaleTransform.ScaleY" Value="1.01"/></KeyFrame>
+                <KeyFrame Cue="100%"><Setter Property="Opacity" Value="0.66"/><Setter Property="ScaleTransform.ScaleX" Value="1.0"/><Setter Property="ScaleTransform.ScaleY" Value="1.0"/></KeyFrame>
             </Animation>
         </Style.Animations>
     </Style>
@@ -275,6 +278,18 @@
     <!-- Fluent paints a grey disabled slab; here the slab stays ember, only dimmer: the button is
          warming up, not broken. The spinner on it is what says "wait". -->
     <Style Selector="Button.ls-action:disabled /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{StaticResource EmberDim}"/>
+        <Setter Property="Foreground" Value="{StaticResource StoneBase}"/>
+    </Style>
+
+    <!-- Hover and press paint the template's presenter, not the Button: Fluent's own
+         ":pointerover /template/ ContentPresenter" rule otherwise wins over Styles.axaml and turns the
+         ember slab grey, which reads as switched off (seen on the setup page, E2E 2026-09-28). -->
+    <Style Selector="Button.ls-action:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+        <Setter Property="Background" Value="{StaticResource EmberBright}"/>
+        <Setter Property="Foreground" Value="{StaticResource StoneBase}"/>
+    </Style>
+    <Style Selector="Button.ls-action:pressed /template/ ContentPresenter#PART_ContentPresenter">
         <Setter Property="Background" Value="{StaticResource EmberDim}"/>
         <Setter Property="Foreground" Value="{StaticResource StoneBase}"/>
     </Style>

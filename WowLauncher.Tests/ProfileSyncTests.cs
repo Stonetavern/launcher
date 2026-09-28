@@ -116,6 +116,67 @@ public sealed class ProfileSyncTests
         Assert.Equal("beta", merged.SelectedRealmId);  // the machine in front of the player wins
     }
 
+    /// <summary>An edit made on the other machine is newer than this machine's copy: it wins. With
+    /// "local always wins" the old copy here was pushed back and undid the edit (2026-09-28).</summary>
+    [Fact]
+    public void Union_TheCopyChangedLastWins()
+    {
+        var server = new LauncherProfile
+        {
+            Realms = [new ProfileRealm { Id = "x", Name = "Edited", RealmlistAddress = "new.test", ClientKey = "1.12.1", AddedAt = 10, UpdatedAt = 500 }],
+        };
+        var local = new LauncherProfile
+        {
+            Realms = [new ProfileRealm { Id = "x", Name = "Old", RealmlistAddress = "old.test", ClientKey = "1.12.1", AddedAt = 10 }],
+        };
+
+        Assert.Equal("new.test", ProfileMerge.Union(server, local).Realms.Single().RealmlistAddress);
+
+        local.Realms[0].UpdatedAt = 900;   // edited here after that
+        Assert.Equal("old.test", ProfileMerge.Union(server, local).Realms.Single().RealmlistAddress);
+    }
+
+    /// <summary>A realm's times survive the way into the config and back. ToEntry dropped AddedAt, so a
+    /// realm re-added after a delete read as "added at 0" after one sync and was buried again.</summary>
+    [Fact]
+    public void TheTimes_SurviveTheConfigRoundTrip_SoAReAddStaysAlive()
+    {
+        var readded = new ProfileRealm { Id = "x", Name = "X", RealmlistAddress = "x.test", ClientKey = "1.12.1", AddedAt = 2000, UpdatedAt = 2500 };
+        var back = ProfileRealm.From(readded.ToEntry());
+        Assert.Equal(2000, back.AddedAt);
+        Assert.Equal(2500, back.UpdatedAt);
+
+        // The other machine still carries the older grave from the first delete.
+        var other = new LauncherProfile { DeletedRealms = [new ProfileGrave { Id = "x", DeletedAt = 1500 }] };
+        var local = new LauncherProfile { Realms = [back] };
+        Assert.Single(ProfileMerge.Union(other, local).Realms);
+    }
+
+    /// <summary>"Offer both clients" on a realm the player added survives the way into the profile and
+    /// back. The config is rebuilt from the profile after every sync, so the switch undid itself on the
+    /// same machine at the next start (2026-09-28).</summary>
+    [Fact]
+    public void TheBothClientsSwitch_SurvivesTheConfigRoundTrip()
+    {
+        var entry = new RealmEntry { Id = "x", Name = "X", RealmlistAddress = "x.test", ClientKey = "1.12.1",
+                                     ClientKeys = ["1.12.1", "1.14.2"] };
+
+        var back = ProfileRealm.From(entry).ToEntry();
+
+        Assert.Equal(["1.12.1", "1.14.2"], back.ClientKeys);
+        Assert.Null(ProfileRealm.From(new RealmEntry { Id = "y", Name = "Y", RealmlistAddress = "y.test" }).ClientKeys);
+    }
+
+    /// <summary>Switching "Offer both clients" is a change worth uploading, not "same content".</summary>
+    [Fact]
+    public void TheBothClientsSwitch_CountsAsAChange()
+    {
+        ProfileRealm R(List<string>? keys) => new() { Id = "x", Name = "X", RealmlistAddress = "x.test", ClientKey = "1.12.1", ClientKeys = keys };
+
+        Assert.False(ProfileMerge.SameContent(new LauncherProfile { Realms = [R(["1.12.1", "1.14.2"])] },
+                                              new LauncherProfile { Realms = [R(null)] }));
+    }
+
     [Fact]
     public void Union_LocalWinsOnTheSameId()
     {

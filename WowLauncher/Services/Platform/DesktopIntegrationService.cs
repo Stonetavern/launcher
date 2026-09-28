@@ -190,8 +190,12 @@ public sealed class LinuxDesktopIntegrationService : IDesktopIntegrationService
         try
         {
             if (!File.Exists(DesktopFilePath)) return false;
-            var exec = ReadExecLine(File.ReadAllLines(DesktopFilePath));
-            return string.Equals(exec, _layout.ExecLine, StringComparison.Ordinal);
+            var lines = File.ReadAllLines(DesktopFilePath);
+            // The WM class counts too: an entry written by an older build ("WowLauncher") launches the
+            // right file but never matches the window, so the desktop's launch feedback runs into its
+            // timeout and the taskbar groups the window apart from its menu entry.
+            return string.Equals(ReadExecLine(lines), _layout.ExecLine, StringComparison.Ordinal)
+                && string.Equals(ReadKey(lines, "StartupWMClass"), DesktopIntegration.WmClass, StringComparison.Ordinal);
         }
         catch (Exception ex)
         {
@@ -333,15 +337,43 @@ public sealed class LinuxDesktopIntegrationService : IDesktopIntegrationService
     }
 
     /// <summary>Read the <c>Exec=</c> value from a parsed <c>.desktop</c>, or null if absent.</summary>
-    internal static string? ReadExecLine(IReadOnlyList<string> lines)
+    internal static string? ReadExecLine(IReadOnlyList<string> lines) => ReadKey(lines, "Exec");
+
+    /// <summary>Read the value of <c>key=</c> from a parsed <c>.desktop</c>, or null if absent.</summary>
+    internal static string? ReadKey(IReadOnlyList<string> lines, string key)
     {
+        var prefix = key + "=";
         foreach (var line in lines)
         {
             var trimmed = line.TrimStart();
-            if (trimmed.StartsWith("Exec=", StringComparison.Ordinal))
-                return trimmed["Exec=".Length..];
+            if (trimmed.StartsWith(prefix, StringComparison.Ordinal))
+                return trimmed[prefix.Length..];
         }
         return null;
+    }
+
+    /// <summary>
+    /// The body of an existing entry with its <c>StartupWMClass</c> set to the current class, or null
+    /// when nothing needs to change. Every other line is kept as the player (or an older build) left
+    /// it: this repairs one key, it does not rewrite the entry.
+    /// </summary>
+    internal static string? WithCurrentWmClass(IReadOnlyList<string> lines)
+    {
+        var wanted = $"StartupWMClass={DesktopIntegration.WmClass}";
+        var found = false;
+        var changed = false;
+        var result = new List<string>(lines.Count + 1);
+        foreach (var line in lines)
+        {
+            if (line.TrimStart().StartsWith("StartupWMClass=", StringComparison.Ordinal))
+            {
+                found = true;
+                if (!string.Equals(line.Trim(), wanted, StringComparison.Ordinal)) { result.Add(wanted); changed = true; continue; }
+            }
+            result.Add(line);
+        }
+        if (!found) { result.Add(wanted); changed = true; }
+        return changed ? string.Join("\n", result) + "\n" : null;
     }
 
     /// <summary>Wrap in double quotes when the path contains whitespace (Desktop Entry spec: reserved

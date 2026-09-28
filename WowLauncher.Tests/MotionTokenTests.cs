@@ -78,6 +78,7 @@ public sealed partial class MotionTokenTests
         ["Motion.Transition", "0:0:0.450"],   // 450 ms  Phasenwechsel
         ["Motion.Shimmer",    "0:0:2.000"],   // 2000 ms Shimmer-Zyklus
         ["Motion.Pulse",      "0:0:4.000"],   // 4000 ms Sigil-Glow
+        ["Motion.Flicker",    "0:0:3.200"],   // 3200 ms Laternenlicht flackert (2026-09-28)
         ["Motion.Ambient",    "0:0:20.000"],  // 20 s    Sigil-Rotation, Shader-Drift
         // Flaechen-Loader (Owner-Vorlage REF-2026-09-20-quantum-cloud-loader.md): vier Perioden
         ["Motion.QuantumA",   "0:0:3.800"],

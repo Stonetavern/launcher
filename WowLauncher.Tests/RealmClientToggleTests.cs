@@ -898,4 +898,136 @@ public sealed class RealmClientToggleTests
         Assert.DoesNotContain(shell.Realms, r => r.Id == own.Id);
         Assert.DoesNotContain(own.Id, cfg.Current.Realms.Select(r => r.Id));
     }
+
+    // ── The realm dialog: add, edit, remove (owner 2026-09-28, TODO C5/C6/C1) ─────────────────────
+
+    private static async Task<(ShellViewModel Shell, MemoryConfig Cfg, RealmEntry Own)> ShellWithOwnRealm()
+    {
+        var (shell, cfg, _) = NewShell();
+        await shell.InitAsync();
+        var own = new RealmEntry { Id = "kronos", Name = "kronos", RealmlistAddress = "logon.kronos.example", ClientKey = "1.12.1", AddedAt = 1000 };
+        cfg.Current.Realms.Add(own);   // arrives like a synced realm: in the config, not added through Settings
+        shell.ReloadRealms();
+        shell.SelectedRealm = shell.Realms.First(r => r.Id == own.Id);
+        return (shell, cfg, own);
+    }
+
+    /// <summary>C6: picking something inside the open dialog must not close it. It closed on every
+    /// RealmsChanged, which a mere pick also raises.</summary>
+    [Fact]
+    public async Task TheRealmDialog_StaysOpen_WhileThePlayerPicksInIt()
+    {
+        var (shell, _, _) = await ShellWithOwnRealm();
+        shell.OpenEditRealmCommand.Execute(null);
+        Assert.True(shell.IsAddRealmOpen);
+
+        shell.Settings.RealmOffersBothClients = true;    // a pick: raises RealmsChanged
+        shell.Settings.SelectedRealmClient = shell.Settings.ClientVersions.First(c => c.Key == "1.14.2");
+
+        Assert.True(shell.IsAddRealmOpen);
+    }
+
+    /// <summary>C5: the gear edits the realm open in the hero, keeps its id, stamps the change, closes.</summary>
+    [Fact]
+    public async Task TheGear_EditsTheRealmInTheHero_AndSaveKeepsItsId()
+    {
+        var (shell, cfg, own) = await ShellWithOwnRealm();
+        Assert.True(shell.CanEditSelectedRealm);
+
+        shell.OpenEditRealmCommand.Execute(null);
+        Assert.True(shell.Settings.IsEditingRealm);
+        Assert.Equal("logon.kronos.example", shell.Settings.EditRealmAddress);
+
+        shell.Settings.EditRealmName = "Kronos IV";
+        shell.Settings.EditRealmAddress = "logon4.kronos.example";
+        shell.Settings.SaveRealmCommand.Execute(null);
+
+        var saved = cfg.Current.Realms.Single(r => r.Id == own.Id);
+        Assert.Equal("Kronos IV", saved.Name);
+        Assert.Equal("logon4.kronos.example", saved.RealmlistAddress);
+        Assert.True(saved.UpdatedAt > 0);
+        Assert.Equal(1000, saved.AddedAt);
+        Assert.False(shell.IsAddRealmOpen);
+        Assert.Contains(shell.Realms, r => r.Id == own.Id && r.Name == "Kronos IV");
+    }
+
+    [Fact]
+    public async Task ABadAddress_IsRefusedAtTheField_AndChangesNothing()
+    {
+        var (shell, cfg, own) = await ShellWithOwnRealm();
+        shell.OpenEditRealmCommand.Execute(null);
+
+        shell.Settings.EditRealmAddress = "evil.example\nset realmlist other";
+        shell.Settings.SaveRealmCommand.Execute(null);
+
+        Assert.True(shell.Settings.HasAddRealmError);
+        Assert.Equal("logon.kronos.example", cfg.Current.Realms.Single(r => r.Id == own.Id).RealmlistAddress);
+        Assert.True(shell.IsAddRealmOpen);
+    }
+
+    [Fact]
+    public async Task ThePresets_HaveNoGear()
+    {
+        var (shell, _, _) = NewShell();
+        await shell.InitAsync();
+        shell.SelectedRealm = shell.Realms.First(r => r.IsPreset);
+
+        Assert.False(shell.CanEditSelectedRealm);
+        Assert.False(shell.OpenEditRealmCommand.CanExecute(null));
+    }
+
+    /// <summary>Removing from the hero leaves the dated grave the profile sync needs; without it the
+    /// next sync brought the realm back.</summary>
+    [Fact]
+    public async Task RemovingFromTheHero_LeavesAGrave()
+    {
+        var (shell, cfg, own) = await ShellWithOwnRealm();
+
+        shell.RemoveSelectedRealmCommand.Execute(null);
+
+        Assert.DoesNotContain(cfg.Current.Realms, r => r.Id == own.Id);
+        Assert.Contains(cfg.Current.DeletedRealms, g => g.Id == own.Id && g.DeletedAt > 0);
+    }
+
+    /// <summary>C1: only the clients we ship. The dialog offered Burning Crusade and Wrath too.</summary>
+    [Fact]
+    public async Task TheDialog_OffersOnlyTheClientsWeShip()
+    {
+        var (shell, _, _) = NewShell();
+        await shell.InitAsync();
+
+        var offered = shell.Settings.ClientVersions.Select(c => c.Key).ToList();
+        Assert.DoesNotContain("2.4.3", offered);
+        Assert.DoesNotContain("3.3.5", offered);
+        Assert.All(shell.Settings.ClientVersions, c => Assert.True(c.IsAvailable));
+        Assert.Contains(offered, k => k is "1.12.1" or "1.14.2");
+    }
+
+    /// <summary>The hero toggle hands the rail a fresh entry; it used to drop AddedAt and the shipped
+    /// ArmoryRealms on the way.</summary>
+    [Fact]
+    public async Task TheClientToggle_KeepsTheRealmsTimesAndShippedData()
+    {
+        var (shell, _, _) = NewShell();
+        await shell.InitAsync();
+        var before = shell.SelectedRealm;
+        var armory = before.ArmoryRealms;
+        Assert.NotNull(armory);   // Stonetavern: Elwynn and Barrens behind one address
+        var modern = before.AvailableClients.Single(c => c.Key == "1.14.2");
+
+        await shell.SelectRealmClientCommand.ExecuteAsync(modern);
+
+        Assert.Equal(armory, shell.SelectedRealm.ArmoryRealms);
+
+        // An own realm with both clients carries a real AddedAt; the toggle must keep it and stamp
+        // the change.
+        var (shell2, _, own) = await ShellWithOwnRealm();
+        shell2.Settings.BeginEdit(own.Id);
+        shell2.Settings.RealmOffersBothClients = true;
+        shell2.ReloadRealms();
+        shell2.SelectedRealm = shell2.Realms.First(r => r.Id == own.Id);
+        await shell2.SelectRealmClientCommand.ExecuteAsync(shell2.SelectedRealm.AvailableClients.Single(c => c.Key == "1.14.2"));
+        Assert.Equal(1000, shell2.SelectedRealm.AddedAt);
+        Assert.True(shell2.SelectedRealm.UpdatedAt > 0);
+    }
 }

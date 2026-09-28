@@ -39,6 +39,21 @@ public sealed partial class RegisterViewModel : ViewModelBase
     // Required: the request is rejected client-side until this is ticked (the server enforces it too).
     [ObservableProperty] private bool _acceptRules;
 
+    /// <summary>What the checkbox agrees to. The Terms page links the house rules and the Privacy
+    /// Policy, so one link reaches all three. Same wording as the website signup (2026-09-23).</summary>
+    internal const string TermsUrl = "https://stonetavern.app/legal/terms.html";
+
+    [RelayCommand]
+    private void OpenTerms()
+    {
+        try
+        {
+            System.Diagnostics.Process.Start(
+                new System.Diagnostics.ProcessStartInfo(TermsUrl) { UseShellExecute = true });
+        }
+        catch { /* no default browser (headless): the checkbox still works, the page is on the site */ }
+    }
+
     // Optional marketing opt-in; off by default.
     [ObservableProperty] private bool _newsletter;
 

@@ -343,6 +343,11 @@
                                      Elwynn: 1.12.1 + 1.14.2). No large picker, no "LOAD NEW ERA": a small
                                      row next to the badge above, same ember-underline language as the
                                      top-nav tabs, scaled down. -->
+                                <!-- Owner 2026-09-28, points 1 and 2 next to the toggle: the game folder one
+                                     click away (Interface/AddOns and WTF live there), and the realm itself
+                                     (the gear, TODO C5). The folder button only exists once this build is
+                                     installed; there is nothing to open before. -->
+                                <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Left">
                                 <ListBox Classes="v3clienttoggle" HorizontalAlignment="Left"
                                          IsVisible="{Binding SelectedRealm.HasMultipleClients}"
                                          ItemsSource="{Binding SelectedRealm.AvailableClients}"
@@ -360,6 +365,20 @@
                                         </DataTemplate>
                                     </ListBox.ItemTemplate>
                                 </ListBox>
+                                <Button Classes="v3iconbtn" Command="{Binding Play.OpenClientFolderCommand}"
+                                        IsVisible="{Binding Play.HasClientFolder}"
+                                        ToolTip.Tip="{loc:Tr V3_OpenClientFolder}"
+                                        AutomationProperties.Name="{loc:Tr V3_OpenClientFolder}">
+                                    <Path Data="M1.5,3.5 L6,3.5 L7.5,5 L14.5,5 L14.5,13 L1.5,13 Z M1.5,7 L14.5,7"/>
+                                </Button>
+                                <Button Classes="v3iconbtn" Command="{Binding OpenEditRealmCommand}"
+                                        IsVisible="{Binding CanEditSelectedRealm}"
+                                        ToolTip.Tip="{loc:Tr V3_EditRealm_Title}"
+                                        AutomationProperties.Name="{loc:Tr V3_EditRealm_Title}">
+                                    <!-- A cog: eight teeth on a ring, drawn for 16 px. -->
+                                    <Path Data="M8,1.5 L9,1.5 L9.4,3.2 L10.6,3.7 L12.1,2.8 L13.2,3.9 L12.3,5.4 L12.8,6.6 L14.5,7 L14.5,9 L12.8,9.4 L12.3,10.6 L13.2,12.1 L12.1,13.2 L10.6,12.3 L9.4,12.8 L9,14.5 L7,14.5 L6.6,12.8 L5.4,12.3 L3.9,13.2 L2.8,12.1 L3.7,10.6 L3.2,9.4 L1.5,9 L1.5,7 L3.2,6.6 L3.7,5.4 L2.8,3.9 L3.9,2.8 L5.4,3.7 L6.6,3.2 L7,1.5 Z M8,5.8 A2.2,2.2 0 1 0 8,10.2 A2.2,2.2 0 1 0 8,5.8 Z"/>
+                                </Button>
+                                </StackPanel>
                             </StackPanel>
 
                             <!-- PLAY, same anchored block. -->
@@ -1089,9 +1108,18 @@
         <Border Grid.Row="1" Classes="v3overlayscrim xfade" Classes.shown="{Binding IsAddRealmOpen}"
                 IsVisible="{Binding IsAddRealmOpen}">
             <Border Classes="recess" Padding="30,26" MaxWidth="380" HorizontalAlignment="Center" VerticalAlignment="Center">
+                <!-- Two modes, one dialog (owner 2026-09-28): the "+" adds a realm, the gear beside the
+                     client toggle edits the realm open in the hero. The old dialog also had a dropdown of
+                     all realms that closed the dialog the moment something was picked in it; the rail is
+                     where a realm is picked, so the dropdown is gone. -->
                 <StackPanel Spacing="14" DataContext="{Binding Settings}" x:DataType="vm:SettingsViewModel">
                     <Grid ColumnDefinitions="*,Auto">
                         <TextBlock Grid.Column="0" Text="{loc:Tr Settings_AddRealm}" FontSize="18"
+                                   IsVisible="{Binding !IsEditingRealm}"
+                                   FontFamily="{StaticResource FontDisplay}"
+                                   Foreground="{StaticResource ParchmentPrimary}" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="0" Text="{loc:Tr V3_EditRealm_Title}" FontSize="18"
+                                   IsVisible="{Binding IsEditingRealm}"
                                    FontFamily="{StaticResource FontDisplay}"
                                    Foreground="{StaticResource ParchmentPrimary}" VerticalAlignment="Center"/>
                         <Button Grid.Column="1" Classes="chrome" Content="✕"
@@ -1099,26 +1127,19 @@
                                 AutomationProperties.Name="{loc:Tr V3_AddRealm_Close_A11y}"/>
                     </Grid>
 
-                    <!-- Vorhandene Realms: auswaehlen und dem Realm seinen Client zuordnen. Stand bis
-                         2026-08-04 auf der Optionen-Seite, zwischen Installationsordner und
-                         Profil-Abgleich — also mitten in Dingen, die den Launcher betreffen und nicht
-                         einen einzelnen Realm. Realm-Sachen gehoeren an EINE Stelle, und das ist
-                         diese: die Leiste links und ihr Plus. -->
-                    <StackPanel Spacing="6">
-                        <TextBlock Text="{loc:Tr Settings_Realm}" FontSize="12"
-                                   Foreground="{StaticResource ParchmentSecondary}"/>
-                        <ComboBox Classes="v3overlayfield" ItemsSource="{Binding Realms}"
-                                  SelectedItem="{Binding SelectedRealm, Mode=TwoWay}"
-                                  AutomationProperties.Name="{loc:Tr Settings_Realm_A11y}">
-                            <ComboBox.ItemTemplate>
-                                <DataTemplate x:DataType="m:RealmEntry">
-                                    <TextBlock Text="{Binding Name}"/>
-                                </DataTemplate>
-                            </ComboBox.ItemTemplate>
-                        </ComboBox>
-                        <TextBlock Text="{Binding SelectedRealmAddress}" FontSize="11"
-                                   FontFamily="{StaticResource FontMono}"
-                                   Foreground="{StaticResource ParchmentFaint}"/>
+                    <!-- ── Edit the realm open in the hero ── -->
+                    <StackPanel Spacing="6" IsVisible="{Binding IsEditingRealm}">
+                        <TextBox Classes="v3overlayfield" Text="{Binding EditRealmName}"
+                                 PlaceholderText="{loc:Tr Settings_Name_Placeholder}"
+                                 AutomationProperties.Name="{loc:Tr Settings_Name_A11y}"/>
+                        <TextBox Classes="v3overlayfield" FontFamily="{StaticResource FontMono}"
+                                 Text="{Binding EditRealmAddress}"
+                                 PlaceholderText="{loc:Tr Settings_Realmlist_Placeholder}"
+                                 AutomationProperties.Name="{loc:Tr Settings_Realmlist_A11y}"/>
+                        <TextBox Classes="v3overlayfield" FontFamily="{StaticResource FontMono}"
+                                 Text="{Binding EditRealmManifestUrl}"
+                                 PlaceholderText="{loc:Tr V3_AddRealm_UpdateSource_Placeholder}"
+                                 AutomationProperties.Name="{loc:Tr V3_AddRealm_UpdateSource_A11y}"/>
                         <TextBlock Text="{loc:Tr Settings_Client}" FontSize="12" Margin="0,6,0,0"
                                    Foreground="{StaticResource ParchmentSecondary}"/>
                         <ComboBox Classes="v3overlayfield" ItemsSource="{Binding ClientVersions}"
@@ -1137,13 +1158,8 @@
                         </ComboBox>
                         <TextBlock Text="{loc:Tr Settings_Client_Hint}" FontSize="11" TextWrapping="Wrap"
                                    Foreground="{StaticResource ParchmentFaint}"/>
-
-                        <!-- Beide Clients auf einem eigenen Realm (Owner-Befund 2026-08-05: er hat
-                             denselben Realm zweimal angelegt, nur um an den zweiten Client zu
-                             kommen). Nur fuer selbst angelegte Realms - Presets tragen ihre Builds
-                             als Stammdaten. -->
-                        <StackPanel Spacing="4" Margin="0,8,0,0"
-                                    IsVisible="{Binding ShowRealmBothClients}">
+                        <!-- Beide Clients auf einem eigenen Realm (Owner-Befund 2026-08-05). -->
+                        <StackPanel Spacing="4" Margin="0,8,0,0" IsVisible="{Binding ShowRealmBothClients}">
                             <CheckBox Content="{loc:Tr Settings_BothClients}"
                                       IsChecked="{Binding RealmOffersBothClients, Mode=TwoWay}"
                                       AutomationProperties.Name="{loc:Tr Settings_BothClients_A11y}"/>
@@ -1153,13 +1169,8 @@
                         </StackPanel>
                     </StackPanel>
 
-                    <Border BorderBrush="{StaticResource BorderHairline}" BorderThickness="0,1,0,0"
-                            Padding="0,12,0,0">
-                        <TextBlock Text="{loc:Tr Settings_AddRealm}" FontSize="12"
-                                   Foreground="{StaticResource ParchmentSecondary}"/>
-                    </Border>
-
-                    <StackPanel Spacing="6">
+                    <!-- ── Add a realm ── -->
+                    <StackPanel Spacing="6" IsVisible="{Binding !IsEditingRealm}">
                         <TextBox Classes="v3overlayfield" Text="{Binding NewRealmName}"
                                  PlaceholderText="{loc:Tr Settings_Name_Placeholder}"
                                  AutomationProperties.Name="{loc:Tr Settings_Name_A11y}"/>
@@ -1182,20 +1193,24 @@
                                  AutomationProperties.Name="{loc:Tr V3_AddRealm_UpdateSource_A11y}"/>
                         <TextBlock Text="{loc:Tr V3_AddRealm_UpdateSource_Hint}" FontSize="11"
                                    TextWrapping="Wrap" Foreground="{StaticResource ParchmentFaint}"/>
-                        <!-- Calm, at the field - not a popup, not a red scream. -->
-                        <TextBlock Text="{Binding AddRealmError}" IsVisible="{Binding HasAddRealmError}"
-                                   FontSize="12" TextWrapping="Wrap"
-                                   Foreground="{StaticResource ParchmentSecondary}"/>
                     </StackPanel>
+
+                    <!-- Calm, at the field - not a popup, not a red scream. -->
+                    <TextBlock Text="{Binding AddRealmError}" IsVisible="{Binding HasAddRealmError}"
+                               FontSize="12" TextWrapping="Wrap"
+                               Foreground="{StaticResource ParchmentSecondary}"/>
 
                     <Grid ColumnDefinitions="Auto,*,Auto">
                         <Button Grid.Column="0" Classes="v3addbtn" Content="{loc:Tr Settings_Add}"
+                                IsVisible="{Binding !IsEditingRealm}"
                                 Command="{Binding AddRealmCommand}"/>
-                        <!-- Presets can never reach this button - Shell's own hard IsPreset check,
-                             independent of Settings' analogous guard on its page. -->
+                        <Button Grid.Column="0" Classes="v3addbtn" Content="{loc:Tr V3_EditRealm_Save}"
+                                IsVisible="{Binding IsEditingRealm}"
+                                Command="{Binding SaveRealmCommand}"/>
+                        <!-- Presets can never reach this button - Shell's own hard IsPreset check. -->
                         <Button Grid.Column="2" Classes="ghost" Content="{loc:Tr Settings_RemoveRealm}"
-                                Command="{Binding $parent[Window].((vm:ShellViewModel)DataContext).RemoveSelectedRealmCommand}"
-                                IsVisible="{Binding $parent[Window].((vm:ShellViewModel)DataContext).CanRemoveSelectedRealm}"/>
+                                IsVisible="{Binding IsEditingRealm}"
+                                Command="{Binding $parent[Window].((vm:ShellViewModel)DataContext).RemoveSelectedRealmCommand}"/>
                     </Grid>
                 </StackPanel>
             </Border>

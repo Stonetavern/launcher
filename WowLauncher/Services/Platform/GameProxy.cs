@@ -97,14 +97,28 @@ public sealed class HermesProxyRunner : IGameProxy
     /// discard) — the launch never depends on it. See <see cref="ProxyOutputLog"/> for why it exists.</summary>
     private readonly string? _outputLogPath;
 
+    /// <summary>Move the proxy's REST/realm/instance ports off anything that already holds them and
+    /// wait for ALL of them before reporting ready (see <see cref="HermesPortPlan"/>). Off by default so
+    /// a caller that passes its own port arguments keeps full control.</summary>
+    private readonly bool _relocateAuxiliaryPorts;
+    private readonly Func<int, CancellationToken, Task<bool>> _auxPortProbe;
+    private readonly Func<ISet<int>, int> _freePortPicker;
+
     private Process? _process;
     private ProxyOutputLog? _outputLog;
+    /// <summary>The first line in which the proxy said it failed to come up (<see cref="HermesPortPlan.IsFatal"/>).
+    /// Set from the output pump; once set, a still-running process is NOT a working proxy.</summary>
+    private volatile string? _fatalLine;
+    private readonly System.Collections.Concurrent.ConcurrentQueue<string> _fatalLines = new();
+
+    /// <summary>The auxiliary ports the proxy was started with (after relocation), for logs and tests.</summary>
+    public IReadOnlyDictionary<string, int>? AuxiliaryPorts { get; private set; }
 
     public HermesProxyRunner(Serilog.ILogger logger, string exePath, IReadOnlyList<string> args, string pidFilePath,
         IReadOnlyDictionary<string, string>? environmentOverrides = null, string? workingDirectory = null,
-        string? outputLogPath = null)
+        string? outputLogPath = null, bool relocateAuxiliaryPorts = false)
         : this(logger, exePath, args, pidFilePath, TcpPortProbeAsync, environmentOverrides, workingDirectory,
-            outputLogPath: outputLogPath)
+            outputLogPath: outputLogPath, relocateAuxiliaryPorts: relocateAuxiliaryPorts)
     {
     }
 
@@ -119,9 +133,15 @@ public sealed class HermesProxyRunner : IGameProxy
         Func<int, bool>? sigterm = null,
         Action<Process>? hardKill = null, TimeSpan? stopGrace = null,
         Func<int, CancellationToken, Task<int?>>? portOwnerProbe = null,
-        string? outputLogPath = null)
+        string? outputLogPath = null,
+        bool relocateAuxiliaryPorts = false,
+        Func<int, CancellationToken, Task<bool>>? auxPortProbe = null,
+        Func<ISet<int>, int>? freePortPicker = null)
     {
         _outputLogPath = outputLogPath;
+        _relocateAuxiliaryPorts = relocateAuxiliaryPorts;
+        _auxPortProbe = auxPortProbe ?? TcpPortProbeAsync;
+        _freePortPicker = freePortPicker ?? HermesPortPlan.PickFreeLoopbackPort;
         _logger = logger;
         _exePath = exePath;
         _args = args;
@@ -166,6 +186,11 @@ public sealed class HermesProxyRunner : IGameProxy
         if (!File.Exists(_exePath))
             return GameProxyResult.Failed($"Proxy executable not found: {_exePath}");
 
+        // A per-file update by launcher 1.9.1 or older left the proxy without its execute bit
+        // (E2E 2026-09-24). Repair it here, so such an install plays again without a download.
+        if (UnixExecBit.Ensure(_exePath))
+            _logger.Warning("Proxy {Exe} was not executable; execute bit restored", _exePath);
+
         // Is the port free BEFORE we start? This is the deterministic half of the "someone else holds
         // the port" problem observed on 2026-07-22: with the port already taken, the readiness probe
         // goes green on its first poll - it can only see that SOMETHING listens - while the proxy we
@@ -175,8 +200,26 @@ public sealed class HermesProxyRunner : IGameProxy
         // in use here belongs to something the launcher does not own.
         if (await PortIsTakenAsync(port, TimeSpan.FromSeconds(3), ct).ConfigureAwait(false))
         {
-            _logger.Error("Port {Port} is already in use by a process the launcher does not own", port);
-            return GameProxyResult.Failed(PortTakenMessage(port));
+            var holder = await DescribePortOwnerAsync(port, ct).ConfigureAwait(false);
+            _logger.Error("Port {Port} is already in use by a process the launcher does not own ({Holder})",
+                port, holder ?? "owner unknown");
+            return GameProxyResult.Failed(PortTakenMessage(port, holder));
+        }
+
+        // The ports the proxy binds after 1119 (REST 8081, realm 8084, instance 8086). A taken one used to
+        // kill the proxy AFTER 1119 was already open, which the check above cannot see (2026-09-27: a
+        // local llama-server on 8081). The proxy tells the client these ports itself, so a taken one is
+        // moved to a free port instead of refused — see HermesPortPlan for the source evidence.
+        var args = new List<string>(_args);
+        if (_relocateAuxiliaryPorts)
+        {
+            var workDir = _workingDirectory ?? Path.GetDirectoryName(Path.GetFullPath(_exePath)) ?? "";
+            var plan = await HermesPortPlan.BuildAsync(
+                HermesPortPlan.ReadConfigured(Path.Combine(workDir, "HermesProxy.config")), port,
+                _auxPortProbe, _freePortPicker, ct).ConfigureAwait(false);
+            foreach (var move in plan.Moves) _logger.Warning("Proxy port moved: {Move}", move);
+            args.AddRange(plan.ExtraArgs);
+            AuxiliaryPorts = plan.Ports;
         }
 
         Process process;
@@ -187,6 +230,12 @@ public sealed class HermesProxyRunner : IGameProxy
                 UseShellExecute = false,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
+                // stdin is OURS and closed right after the start. On Linux and macOS the proxy's
+                // Program.cs always ends with "Press enter to close" + Console.ReadLine(); with an
+                // inherited stdin that read never returns, and a proxy that failed to start sat there
+                // holding 1119 (2026-09-27). A closed pipe makes the read return at once, so a failed
+                // proxy actually exits and frees its ports.
+                RedirectStandardInput = true,
                 // The proxy's OWN directory, never the launcher's. HermesProxy loads its game data
                 // (flight paths, spell tables, hotfixes) from a CSV folder BESIDE the binary using a
                 // relative path, so an inherited working directory makes it die at startup with a
@@ -197,9 +246,17 @@ public sealed class HermesProxyRunner : IGameProxy
                 // Hermes/bin/), otherwise the binary's own directory as before.
                 WorkingDirectory = _workingDirectory ?? Path.GetDirectoryName(Path.GetFullPath(_exePath)) ?? "",
             };
-            foreach (var a in _args) psi.ArgumentList.Add(a);
+            foreach (var a in args) psi.ArgumentList.Add(a);
             if (_environmentOverrides is not null)
                 foreach (var (key, value) in _environmentOverrides) psi.Environment[key] = value;
+            // Without libicu the .NET proxy aborts before it opens its port (matrix 2026-09-24).
+            if (OperatingSystem.IsLinux()
+                && IcuProbe.ProxyEnvironmentFor(IcuProbe.DefaultDirs, Environment.GetEnvironmentVariable) is { } icu
+                && !psi.Environment.ContainsKey(icu.Key))
+            {
+                _logger.Warning("No libicu found; starting the proxy with {Var}=1", icu.Key);
+                psi.Environment[icu.Key] = icu.Value;
+            }
 
             process = Process.Start(psi) ?? throw new InvalidOperationException("Process.Start returned null");
         }
@@ -210,10 +267,48 @@ public sealed class HermesProxyRunner : IGameProxy
         }
 
         _process = process;
+        _fatalLine = null;
+        _fatalLines.Clear();
+        try { process.StandardInput.Close(); } catch { /* already gone: nothing to close */ }
         WritePidFile(process.Id);
-        _outputLog = ProxyOutputLog.AttachOrDrain(process, _outputLogPath, _logger);
+        _outputLog = ProxyOutputLog.AttachOrDrain(process, _outputLogPath, _logger,
+            onLine: (_, line) =>
+            {
+                if (!HermesPortPlan.IsFatal(line)) return;
+                if (_fatalLines.Count < 8) _fatalLines.Enqueue(line.Trim());
+                _fatalLine ??= line.Trim();
+            });
 
+        var deadline = DateTime.UtcNow + timeout;
         var opened = await WaitForPortAsync(port, timeout, process, ct).ConfigureAwait(false);
+        if (opened && _relocateAuxiliaryPorts && AuxiliaryPorts is not null)
+        {
+            // 1119 alone is not "ready": the proxy starts its listeners one after another and may die on
+            // the second. Wait for every one of them, or for the proxy to say it failed.
+            foreach (var (key, auxPort) in AuxiliaryPorts)
+            {
+                var left = deadline - DateTime.UtcNow;
+                if (left <= TimeSpan.Zero
+                    || !await WaitForPortAsync(auxPort, left, process, ct, _auxPortProbe).ConfigureAwait(false))
+                {
+                    _logger.Error("Proxy (PID={Pid}) opened {Port} but never its {Key} on {AuxPort}",
+                        process.Id, port, key, auxPort);
+                    opened = false;
+                    break;
+                }
+            }
+        }
+        if (_fatalLine is not null)
+        {
+            // stdout and stderr arrive in no fixed order: give the other stream a moment, then name the
+            // line that says WHAT failed, not merely the first one that said something did.
+            await Task.Delay(300, CancellationToken.None).ConfigureAwait(false);
+            var fatal = HermesPortPlan.MostTelling(_fatalLines.ToArray());
+            _logger.Error("Proxy (PID={Pid}) reported a failed start: {Lines}", process.Id,
+                string.Join(" | ", _fatalLines));
+            await StopAsync().ConfigureAwait(false);
+            return GameProxyResult.Failed(FailedStartMessage(fatal));
+        }
         if (!opened)
         {
             var diedEarly = process.HasExited;
@@ -268,6 +363,9 @@ public sealed class HermesProxyRunner : IGameProxy
             if (process is null) return null;
             // A disposed or otherwise unreadable handle is NOT proof of death: reporting false here
             // would tell a playing user their connection dropped when nothing happened.
+            // A proxy that said it failed to start is dead to the player even while its process sits
+            // on "Press enter to close" holding 1119.
+            if (_fatalLine is not null) return false;
             try { return !process.HasExited; }
             catch (System.InvalidOperationException) { return null; }
         }
@@ -276,7 +374,7 @@ public sealed class HermesProxyRunner : IGameProxy
     public async Task<bool> VerifyStillListeningAsync(int port, CancellationToken ct = default)
     {
         var process = _process;
-        if (process is null || process.HasExited)
+        if (process is null || process.HasExited || _fatalLine is not null)
         {
             _logger.Error("The proxy is no longer running when the client was about to start");
             return false;
@@ -542,19 +640,48 @@ public sealed class HermesProxyRunner : IGameProxy
         }
     }
 
-    private static string PortTakenMessage(int port) =>
-        $"Port {port} is already in use. The realm proxy needs it, and something else is holding it.\n" +
-        "This is usually a proxy left running from a client started outside the launcher. Close it, " +
-        "or run: pkill -x HermesProxy";
+    internal static string PortTakenMessage(int port, string? holder = null) =>
+        holder is null
+            ? $"Port {port} is already in use. The realm proxy needs it, and something else is holding it.\n" +
+              "This is usually a proxy left running from a client started outside the launcher. Close it, " +
+              "or run: pkill -x HermesProxy"
+            : $"Port {port} is already in use by {holder}. The realm proxy needs this port.\n" +
+              "Close that program, then press Play again.";
 
-    private async Task<bool> WaitForPortAsync(int port, TimeSpan timeout, Process process, CancellationToken ct)
+    internal static string FailedStartMessage(string fatalLine) =>
+        "The realm proxy stopped while starting. It said: " + fatalLine + "\n" +
+        (fatalLine.Contains("Press enter", StringComparison.Ordinal)
+            ? "One of its network ports could not be opened. "
+            : "") +
+        "The proxy has been closed and its ports are free again. Press Play to try once more.";
+
+    /// <summary>"llama-server (PID 1234)" for the process listening on <paramref name="port"/>, or null
+    /// when it cannot be told (another user's process, no /proc, no lsof).</summary>
+    private async Task<string?> DescribePortOwnerAsync(int port, CancellationToken ct)
     {
+        try
+        {
+            var pid = await _portOwnerProbe(port, ct).ConfigureAwait(false);
+            if (pid is null) return null;
+            string name;
+            try { using var p = Process.GetProcessById(pid.Value); name = p.ProcessName; }
+            catch { return $"PID {pid.Value}"; }
+            return $"{name} (PID {pid.Value})";
+        }
+        catch { return null; }
+    }
+
+    private async Task<bool> WaitForPortAsync(int port, TimeSpan timeout, Process process, CancellationToken ct,
+        Func<int, CancellationToken, Task<bool>>? probe = null)
+    {
+        probe ??= _portProbe;
         var deadline = DateTime.UtcNow + timeout;
         while (DateTime.UtcNow < deadline)
         {
             ct.ThrowIfCancellationRequested();
             if (process.HasExited) return false; // died before ever opening the port - stop polling
-            if (await _portProbe(port, ct).ConfigureAwait(false)) return true;
+            if (_fatalLine is not null) return false; // said it failed - its process may linger, it is dead
+            if (await probe(port, ct).ConfigureAwait(false)) return true;
             await Task.Delay(50, ct).ConfigureAwait(false);
         }
         return false;

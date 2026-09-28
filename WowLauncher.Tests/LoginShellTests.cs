@@ -266,6 +266,204 @@ public sealed class LoginShellTests
         Assert.False(vm.Realms[0].IsOnline);
     }
 
+    /// <summary>
+    /// Owner screenshot 2026-09-27: the list showed "Stonetavern · 79 online" while the status line
+    /// under it said "The realm did not answer. You can still sign in." The install also carried three
+    /// private test realms that were switched off, and ANY offline row used to flip the status line.
+    /// The rows say which realm is down; the line only speaks for the list when none answered.
+    /// </summary>
+    [Fact]
+    public async Task OneLiveRealm_AmongOfflineOnes_DoesNotClaimThatNoRealmAnswered()
+    {
+        var (p, f) = Ready(new InitFacts
+        {
+            Realms =
+            [
+                new RealmProbe("stonetavern", "Stonetavern", "play.stonetavern.app", true, 79),
+                new RealmProbe("local", "local", "127.0.0.1", false, 0),
+                new RealmProbe("kronos", "kronos", "kronos.example", false, 0),
+            ],
+        });
+        var vm = Vm(p, f, new FakeAuthGateway("success", TimeSpan.Zero, k => k));
+        vm.BeginPhase1();
+        await WaitUntil(() => p.IsComplete);
+
+        Assert.False(vm.IsRealmUnreachable);
+        Assert.Equal(Localization.Loc.T("Init_Status_Ready"), vm.StatusText);
+        // The rows still tell the truth about each realm.
+        Assert.Contains(vm.Realms, r => r.Name == "Stonetavern" && r.IsOnline);
+        Assert.Contains(vm.Realms, r => r.Name == "local" && r.IsResolved && !r.IsOnline);
+    }
+
+    /// <summary>The login column must never push the sigil ring off the window's top edge or the
+    /// status line off its bottom (owner screenshot 2026-09-27, four realm rows). Checked on the
+    /// shipped XAML: both sit in Auto rows, which cannot be smaller than their content.</summary>
+    [Fact]
+    public void TheSigilAndTheStatusLine_SitInAutoRows_SoAGrowingCardCannotClipThem()
+    {
+        var xaml = System.Xml.Linq.XDocument.Load(Path.Combine(RepoWowLauncherDir(), "Views", "LoginShellWindow.axaml"));
+        System.Xml.Linq.XNamespace av = "https://github.com/avaloniaui";
+        System.Xml.Linq.XNamespace x = "http://schemas.microsoft.com/winfx/2006/xaml";
+        var sigil = xaml.Descendants().Single(e => (string?)e.Attribute(x + "Name") == "Sigil");
+        var grid = sigil.Parent!;
+        var rows = grid.Element(av + "Grid.RowDefinitions")!.Elements(av + "RowDefinition")
+            .Select(r => (string?)r.Attribute("Height")).ToList();
+        int RowOf(System.Xml.Linq.XElement e) => int.Parse((string?)e.Attribute("Grid.Row") ?? "0");
+        var below = grid.Elements().Single(e => ((string?)e.Attribute("Classes") ?? "").Contains("ls-below"));
+
+        Assert.Equal("Auto", rows[RowOf(sigil)]);
+        Assert.Equal("Auto", rows[RowOf(below)]);
+    }
+
+    /// <summary>The ring around the lantern is the start's progress: it moves only when a step really
+    /// ends (done or failed), never on a timer, and rests once every step has ended.</summary>
+    [Fact]
+    public async Task TheRing_FillsPerFinishedStep_AndRestsWhenAllHaveEnded()
+    {
+        var realm = new TaskCompletionSource<string?>();
+        var cdn = new TaskCompletionSource<string?>();
+        var p = new InitPipeline(
+        [
+            Step(LauncherInitSteps.ConfigKey, true),
+            Step(LauncherInitSteps.UpdateKey, true, _ => throw new Exception("no manifest")),   // failed counts as ended
+            Blocked(LauncherInitSteps.RealmKey, true, realm),
+            Blocked(LauncherInitSteps.CdnKey, false, cdn),
+            Step(LauncherInitSteps.InstallsKey, false),
+        ]);
+        var (_, facts) = Ready();
+        var vm = Vm(p, facts, new FakeAuthGateway(FakeAuthGateway.SuccessMode, TimeSpan.Zero, k => k));
+
+        Assert.Equal(0, vm.InitProgress);
+        vm.BeginPhase1();
+        await WaitUntil(() => p.StateOf(LauncherInitSteps.RealmKey) == InitStepState.Running);
+
+        Assert.Equal(2.0 / 5, vm.InitProgress, 9);
+        Assert.False(vm.IsInitComplete);
+
+        realm.SetResult("online");
+        await WaitUntil(() => p.StateOf(LauncherInitSteps.CdnKey) == InitStepState.Running);
+        Assert.Equal(3.0 / 5, vm.InitProgress, 9);
+
+        cdn.SetResult(null);
+        await WaitUntil(() => p.IsComplete);
+        Assert.Equal(1.0, vm.InitProgress, 9);
+        Assert.True(vm.IsInitComplete);
+    }
+
+    /// <summary>Stonetavern shows its players (Elwynn + Barrens); a foreign server, or a count that could
+    /// not be read, says just "online", never "0 online" (kronos showed Stonetavern's 46, 2026-09-28).</summary>
+    [Fact]
+    public void ARealmRow_WithoutACount_SaysOnline_NotZero()
+    {
+        var ours = new RealmStatusRow("Stonetavern");
+        var foreign = new RealmStatusRow("kronos");
+        var down = new RealmStatusRow("down");
+
+        ours.Resolve(true, 61);
+        foreign.Resolve(true, null);
+        down.Resolve(false, null);
+
+        Assert.Equal(Loc.F("Login_Shell_Realm_Online", 61), ours.Detail);
+        Assert.Contains("61", ours.Detail, StringComparison.Ordinal);
+        Assert.Equal(Loc.T("Login_Shell_Realm_OnlineNoCount"), foreign.Detail);
+        Assert.DoesNotContain("0", foreign.Detail, StringComparison.Ordinal);
+        Assert.Equal(Loc.T("Login_Shell_Realm_Offline"), down.Detail);
+        Assert.True(ours.IsResolved && foreign.IsResolved && down.IsResolved);
+    }
+
+    /// <summary>The boot frame draws the lantern before the login shell exists, and the shell takes over
+    /// under it. Same parts, same sizes, or the handover shows a jump.</summary>
+    [Fact]
+    public void TheBootFrameSigil_IsBuiltLikeTheLoginSigil()
+    {
+        static System.Xml.Linq.XElement SigilOf(string file) =>
+            System.Xml.Linq.XDocument.Load(Path.Combine(RepoWowLauncherDir(), "Views", file)).Descendants()
+                .Single(e => (string?)e.Attribute(System.Xml.Linq.XName.Get("Name", "http://schemas.microsoft.com/winfx/2006/xaml")) == "Sigil");
+        static IEnumerable<string> Parts(System.Xml.Linq.XElement sigil) =>
+            sigil.Elements()
+                .Where(e => (string?)e.Attribute(System.Xml.Linq.XName.Get("Name", "http://schemas.microsoft.com/winfx/2006/xaml")) != "SuccessBloom")
+                .Select(e => $"{e.Name.LocalName}:{(string?)e.Attribute("Classes")}:{(string?)e.Attribute("Width")}x{(string?)e.Attribute("Height")}");
+
+        var boot = SigilOf("BootWindow.axaml");
+        var login = SigilOf("LoginShellWindow.axaml");
+
+        Assert.Equal(((string?)login.Attribute("Width"), (string?)login.Attribute("Height")),
+                     ((string?)boot.Attribute("Width"), (string?)boot.Attribute("Height")));
+        Assert.Equal(Parts(login), Parts(boot));
+    }
+
+    /// <summary>The lantern of the boot frame and of the setup page stands where the login card puts its
+    /// own, so the handover does not move it. The login position comes from layout (the card is centred
+    /// with the lantern above it) and was measured with the screenshot switch ("sigil centre" log line):
+    /// 500,101 since the "Remember username" row made the card taller (it was 120, 2026-09-28). 101 minus
+    /// half the 108 lantern is 47. Remeasure and change this number together with the card.</summary>
+    [Fact]
+    public void TheBootAndSetupLantern_StandWhereTheLoginCardPutsIt()
+    {
+        static string MarginOf(string file) =>
+            (string)System.Xml.Linq.XDocument.Load(Path.Combine(RepoWowLauncherDir(), "Views", file)).Descendants()
+                .Single(e => (string?)e.Attribute(System.Xml.Linq.XName.Get("Name", "http://schemas.microsoft.com/winfx/2006/xaml")) == "Sigil")
+                .Attribute("Margin")!;
+
+        Assert.Equal("0,47,0,0", MarginOf("BootWindow.axaml"));
+        Assert.Equal("0,47,0,0", MarginOf("SetupWindow.axaml"));
+    }
+
+    /// <summary>On the setup page a disabled "Set up here" means "not this folder", not "wait": it has to
+    /// look off. The login style keeps a disabled button lit on purpose (its spinner explains the wait),
+    /// and the setup page inherited that, so a blocked folder showed a lit button that did nothing.</summary>
+    [Fact]
+    public void ABlockedSetupFolder_DimsTheButton()
+    {
+        var doc = System.Xml.Linq.XDocument.Load(Path.Combine(RepoWowLauncherDir(), "Views", "SetupWindow.axaml"));
+        var button = doc.Descendants().Single(e => (string?)e.Attribute(System.Xml.Linq.XName.Get("Name", "http://schemas.microsoft.com/winfx/2006/xaml")) == "SetUpButton");
+        Assert.Equal("{Binding IsBlocked}", (string?)button.Attribute("Classes.blocked"));
+
+        var style = doc.Descendants().Single(e => e.Name.LocalName == "Style" && (string?)e.Attribute("Selector") == "Button.ls-action.blocked:disabled");
+        var opacity = style.Elements().Single(e => (string?)e.Attribute("Property") == "Opacity");
+        Assert.True(double.Parse((string)opacity.Attribute("Value")!, System.Globalization.CultureInfo.InvariantCulture) <= 0.5);
+    }
+
+    /// <summary>The ember action button (setup, sign in) stays ember under the pointer. Styling only the
+    /// Button lost to Fluent's template rule and the button turned grey on hover, like a switched-off
+    /// one (E2E 2026-09-28).</summary>
+    [Fact]
+    public void TheActionButton_StaysEmber_UnderThePointer()
+    {
+        var doc = System.Xml.Linq.XDocument.Load(Path.Combine(RepoWowLauncherDir(), "Styles", "LoginShell.axaml"));
+        foreach (var (state, brush) in new[] { ("pointerover", "{StaticResource EmberBright}"), ("pressed", "{StaticResource EmberDim}") })
+        {
+            var style = doc.Descendants().Single(e => e.Name.LocalName == "Style"
+                && (string?)e.Attribute("Selector") == $"Button.ls-action:{state} /template/ ContentPresenter#PART_ContentPresenter");
+            Assert.Equal(brush, (string?)style.Elements().Single(e => (string?)e.Attribute("Property") == "Background").Attribute("Value"));
+        }
+    }
+
+    /// <summary>Tab walks the card top to bottom: name, password, "Remember username", Sign in, then the
+    /// offline link. The contributed checkbox first came with TabIndex 2, the Sign in button's number, so
+    /// Tab from the password could skip the button (2026-09-28). Every number once, in reading order.</summary>
+    [Fact]
+    public void TheLoginCard_HasOneTabStopPerNumber_InReadingOrder()
+    {
+        var xaml = System.Xml.Linq.XDocument.Load(Path.Combine(RepoWowLauncherDir(), "Views", "LoginShellWindow.axaml"));
+        var stops = xaml.Descendants()
+            .Where(e => e.Attribute("TabIndex") is not null)
+            .Select(e => (Name: e.Name.LocalName, Index: int.Parse((string)e.Attribute("TabIndex")!)))
+            .ToList();
+
+        Assert.Equal(stops.Count, stops.Select(s => s.Index).Distinct().Count());
+        Assert.Equal(stops.Select(s => s.Index).Order(), stops.Select(s => s.Index));
+        Assert.Equal(["TextBox", "TextBox", "CheckBox", "Button", "Button"], stops.Select(s => s.Name));
+    }
+
+    private static string RepoWowLauncherDir()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "WowLauncher", "Views", "LoginShellWindow.axaml")))
+            dir = dir.Parent;
+        return Path.Combine(dir?.FullName ?? throw new InvalidOperationException("repo root not found"), "WowLauncher");
+    }
+
     [Fact]
     public async Task SignInIsGatedUntilSteps1To3Completed()
     {

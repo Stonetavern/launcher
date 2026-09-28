@@ -122,7 +122,10 @@ public sealed partial class ShellViewModel : ViewModelBase
         // must never make adding a realm feel broken - the realm is already saved locally either way.
         Settings.RealmsChanged += () => _ = SafeSyncProfileAsync();
         // Any successful add/remove closes the v3 overlay, whichever surface it came from.
-        Settings.RealmsChanged += () => IsAddRealmOpen = false;
+        // Close the realm dialog when an add, a save or a remove went through, not on every change:
+        // RealmsChanged also fires when a realm is merely picked, and closing on that made the
+        // dialog vanish the moment the player chose something in it (owner 2026-09-28).
+        Settings.RealmEditFinished += () => IsAddRealmOpen = false;
 
         // Reflect the restored session (a returning player is already signed in) and react to a fresh
         // sign-in. Both this VM and the login VM are process-lifetime singletons, so the subscription
@@ -297,16 +300,33 @@ public sealed partial class ShellViewModel : ViewModelBase
     public ObservableCollection<RealmEntry> Realms { get; } = new();
 
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(CanRemoveSelectedRealm))]
-    [NotifyCanExecuteChangedFor(nameof(RemoveSelectedRealmCommand))]
+    [NotifyPropertyChangedFor(nameof(CanRemoveSelectedRealm), nameof(CanEditSelectedRealm))]
+    [NotifyCanExecuteChangedFor(nameof(RemoveSelectedRealmCommand), nameof(OpenEditRealmCommand))]
     private RealmEntry _selectedRealm;
 
     /// <summary>The "+" overlay in the rail: name, address, client, optional update source. Own bool
     /// here (not code-behind) - the View stays a thin renderer, this is real UI state.</summary>
     [ObservableProperty] private bool _isAddRealmOpen;
 
-    [RelayCommand] private void OpenAddRealm() => IsAddRealmOpen = true;
+    [RelayCommand]
+    private void OpenAddRealm()
+    {
+        Settings.BeginAdd();
+        IsAddRealmOpen = true;
+    }
+
     [RelayCommand] private void CloseAddRealm() => IsAddRealmOpen = false;
+
+    /// <summary>The gear beside the client toggle: the same dialog, for the realm open in the hero.
+    /// Only a realm the player added; the Stonetavern presets are shipped data.</summary>
+    public bool CanEditSelectedRealm => SelectedRealm is { IsPreset: false };
+
+    [RelayCommand(CanExecute = nameof(CanEditSelectedRealm))]
+    private void OpenEditRealm()
+    {
+        if (SelectedRealm is not { IsPreset: false } realm) return;
+        if (Settings.BeginEdit(realm.Id)) IsAddRealmOpen = true;
+    }
 
     /// <summary>Presets can never be removed - hard check here, not just a hidden button, so no
     /// command path (this one or Settings') can ever drop Elwynn/Barrens off the rail.</summary>
@@ -318,12 +338,11 @@ public sealed partial class ShellViewModel : ViewModelBase
         var target = SelectedRealm;
         if (target is null || target.IsPreset) return; // never trust CanExecute alone for this
 
-        var cfg = _config.Load();
-        cfg.Realms.RemoveAll(r => r.Id == target.Id);
-        if (cfg.SelectedRealmId == target.Id) cfg.SelectedRealmId = RealmRegistry.ElwynnId;
-        _config.Save(cfg);
-
-        ReloadRealms();
+        // Through Settings, the one place that removes a realm: it also leaves the dated grave the
+        // profile sync needs. Removing it here straight from the config (as before) left no grave, so
+        // with "Keep my realms with my account" on, the next sync brought the realm back.
+        if (!Settings.BeginEdit(target.Id)) return;
+        Settings.RemoveSelectedRealmCommand.Execute(null);
         IsAddRealmOpen = false;
     }
 
@@ -349,6 +368,11 @@ public sealed partial class ShellViewModel : ViewModelBase
         // bindings re-walk the whole path, and it is the same shape ReloadRealms already uses.
         var updated = new RealmEntry
         {
+            // Everything the entry carries, not just what the rail shows: the fresh copy used to drop
+            // AddedAt (the sync then read the realm as ancient) and the shipped ArmoryRealms.
+            AddedAt = SelectedRealm.AddedAt,
+            UpdatedAt = SelectedRealm.IsPreset ? SelectedRealm.UpdatedAt : DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            ArmoryRealms = SelectedRealm.ArmoryRealms,
             Id = SelectedRealm.Id,
             Name = SelectedRealm.Name,
             RealmlistAddress = SelectedRealm.RealmlistAddress,

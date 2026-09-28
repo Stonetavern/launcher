@@ -48,10 +48,14 @@ public sealed partial class RealmStatusRow : ViewModelBase
     [ObservableProperty] private bool _isOnline;
     [ObservableProperty] private string _detail = "";
 
-    public void Resolve(bool online, int players)
+    /// <summary>Online with a count ("61 online") only when the realm is ours and the count was read;
+    /// a foreign server, or a count that could not be read, says just "online".</summary>
+    public void Resolve(bool online, int? players)
     {
         IsOnline = online;
-        Detail = online ? Loc.F("Login_Shell_Realm_Online", players) : Loc.T("Login_Shell_Realm_Offline");
+        Detail = !online ? Loc.T("Login_Shell_Realm_Offline")
+            : players is { } n ? Loc.F("Login_Shell_Realm_Online", n)
+            : Loc.T("Login_Shell_Realm_OnlineNoCount");
         IsResolved = true;
     }
 }
@@ -189,12 +193,29 @@ public sealed partial class LoginShellViewModel : ViewModelBase
     public string ButtonBusyText =>
         IsAuthenticating || IsSucceeded ? Loc.T("Login_SigningIn") : Loc.T("Login_Shell_GettingReady");
 
+    /// <summary>How far the start checks are, 0 to 1: finished steps (done or failed) over all steps.
+    /// Drives the ring around the lantern, which fills instead of spinning. Honest by construction:
+    /// it only moves when a step really ends, never on a timer.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsInitComplete))]
+    private double _initProgress;
+
+    /// <summary>Every start check has ended; the ring rests.</summary>
+    public bool IsInitComplete => InitProgress >= 1;
+
     private void OnStepChanged(InitStepReport report) => _post(() => ApplyStep(report));
 
     private void ApplyStep(InitStepReport report)
     {
         if (report.State == InitStepState.Running)
             StatusText = report.StatusText;
+
+        var steps = _pipeline.Steps;
+        if (steps.Count > 0)
+        {
+            var settled = steps.Count(st => _pipeline.StateOf(st.Key) is InitStepState.Done or InitStepState.Failed);
+            InitProgress = (double)settled / steps.Count;
+        }
 
         if (report.Key == LauncherInitSteps.RealmKey && report.State is InitStepState.Done or InitStepState.Failed)
             ApplyRealmFacts();
@@ -218,7 +239,7 @@ public sealed partial class LoginShellViewModel : ViewModelBase
         {
             // The step failed before any probe: every row resolves to offline rather than staying a
             // skeleton forever (a skeleton that never fills is the loading-state lie the spec bans).
-            foreach (var row in Realms) row.Resolve(false, 0);
+            foreach (var row in Realms) row.Resolve(false, null);
             IsRealmUnreachable = true;
             return;
         }
@@ -229,7 +250,12 @@ public sealed partial class LoginShellViewModel : ViewModelBase
             if (row is null) { row = new RealmStatusRow(probe.Name); Realms.Add(row); }
             row.Resolve(probe.Online, probe.PlayerCount);
         }
-        IsRealmUnreachable = probes.Any(p => !p.Online);
+        // "The realm did not answer" is a sentence about THE realm list as a whole. It used to fire when
+        // ANY row was offline, so an install with one live realm (Stonetavern, "79 online") and three
+        // private test realms that were switched off showed the list saying "online" under a status
+        // line saying nobody answered (owner screenshot 2026-09-27). The rows already say which realm
+        // is down; the status line only speaks up when not a single realm answered.
+        IsRealmUnreachable = !probes.Any(p => p.Online);
     }
 
     private void OnHaltRequested(string statusText) => _post(() =>

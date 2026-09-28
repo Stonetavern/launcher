@@ -41,6 +41,16 @@ public partial class LoginShellWindow : Window
     /// still). Never set on an interactive run.</summary>
     public bool HoldAtPhase0 { get; set; }
 
+    /// <summary>
+    /// Where the boot frame's lantern stood, in window coordinates (this window opens at the boot
+    /// frame's position, so the two coordinate spaces are the same). Set: the lantern is drawn there,
+    /// already lit, in this window's first frame and then glides to its place above the card. Null
+    /// (QA stills, a start without boot frame): Phase 0 as specified, lantern at rest in place.
+    /// </summary>
+    public Point? GlideFrom { get; set; }
+
+    private bool _glidePrepared;
+
     public LoginShellWindow()
     {
         AvaloniaXamlLoader.Load(this);
@@ -52,6 +62,7 @@ public partial class LoginShellWindow : Window
 
         UpdateMotion();
         DataContextChanged += (_, _) => Attach(DataContext as LoginShellViewModel);
+        LayoutUpdated += OnFirstLayout;
         Opened += OnOpened;
         Closing += (_, _) => _vm?.Shutdown();
     }
@@ -92,14 +103,53 @@ public partial class LoginShellWindow : Window
             _firstFrameSeen = true;
 
             var ms = StartupClock.Elapsed.TotalMilliseconds;
+            StartupClock.Mark("first-frame");
             Serilog.Log.Information("Login shell: first frame rendered at {Ms:F0} ms after process start", ms);
+            Serilog.Log.Information("Startup clock (login path): {Marks}", StartupClock.Summary());
             Console.Error.WriteLine($"[login-shell] first frame at {ms:F0} ms");
             FirstFrameRendered?.Invoke();
 
             if (HoldAtPhase0) return;
+            ReleaseGlide();
             _vm?.BeginPhase1();
             _ = DecodeBackdropAsync();
         });
+    }
+
+    // ── Boot frame -> login shell: the lantern glides ─────────────────────────────────────────────
+
+    /// <summary>
+    /// After the first layout and before the first frame: put the lantern where the boot frame had
+    /// it, lit, with its transitions switched off so it lands there instead of travelling there.
+    /// </summary>
+    private void OnFirstLayout(object? sender, EventArgs e)
+    {
+        if (this.FindControl<Panel>("Sigil") is not { } sigil || sigil.Bounds.Width <= 0) return;
+        LayoutUpdated -= OnFirstLayout;
+
+        if (sigil.TranslatePoint(new Point(sigil.Bounds.Width / 2, sigil.Bounds.Height / 2), this) is not { } here)
+            return;
+        Serilog.Log.Debug("Login shell: sigil centre {X:F1},{Y:F1}; boot frame had it at {From}", here.X, here.Y, GlideFrom);
+        if (GlideFrom is not { } from) return;
+
+        sigil.Transitions = new Transitions();                       // local, empty: no animation now
+        if (this.FindControl<Border>("Root") is { } root) root.Classes.Add("booted");
+        sigil.RenderTransform = TransformOperations.Parse(
+            string.Create(System.Globalization.CultureInfo.InvariantCulture,
+                $"scale(1.000) translate({from.X - here.X:F1}px,{from.Y - here.Y:F1}px)"));
+        _glidePrepared = true;
+    }
+
+    /// <summary>First frame is on screen with the lantern where the boot frame had it: give the style
+    /// its transitions back and send the lantern home (Motion.Transition, the same curve as Phase 3).</summary>
+    private void ReleaseGlide()
+    {
+        if (!_glidePrepared || this.FindControl<Panel>("Sigil") is not { } sigil) return;
+        _glidePrepared = false;
+        sigil.ClearValue(TransitionsProperty);
+        Dispatcher.UIThread.Post(() =>
+            sigil.RenderTransform = TransformOperations.Parse("scale(1.000) translate(0.0px,0.0px)"),
+            DispatcherPriority.Render);
     }
 
     /// <summary>Decode the backdrop off the UI thread; the gradient stays until it is ready. A decode

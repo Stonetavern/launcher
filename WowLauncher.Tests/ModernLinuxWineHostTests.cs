@@ -45,7 +45,7 @@ public sealed class ModernLinuxWineHostTests
             Logger(),
             geProton: () => null,
             steamCompatClientInstallPath: () => "/home/player/.local/share/Steam",
-            fallback: () => { fallbackConstructions++; return fallback; });
+            fallback: () => { fallbackConstructions++; return fallback; }, pythonOk: () => true);
 
         var result = await host.RunAsync("/bundle/Launcher/Arctium.exe", "/bundle/Launcher", []);
         var path = await host.ToWindowsPathAsync("/bundle/World of Warcraft/_classic_era_");
@@ -71,7 +71,7 @@ public sealed class ModernLinuxWineHostTests
             // that a fabricated Proton binary actually starts a game.
             geProton: () => "/does/not/exist/proton",
             steamCompatClientInstallPath: () => "/home/player/.local/share/Steam",
-            fallback: () => fallback);
+            fallback: () => fallback, pythonOk: () => true);
 
         var exe = Path.Combine(Path.GetTempPath(), "fake-arctium-" + Guid.NewGuid().ToString("N") + ".exe");
         File.WriteAllText(exe, "MZ");
@@ -97,7 +97,7 @@ public sealed class ModernLinuxWineHostTests
             Logger(),
             geProton: () => "/does/not/exist/proton",
             steamCompatClientInstallPath: () => "/home/player/.local/share/Steam",
-            fallback: () => fallback);
+            fallback: () => fallback, pythonOk: () => true);
 
         // ProtonGameLauncher.ToWindowsPathAsync falls back to its own Z: drive mapping when the
         // (fabricated, non-executable) proton path is not usable - it still must not touch the
@@ -106,5 +106,22 @@ public sealed class ModernLinuxWineHostTests
 
         Assert.Equal(@"Z:\bundle\World of Warcraft\_classic_era_", path);
         Assert.Equal(0, fallback.WinePathCount);
+    }
+    /// <summary>Matrix 2026-09-24: GE-Proton11-7's proton script needs Python 3.11+. On Ubuntu 22.04 (3.10)
+    /// it died with an ImportError; the Wine path must start the client there instead.</summary>
+    [Fact]
+    public async Task GeProtonInstalled_ButPythonTooOld_UsesTheFallback()
+    {
+        var fallback = new FakeWineHost();
+        var host = new ModernLinuxWineHost(
+            Logger(),
+            geProton: () => "/does/not/exist/proton",
+            steamCompatClientInstallPath: () => "/home/player/.local/share/Steam",
+            fallback: () => fallback, pythonOk: () => false);
+
+        var result = await host.RunAsync("/bundle/Launcher/Arctium.exe", "/bundle/Launcher", []);
+
+        Assert.True(result.Started);
+        Assert.Equal(1, fallback.RunCount);
     }
 }

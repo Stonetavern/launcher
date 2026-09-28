@@ -23,16 +23,34 @@ public static class LoginShellQa
     public static LoginShellViewModel ViewModelFor(string? state, bool allowSkipSignIn = false)
     {
         var s = (state ?? "ready").Trim().ToLowerInvariant();
-        var never = s is "checking" or "cold";
+        var never = s is "cold";
 
         var facts = new InitFacts();
-        facts.Realms = s == "offline"
-            ? [new RealmProbe("stonetavern", "Stonetavern", "play.stonetavern.app", false, 0)]
-            : [new RealmProbe("stonetavern", "Stonetavern", "play.stonetavern.app", true, 43)];
+        facts.Realms = s switch
+        {
+            "offline" => [new RealmProbe("stonetavern", "Stonetavern", "play.stonetavern.app", false, null)],
+            // The owner's install on 2026-09-27: one live realm and three private ones that are off.
+            // The card grows by three rows — the case that cut the sigil ring off at the top — and the
+            // status line must NOT claim that no realm answered.
+            // Since 2026-09-28 a foreign server that answers says "online" without a number, and
+            // Stonetavern's number is Elwynn and Barrens together.
+            "mixed" =>
+            [
+                new RealmProbe("stonetavern", "Stonetavern", "play.stonetavern.app", true, 61),
+                new RealmProbe("local", "local", "127.0.0.1", false, null),
+                new RealmProbe("localhost-1142", "localhost 1.14.2", "127.0.0.1", false, null),
+                new RealmProbe("kronos", "kronos", "kronos.example", true, null),
+            ],
+            _ => [new RealmProbe("stonetavern", "Stonetavern", "play.stonetavern.app", true, 43)],
+        };
         if (s == "banner") facts.UpdateNotice = new Services.LauncherUpdateNotice("1.9.0", "https://stonetavern.app");
 
+        // "checking" stops at the realm probe: config and update are done, so the ring stands at two
+        // fifths with its ember, the gate is still closed and the rows are still skeletons.
         InitStep Step(string key, string text, bool gates) =>
-            new(key, text, gates, never ? Never : _ => Task.FromResult<string?>(null));
+            new(key, text, gates,
+                never || (s == "checking" && key is not (LauncherInitSteps.ConfigKey or LauncherInitSteps.UpdateKey))
+                    ? Never : _ => Task.FromResult<string?>(null));
 
         var pipeline = new InitPipeline(new List<InitStep>
         {

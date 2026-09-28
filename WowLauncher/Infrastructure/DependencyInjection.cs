@@ -273,7 +273,11 @@ public static class DependencyInjection
                                 // for both the new and the old per-OS tree.
                                 workingDirectory: layout.ProxyDir,
                                 outputLogPath: Path.Combine(
-                                    sp.GetRequiredService<IAppPaths>().LogDir, ProxyOutputLog.FileNameFor("hermes"))),
+                                    sp.GetRequiredService<IAppPaths>().LogDir, ProxyOutputLog.FileNameFor("hermes")),
+                                // REST/realm/instance ports move off anything that already holds them
+                                // (2026-09-27: a local llama-server on 8081 left the client on
+                                // "Connecting"); see HermesPortPlan.
+                                relocateAuxiliaryPorts: true),
                             // The session the launcher hands the live proxy to, so it (alive in the
                             // tray now) reaps it when the game ends instead of leaving it detached.
                             sp.GetRequiredService<IGameSession>(),
@@ -353,7 +357,8 @@ public static class DependencyInjection
                                     // left nothing behind but a flawless launcher log).
                                     outputLogPath: Path.Combine(
                                         sp.GetRequiredService<IAppPaths>().LogDir,
-                                        ProxyOutputLog.FileNameFor("hermes"))),
+                                        ProxyOutputLog.FileNameFor("hermes")),
+                                    relocateAuxiliaryPorts: true),
                             sp.GetRequiredService<IGameSession>(),
                             ActiveRealmAddress(sp));
                     });
@@ -418,11 +423,12 @@ public static class DependencyInjection
                         sp.GetRequiredService<IAppPaths>(),
                         sp.GetRequiredService<Serilog.ILogger>())
                     : OperatingSystem.IsLinux()
-                        ? new LinuxStartScriptProvisioner(sp.GetRequiredService<Serilog.ILogger>())
+                        ? new LinuxStartScriptProvisioner(
+                            sp.GetRequiredService<Serilog.ILogger>(), sp.GetRequiredService<IDownloadService>())
                         : new NoGameRuntimeProvisioner());
                 services.AddSingleton<IServerStatusService>(sp => new ServerStatusService(
                     LongLivedClient(TimeSpan.FromSeconds(10), retries: 1, delay: TimeSpan.FromSeconds(2)),
-                    sp.GetRequiredService<IConfigService>(), sp.GetRequiredService<Serilog.ILogger>()));
+                    sp.GetRequiredService<Serilog.ILogger>()));
                 services.AddSingleton<IClientService, ClientService>();
                 // A problem report is one small POST a player makes at most a few times ever, so the
                 // client is sized for a slow connection rather than throughput, with no retry: a
@@ -629,11 +635,13 @@ public static class DependencyInjection
                             // der Start benutzt. "Automatisch" heisst fuer die beiden Clients nicht
                             // dasselbe, deshalb entscheidet der Client die Vorliebe.
                             var c = cfgSvc.Load();
-                            var d = LinuxRuntimeSelection.ForCurrentUser(
+                            // Same resolver as the Settings line: what really starts (package
+                            // Proton, GE-Proton), the Wine menu only where it is the fallback.
+                            return LinuxRuntimeInUseResolver.ReportLine(LinuxRuntimeInUseResolver.For(
+                                client, c.ClientInstalls.GetValueOrDefault(client.Build),
                                 c.LinuxRuntime, c.LinuxRuntimeCustomPath,
-                                autoPrefersWineGe: client.NeedsModernRuntime);
-                            if (!d.Found) return "none found";
-                            return d.FellBack ? d.Path + " (fallback, the chosen one is not usable)" : d.Path;
+                                GeProtonLocator.FindLatestForCurrentUser, ProtonPython.IsEnoughOnThisMachine,
+                                dir => LinuxStartScript.Find(dir, File.Exists) is not null));
                         });
                 });
                 services.AddSingleton<SettingsViewModel>(sp => new SettingsViewModel(
@@ -643,7 +651,10 @@ public static class DependencyInjection
                     sp.GetRequiredService<StartReport>(),
                     sp.GetRequiredService<IClipboardService>(),
                     sp.GetRequiredService<IUpdateCheckLog>(),
-                    display: sp.GetRequiredService<IClientDisplayService>()));
+                    display: sp.GetRequiredService<IClientDisplayService>(),
+                    supportPackage: new SupportPackage(sp.GetRequiredService<IAppPaths>(),
+                        sp.GetRequiredService<IConfigService>(), sp.GetRequiredService<StartReport>(),
+                        sp.GetRequiredService<Serilog.ILogger>())));
                 services.AddSingleton<ShellViewModel>();
             })
             .Build();

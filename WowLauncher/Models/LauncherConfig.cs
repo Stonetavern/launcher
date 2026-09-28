@@ -160,6 +160,15 @@ public sealed class LauncherConfig
     /// </summary>
     public string? PreferredInstallRoot { get; set; }
 
+    /// <summary>
+    /// The Stonetavern folder a new player chose on the first start (owner 2026-09-28, see
+    /// <see cref="Services.Platform.LibraryNames"/>): the launcher lives in <c>Launcher/</c>, the clients in
+    /// <c>Classic-1.12.1/</c> and <c>Modern-1.14.2/</c>. Null for every player from before: they keep
+    /// <see cref="PreferredInstallRoot"/> and the old folder names, nothing of theirs is moved. A client
+    /// already in <see cref="ClientInstalls"/> is always used where it is, whatever this says.
+    /// </summary>
+    public string? LibraryRoot { get; set; }
+
     // ─── Linux: womit gestartet wird ──────────────────────────────────────────
 
     /// <summary>Which Wine the game is started with on Linux: <c>auto</c> (default) · <c>system</c> ·

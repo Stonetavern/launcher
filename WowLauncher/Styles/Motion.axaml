@@ -30,6 +30,8 @@
         <sys:TimeSpan x:Key="Motion.Shimmer">0:0:2.000</sys:TimeSpan>
         <!-- Sigil-Glow, Atemrhythmus -->
         <sys:TimeSpan x:Key="Motion.Pulse">0:0:4.000</sys:TimeSpan>
+        <!-- Laternenlicht: ein Flackerzyklus mit unregelmaessigen Keyframes (Feuer, kein Sinus). 2026-09-28 -->
+        <sys:TimeSpan x:Key="Motion.Flicker">0:0:3.200</sys:TimeSpan>
         <!-- Sigil-Rotation, Shader-Drift -->
         <sys:TimeSpan x:Key="Motion.Ambient">0:0:20.000</sys:TimeSpan>
 

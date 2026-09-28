@@ -22,7 +22,7 @@
 set -euo pipefail
 export LC_ALL=C TZ=UTC
 
-ROOT="(internal design notes, not published)"
+ROOT="${ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"  # the checkout this script lives in (worktrees too)
 RID="linux-x64"
 PUBLISH_DEFAULT="${ROOT}/WowLauncher/bin/Release/net10.0/${RID}/publish"
 PUBLISH="${PUBLISH:-$PUBLISH_DEFAULT}"

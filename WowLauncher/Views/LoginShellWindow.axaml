@@ -41,6 +41,7 @@
          "leaving" = the Phase-3 storyboard is running. -->
     <Border x:Name="Root" Classes="live"
             Classes.warm="{Binding !IsColdStart}"
+            Classes.kindled="{Binding IsInitComplete}"
             Classes.leaving="{Binding IsTransitioning}"
             Background="{StaticResource StoneBase}" ClipToBounds="True">
         <Grid>
@@ -80,18 +81,35 @@
             </Border>
 
             <!-- ═══ 3. Sigil + 4. Card + 5. Status: the optical column ═══ -->
-            <!-- Rows 9 : Auto : 11 put the card's centre at 45 % of the height (§5.1), at 640 as at
-                 800 (Steam Deck): the geometry is a ratio, not a margin. -->
-            <Grid RowDefinitions="9*,Auto,11*" ColumnDefinitions="*,352,*">
+            <!-- Rows 9 : Auto : Auto : Auto : 11 split the FREE height 9 : 11 above and below the
+                 sigil + card + status block (§5.1), at 640 as at 800 (Steam Deck): the geometry is a
+                 ratio, not a margin.
+                 🔴 Sigil and status line have their own Auto rows since 2026-09-27. Before, the sigil hung
+                 bottom-aligned in the 9* row and the status line sat in the 11* row, so when the card grew
+                 (four realm rows on the owner's install, an update banner, an error line) the star rows
+                 shrank below what they held: the ring was cut off by the window's top edge and the
+                 status line fell off the bottom. An Auto row can never be smaller than its content; the
+                 24 px minimum keeps the ring off the edge when the free space runs out entirely. -->
+            <Grid ColumnDefinitions="*,352,*">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="9*" MinHeight="24"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="11*"/>
+                </Grid.RowDefinitions>
 
-                <!-- The sigil hangs above the card, bottom-aligned to the top row. In Phase 3 it
+                <!-- The sigil sits directly above the card, in its own row. In Phase 3 it
                      travels to the chrome slot top-left (transform from real bounds, code-behind). -->
-                <Panel x:Name="Sigil" Classes="ls-sigil" Grid.Row="0" Grid.Column="1"
+                <Panel x:Name="Sigil" Classes="ls-sigil" Grid.Row="1" Grid.Column="1"
                        Width="108" Height="108"
                        HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,0,0,12"
                        IsHitTestVisible="False" RenderTransformOrigin="50%,50%">
-                    <!-- The light the lantern throws. Breathes on Motion.Pulse. -->
-                    <Border Classes="ls-bloom" Width="108" Height="108">
+                    <!-- The light the lantern throws. Flickers like a flame (Motion.Flicker). -->
+                    <Border Classes="ls-bloom" Width="108" Height="108" RenderTransformOrigin="50%,50%">
+                        <Border.RenderTransform>
+                            <ScaleTransform/>
+                        </Border.RenderTransform>
                         <Border.Background>
                             <RadialGradientBrush Center="50%,50%" GradientOrigin="50%,50%" RadiusX="50%" RadiusY="50%">
                                 <GradientStop Offset="0.0" Color="#5C8A5523"/>
@@ -100,17 +118,14 @@
                             </RadialGradientBrush>
                         </Border.Background>
                     </Border>
-                    <!-- The ring: the sigil placeholder until §12.4 hands over the real mark. It is
-                         the part that turns (Motion.Ambient, linear); the lantern stays upright. -->
-                    <Ellipse Classes="ls-ringtrack" Width="94" Height="94" Stroke="{StaticResource StoneBorder}" StrokeThickness="1"/>
-                    <Ellipse Classes="ls-ring" Width="94" Height="94"
-                             Stroke="{StaticResource EmberDim}" StrokeThickness="1.5"
-                             StrokeDashArray="26,14,4,14,26,90" StrokeLineCap="Round"
-                             RenderTransformOrigin="50%,50%">
-                        <Ellipse.RenderTransform>
-                            <RotateTransform Angle="0"/>
-                        </Ellipse.RenderTransform>
-                    </Ellipse>
+                    <!-- The ring: a hairline track, and over it the arc that fills clockwise as the
+                         start checks end (InitProgress). It used to be a dashed ring turning forever,
+                         which said nothing about how far the start was (owner 2026-09-28). -->
+                    <controls:KindleRing Classes="ls-ring" Width="104" Height="104"
+                                         Value="{Binding InitProgress}"
+                                         Track="{StaticResource StoneBorder}" TrackOpacity="0.6"
+                                         Stroke="{StaticResource EmberBase}" StrokeThickness="1.5"
+                                         Spark="{StaticResource LsSpark}"/>
                     <!-- The success pulse (§6): one stronger beat of the same light, played once
                          from code-behind over Motion.Base. Invisible otherwise. -->
                     <Border x:Name="SuccessBloom" Width="108" Height="108" Opacity="0" IsHitTestVisible="False">
@@ -131,7 +146,7 @@
                 <!-- Banner and card share the centre row, so a banner re-centres the composition
                      instead of climbing out of the frame (measured 2026-09-20: bottom-anchored in
                      the top row it left the window at 640 px). -->
-                <StackPanel Grid.Row="1" Grid.Column="1" Spacing="10">
+                <StackPanel Grid.Row="2" Grid.Column="1" Spacing="10">
 
                 <!-- §5.3 update banner, above the card, Motion.Slow. -->
                 <Border Classes="ls-banner" Classes.shown="{Binding HasUpdateBanner}"
@@ -195,7 +210,7 @@
                         <Button x:Name="SignInButton" Classes="ls-action"
                                 Classes.busy="{Binding IsButtonBusy}"
                                 Command="{Binding SignInCommand}"
-                                IsDefault="True" TabIndex="2" Margin="0,6,0,0">
+                                IsDefault="True" TabIndex="3" Margin="0,6,0,0">
                             <Panel>
                                 <TextBlock Classes="ls-label" Text="{loc:Tr Login_SignIn}"
                                            HorizontalAlignment="Center" VerticalAlignment="Center"/>
@@ -217,7 +232,7 @@
                         <Button Classes="ls-link" Content="{loc:Tr Login_Shell_ContinueOffline}"
                                 Command="{Binding ContinueOfflineCommand}"
                                 IsVisible="{Binding ShowsOfflinePath}"
-                                Margin="0,10,0,0" TabIndex="3"/>
+                                Margin="0,10,0,0" TabIndex="4"/>
 
                         <!-- Realm status: a skeleton row per shipped realm, filled in place (§5.2). -->
                         <Border Height="1" Background="{StaticResource StoneBorder}" Margin="0,14,0,10"/>
@@ -258,13 +273,8 @@
                 </StackPanel>
 
                 <!-- Status line under the card, small, muted, crossfading on Motion.Base (§5.2). -->
-                <StackPanel Classes="ls-below" Grid.Row="2" Grid.Column="1" Margin="0,10,0,0"
+                <StackPanel Classes="ls-below" Grid.Row="3" Grid.Column="1" Margin="0,10,0,0"
                             HorizontalAlignment="Center">
-                    <!-- The area loader for the waits of unknown duration (init steps, sign-in):
-                         above the sentence that says what is being waited for. Fades with
-                         IsWorking; keeps its box so the status line never jumps. -->
-                    <controls:QuantumLoader Classes="ls-loader" Classes.idle="{Binding !IsWorking}"
-                                            Scale="0.5" HorizontalAlignment="Center" Margin="0,0,0,2"/>
                     <TransitioningContentControl Content="{Binding StatusText}" HorizontalAlignment="Center">
                         <TransitioningContentControl.PageTransition>
                             <CrossFade Duration="{StaticResource Motion.Base}"

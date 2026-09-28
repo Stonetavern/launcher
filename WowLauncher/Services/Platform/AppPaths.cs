@@ -64,6 +64,35 @@ internal static class AppPathNames
 }
 
 /// <summary>
+/// Where a client install goes. One rule for Download and the patch engine (they had two copies of it):
+/// <list type="number">
+/// <item>a build already in <see cref="Models.LauncherConfig.ClientInstalls"/> stays where it is, always;</item>
+/// <item>a new build in a player's Stonetavern folder goes to <c>&lt;LibraryRoot&gt;/Classic-1.12.1</c> or
+/// <c>Modern-1.14.2</c> (<see cref="LibraryNames.PackageDir"/>);</item>
+/// <item>otherwise the pre-library rule, unchanged: <c>&lt;PreferredInstallRoot&gt;/WoW-Client-&lt;build&gt;</c>, else
+/// the launcher default.</item>
+/// </list>
+/// </summary>
+public static class ClientInstallTarget
+{
+    public static string For(Models.LauncherConfig cfg, int build, IAppPaths paths, bool freshInstall)
+    {
+        if (!freshInstall && cfg.ClientInstalls.TryGetValue(build, out var recorded) && !string.IsNullOrWhiteSpace(recorded))
+            return recorded;
+        if (freshInstall && !string.IsNullOrWhiteSpace(cfg.LibraryRoot))
+            return Path.Combine(cfg.LibraryRoot!, LibraryNames.PackageDir(build));
+        if (freshInstall && !string.IsNullOrWhiteSpace(cfg.PreferredInstallRoot))
+            return Path.Combine(cfg.PreferredInstallRoot!, AppPathNames.ClientDirName(build));
+        return paths.ClientInstallDir(build);
+    }
+
+    /// <summary>The first download asks where to put clients only for a player with neither a
+    /// Stonetavern folder nor an earlier choice.</summary>
+    public static bool NeedsFolderPicker(Models.LauncherConfig cfg, bool freshInstall) =>
+        freshInstall && string.IsNullOrWhiteSpace(cfg.PreferredInstallRoot) && string.IsNullOrWhiteSpace(cfg.LibraryRoot);
+}
+
+/// <summary>
 /// Factory: hands back the resolver for the current OS. Windows → next-to-exe (byte-gleich);
 /// every other host → XDG. macOS gets XDG as a stopgap until the macOS agent adds its own
 /// <c>~/Library/Application Support</c> impl (AGENTS.md §macOS); the DI split mirrors WP1.

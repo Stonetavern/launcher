@@ -139,7 +139,21 @@ public partial class ShellV3Window : Window
     /// <para>Not a command on the shell view model, on purpose: showing a window is a view concern,
     /// and the view model stays free of <c>Avalonia.Controls</c> so it can be tested headlessly.</para>
     /// </summary>
-    private void OnReportProblemClick(object? sender, RoutedEventArgs e)
+    private void OnReportProblemClick(object? sender, RoutedEventArgs e) => ShowProblemReport();
+
+    // The same dialog from Settings > Troubleshooting. Hooked when the view model arrives, unhooked when
+    // it leaves, so a replaced DataContext never keeps the old one alive through this handler.
+    private ViewModels.SettingsViewModel? _settingsHooked;
+
+    protected override void OnDataContextChanged(EventArgs e)
+    {
+        base.OnDataContextChanged(e);
+        if (_settingsHooked is not null) _settingsHooked.ReportProblemRequested -= ShowProblemReport;
+        _settingsHooked = (DataContext as ViewModels.ShellViewModel)?.Settings;
+        if (_settingsHooked is not null) _settingsHooked.ReportProblemRequested += ShowProblemReport;
+    }
+
+    private void ShowProblemReport()
     {
         if (DataContext is not ViewModels.ShellViewModel shell) return;
 

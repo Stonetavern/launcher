@@ -30,13 +30,6 @@ namespace WowLauncher.Tests;
 /// </summary>
 public sealed class ServerStatusServiceTests
 {
-    private sealed class StubConfig : IConfigService
-    {
-        public LauncherConfig Load() => new() { RealmlistAddress = "play.example.invalid" };
-        public void Save(LauncherConfig config) { }
-        public bool LastSaveSucceeded => true;
-    }
-
     /// <summary>Answers immediately, so a test never depends on a name resolving or a host answering.</summary>
     private sealed class NoPlayersHandler : HttpMessageHandler
     {
@@ -62,7 +55,7 @@ public sealed class ServerStatusServiceTests
     }
 
     private static ServerStatusService New(HttpMessageHandler handler) =>
-        new(new HttpClient(handler), new StubConfig(), new Serilog.LoggerConfiguration().CreateLogger());
+        new(new HttpClient(handler), new Serilog.LoggerConfiguration().CreateLogger());
 
     /// <summary>A port on the loopback that is guaranteed to refuse: bound, read, released.</summary>
     private static int ClosedLoopbackPort()
@@ -126,11 +119,11 @@ public sealed class ServerStatusServiceTests
     public async Task AnUnreachableRealmIsOffline_NotAnException()
     {
         var handler = new NoPlayersHandler();
-        var result = await New(handler).CheckAsync("127.0.0.1", ClosedLoopbackPort());
+        var result = await New(handler).CheckAsync($"127.0.0.1:{ClosedLoopbackPort()}", ["elwynn"]);
 
         Assert.False(result.Online);
-        Assert.Equal(0, result.PlayerCount);
-        Assert.Equal(1, handler.Calls);  // the probe failing must not stop the player count call
+        Assert.Null(result.PlayerCount);  // the API said 404: nothing counted, and null is not zero
+        Assert.Equal(1, handler.Calls);   // the probe failing must not stop the player count call
     }
 
     /// <summary>
@@ -145,7 +138,7 @@ public sealed class ServerStatusServiceTests
         var svc = New(handler);
         using var cts = new CancellationTokenSource();
 
-        var check = svc.CheckAsync("127.0.0.1", ClosedLoopbackPort(), cts.Token);
+        var check = svc.CheckAsync($"127.0.0.1:{ClosedLoopbackPort()}", ["elwynn"], cts.Token);
         await handler.Reached.Task;
         await cts.CancelAsync();
 
@@ -164,4 +157,100 @@ public sealed class ServerStatusServiceTests
             () => New(handler).CheckAsync("127.0.0.1", ClosedLoopbackPort(), cts.Token));
         Assert.Equal(0, handler.Calls);
     }
+
+    // ── Player count: summed over our realms, none for a foreign server ─────────────────────────
+
+    /// <summary>Answers /api/realm?realm=id from a table, and records every URL it was asked for.</summary>
+    private sealed class RealmApiHandler(System.Collections.Generic.Dictionary<string, string> bodies) : HttpMessageHandler
+    {
+        public readonly System.Collections.Concurrent.ConcurrentBag<string> Urls = new();
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            var url = request.RequestUri!.ToString();
+            Urls.Add(url);
+            var realm = System.Web.HttpUtility.ParseQueryString(request.RequestUri.Query)["realm"] ?? "";
+            return Task.FromResult(bodies.TryGetValue(realm, out var body)
+                ? new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(body) }
+                : new HttpResponseMessage(HttpStatusCode.InternalServerError));
+        }
+    }
+
+    private const string Elwynn45 =
+        """{"state":"up","online":45,"checkedAt":1,"presence":{"online":45,"source":"database"}}""";
+    private const string Barrens16 =
+        """{"state":"up","online":16,"checkedAt":1,"presence":{"online":16,"source":"database"}}""";
+
+    /// <summary>
+    /// Stonetavern is one login address with two game realms behind it; the login shell shows ONE number
+    /// for it, both realms together. Before, the count came from the default realm alone (46 while
+    /// Elwynn 45 + Barrens 16 were on, owner screenshot 2026-09-28).
+    /// </summary>
+    [Fact]
+    public async Task OurRealm_CountsEveryGameRealmBehindTheAddress_AsOneSum()
+    {
+        var handler = new RealmApiHandler(new() { ["elwynn"] = Elwynn45, ["barrens"] = Barrens16 });
+
+        var result = await New(handler).CheckAsync($"127.0.0.1:{ClosedLoopbackPort()}", ["elwynn", "barrens"]);
+
+        Assert.Equal(61, result.PlayerCount);
+        Assert.Equal(2, handler.Urls.Count);
+        Assert.Contains(handler.Urls, u => u.EndsWith("/api/realm?realm=elwynn", StringComparison.Ordinal));
+        Assert.Contains(handler.Urls, u => u.EndsWith("/api/realm?realm=barrens", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// A server that is not ours gets up/down and nothing else. It used to be sent Stonetavern's count
+    /// (the API host came from the config's global realmlist, whatever realm was being probed), so
+    /// "kronos" showed "46 online".
+    /// </summary>
+    [Fact]
+    public async Task AForeignServer_GetsNoCount_AndNoRequestIsMadeForOne()
+    {
+        var handler = new RealmApiHandler(new() { ["elwynn"] = Elwynn45 });
+
+        var result = await New(handler).CheckAsync($"127.0.0.1:{ClosedLoopbackPort()}", []);
+        var plain = await New(handler).CheckAsync("127.0.0.1", ClosedLoopbackPort());
+
+        Assert.Null(result.PlayerCount);
+        Assert.Null(plain.PlayerCount);
+        Assert.Empty(handler.Urls);
+    }
+
+    /// <summary>A sum with a hole in it is a smaller number presented as the total: if one realm cannot
+    /// be counted, there is no number at all.</summary>
+    [Fact]
+    public async Task OneRealmUncountable_MeansNoNumber_NotAPartialSum()
+    {
+        var failing = new RealmApiHandler(new() { ["elwynn"] = Elwynn45 });   // barrens answers 500
+        var nullPresence = new RealmApiHandler(new()
+        {
+            ["elwynn"] = Elwynn45,
+            ["barrens"] = """{"state":"up","online":null,"checkedAt":1,"presence":{"online":null,"source":"database"}}""",
+        });
+
+        Assert.Null((await New(failing).CheckAsync("127.0.0.1:1", ["elwynn", "barrens"])).PlayerCount);
+        Assert.Null((await New(nullPresence).CheckAsync("127.0.0.1:1", ["elwynn", "barrens"])).PlayerCount);
+    }
+
+    /// <summary>The database presence is the number for Barrens (the web tier cannot see its world
+    /// port); it wins over the top-level field when both are sent.</summary>
+    [Fact]
+    public async Task ThePresenceCount_WinsOverTheTopLevelNumber()
+    {
+        var handler = new RealmApiHandler(new()
+        {
+            ["barrens"] = """{"state":"unknown","online":0,"checkedAt":1,"presence":{"online":16,"source":"database"}}""",
+        });
+
+        Assert.Equal(16, (await New(handler).CheckAsync("127.0.0.1:1", ["barrens"])).PlayerCount);
+    }
+
+    [Theory]
+    [InlineData("play.stonetavern.app", "stonetavern.app")]
+    [InlineData("PLAY.stonetavern.app", "stonetavern.app")]
+    [InlineData("stonetavern.app", "stonetavern.app")]
+    [InlineData("replay.example.org", "replay.example.org")]   // only the prefix goes, not every "play."
+    [InlineData("", "")]
+    public void TheApiHost_IsTheLoginHostWithoutItsPlayPrefix(string login, string expected)
+        => Assert.Equal(expected, ServerStatusService.ApiHostFor(login));
 }

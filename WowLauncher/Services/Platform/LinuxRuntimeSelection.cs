@@ -251,6 +251,7 @@ internal sealed class ModernLinuxWineHost : IWineHost
     private readonly Func<string?> _geProton;
     private readonly Func<string> _steamCompatClientInstallPath;
     private readonly Func<IWineHost> _fallback;
+    private readonly Func<bool> _pythonOk;
 
     /// <param name="geProton">Resolves the newest GE-Proton <c>proton</c> script, or null - normally
     /// <see cref="GeProtonLocator.FindLatestForCurrentUser"/>, injectable so the choice is testable
@@ -263,9 +264,10 @@ internal sealed class ModernLinuxWineHost : IWineHost
     /// found" behaves EXACTLY as it did before this class existed.</param>
     public ModernLinuxWineHost(
         Serilog.ILogger logger, Func<string?> geProton, Func<string> steamCompatClientInstallPath,
-        Func<IWineHost> fallback)
+        Func<IWineHost> fallback, Func<bool>? pythonOk = null)
     {
         _logger = logger;
+        _pythonOk = pythonOk ?? ProtonPython.IsEnoughOnThisMachine;
         _geProton = geProton;
         _steamCompatClientInstallPath = steamCompatClientInstallPath;
         _fallback = fallback;
@@ -280,6 +282,13 @@ internal sealed class ModernLinuxWineHost : IWineHost
     private IWineHost Resolve()
     {
         var proton = _geProton();
+        if (!string.IsNullOrEmpty(proton) && !_pythonOk())
+        {
+            // GE-Proton's proton script needs Python 3.11+ (matrix 2026-09-24, Ubuntu 22.04 = 3.10).
+            _logger.Warning("GE-Proton at {Path} needs Python {Min} or newer; this system has less - using Wine instead",
+                proton, ProtonPython.Minimum);
+            proton = null;
+        }
         if (!string.IsNullOrEmpty(proton))
         {
             _logger.Information("Modern Linux runtime: GE-Proton ({Path})", proton);

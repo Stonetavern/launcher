@@ -785,6 +785,36 @@
 
          Beim Hover hebt sich das ungewaehlte Segment leicht an. Das ist die eigentliche Antwort auf
          "sieht nicht klickbar aus": eine Flaeche, die auf den Zeiger reagiert, ist ein Schalter. ═══ -->
+    <!-- Small square icon buttons beside the client toggle (open folder, edit realm): the same
+         surface, hairline and height as the toggle, so the row reads as one control strip. -->
+    <Style Selector="Button.v3iconbtn">
+        <Setter Property="Width" Value="32"/>
+        <Setter Property="Height" Value="32"/>
+        <Setter Property="Padding" Value="0"/>
+        <Setter Property="Background" Value="{StaticResource StoneSurface}"/>
+        <Setter Property="BorderBrush" Value="{StaticResource BorderHairline}"/>
+        <Setter Property="BorderThickness" Value="1"/>
+        <Setter Property="CornerRadius" Value="{StaticResource RadiusMd}"/>
+        <Setter Property="HorizontalContentAlignment" Value="Center"/>
+        <Setter Property="VerticalContentAlignment" Value="Center"/>
+        <Setter Property="VerticalAlignment" Value="Center"/>
+        <Setter Property="Cursor" Value="Hand"/>
+    </Style>
+    <Style Selector="Button.v3iconbtn:pointerover /template/ ContentPresenter">
+        <Setter Property="Background" Value="{StaticResource StoneHover}"/>
+        <Setter Property="BorderBrush" Value="{StaticResource BorderHairline}"/>
+    </Style>
+    <Style Selector="Button.v3iconbtn Path">
+        <Setter Property="Stroke" Value="{StaticResource ParchmentSecondary}"/>
+        <Setter Property="StrokeThickness" Value="1.2"/>
+        <Setter Property="StrokeJoin" Value="Round"/>
+        <Setter Property="Width" Value="16"/>
+        <Setter Property="Height" Value="16"/>
+    </Style>
+    <Style Selector="Button.v3iconbtn:pointerover Path">
+        <Setter Property="Stroke" Value="{StaticResource ParchmentPrimary}"/>
+    </Style>
+
     <Style Selector="ListBox.v3clienttoggle">
         <Setter Property="Background" Value="{StaticResource StoneSurface}"/>
         <Setter Property="BorderBrush" Value="{StaticResource BorderHairline}"/>

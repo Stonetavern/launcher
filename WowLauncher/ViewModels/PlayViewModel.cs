@@ -443,6 +443,9 @@ public sealed partial class PlayViewModel : ViewModelBase
 
     partial void OnSelectedClientChoiceChanged(ClientChoice value)
     {
+        OnPropertyChanged(nameof(ClientFolder));
+        OnPropertyChanged(nameof(HasClientFolder));
+        OpenClientFolderCommand.NotifyCanExecuteChanged();
         if (_suppressExpansionChange || value is null) return;
 
         if (!value.IsAvailable)
@@ -797,6 +800,48 @@ public sealed partial class PlayViewModel : ViewModelBase
     partial void OnStateChanged(LauncherState value)
     {
         if (value != LauncherState.Ready) ReadyDetail = "";
+        OnPropertyChanged(nameof(ClientFolder));
+        OnPropertyChanged(nameof(HasClientFolder));
+        OpenClientFolderCommand.NotifyCanExecuteChanged();
+    }
+
+    /// <summary>The folder of the active client, where <c>Interface/AddOns</c> and <c>WTF</c> live (owner
+    /// 2026-09-28, hero point 1: "open the game folder quickly"). The recorded install, so it is right
+    /// for every player: in the Stonetavern folder, next to an old exe, or wherever a player pointed the
+    /// launcher. Null when this build is not installed or the folder is gone.</summary>
+    public string? ClientFolder
+    {
+        get
+        {
+            try
+            {
+                var build = SelectedClientChoice.Client.Build;
+                return _config.Load().ClientInstalls.TryGetValue(build, out var dir)
+                       && !string.IsNullOrWhiteSpace(dir) && Directory.Exists(dir) ? dir : null;
+            }
+            catch (Exception)
+            {
+                return null;
+            }
+        }
+    }
+
+    public bool HasClientFolder => ClientFolder is not null;
+
+    [RelayCommand(CanExecute = nameof(HasClientFolder))]
+    private void OpenClientFolder()
+    {
+        if (ClientFolder is not { } dir) return;
+        try
+        {
+            // The file manager of the desktop: Explorer, Finder, or whatever xdg-open picks.
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(dir) { UseShellExecute = true });
+            _log.Information("Opened the client folder {Dir}", dir);
+        }
+        catch (Exception ex)
+        {
+            _log.Warning(ex, "Could not open the client folder {Dir}", dir);
+        }
     }
 
     /// <summary>Concrete failure text from the platform launcher (stub/Wine/Process.Start) — shown
@@ -1575,7 +1620,7 @@ public sealed partial class PlayViewModel : ViewModelBase
                 var status = await _srv.CheckAsync(realmlist, ct: ct);
                 if (ct.IsCancellationRequested) return; // a newer expansion pick superseded us
                 Realm = status.Online ? RealmState.Online : RealmState.Offline;
-                PlayerCount = status.PlayerCount;
+                PlayerCount = status.PlayerCount ?? 0;
             }
             catch (System.OperationCanceledException)
             {
@@ -1949,7 +1994,7 @@ public sealed partial class PlayViewModel : ViewModelBase
         var isFreshInstall = !repair && !(cfgPre.ClientInstalls.TryGetValue(build, out var already)
                                            && !string.IsNullOrWhiteSpace(already));
 
-        if (isFreshInstall && string.IsNullOrWhiteSpace(cfgPre.PreferredInstallRoot))
+        if (WowLauncher.Services.Platform.ClientInstallTarget.NeedsFolderPicker(cfgPre, isFreshInstall))
         {
             var picked = await _folderPicker.PickFolderAsync(Loc.T("Play_Picker_Title"));
             if (picked is null)
@@ -1961,13 +2006,7 @@ public sealed partial class PlayViewModel : ViewModelBase
             _config.Save(cfgPre);
         }
 
-        var installRoot = isFreshInstall
-            ? (!string.IsNullOrWhiteSpace(cfgPre.PreferredInstallRoot)
-                ? Path.Combine(cfgPre.PreferredInstallRoot!, WowLauncher.Services.Platform.AppPathNames.ClientDirName(build))
-                : _paths.ClientInstallDir(build))
-            : (cfgPre.ClientInstalls.TryGetValue(build, out var recorded) && !string.IsNullOrWhiteSpace(recorded)
-                ? recorded
-                : _paths.ClientInstallDir(build));
+        var installRoot = WowLauncher.Services.Platform.ClientInstallTarget.For(cfgPre, build, _paths, isFreshInstall);
 
         // Same Stolperfallen-Preflight gate as the ZIP path (release 1.8.11) — a manifest entry
         // carrying the v2 fields must not skip elevation/OneDrive/path-length checks just because it
@@ -2056,8 +2095,10 @@ public sealed partial class PlayViewModel : ViewModelBase
         }
         catch (System.Exception ex)
         {
+            // 🔴 Not "unpacking failed" (until 2026-09-24): an exception here is not an unpack - the
+            // production run against serial 34 threw from the foreign-file report (Wine symlink into /).
             _log.Error(ex, "patch: engine threw for build {Build}", build);
-            DownloadErrorDetail = Loc.T("Play_Error_ExtractFailed");
+            DownloadErrorDetail = Loc.T("Play_Error_PatchFailed");
             State = LauncherState.DownloadError;
             return;
         }
@@ -2337,7 +2378,7 @@ public sealed partial class PlayViewModel : ViewModelBase
         // has a ClientInstalls entry): ask the player where to put it. Exactly once per player, not once
         // per build — a PreferredInstallRoot already on record is reused silently below instead of
         // asking again.
-        if (isFreshInstall && string.IsNullOrWhiteSpace(cfgPre.PreferredInstallRoot))
+        if (WowLauncher.Services.Platform.ClientInstallTarget.NeedsFolderPicker(cfgPre, isFreshInstall))
         {
             var picked = await _folderPicker.PickFolderAsync(Loc.T("Play_Picker_Title"));
             if (picked is null)
@@ -2356,13 +2397,7 @@ public sealed partial class PlayViewModel : ViewModelBase
         // above changed it); a genuine first install goes under the player's chosen root — one
         // sub-folder per build (AppPathNames.ClientDirName) so two builds never collide — or the
         // launcher's own default when no root was ever chosen (headless/cancelled-then-retried-later).
-        var installRoot = isFreshInstall
-            ? (!string.IsNullOrWhiteSpace(cfgPre.PreferredInstallRoot)
-                ? Path.Combine(cfgPre.PreferredInstallRoot!, WowLauncher.Services.Platform.AppPathNames.ClientDirName(build))
-                : _paths.ClientInstallDir(build))
-            : (cfgPre.ClientInstalls.TryGetValue(build, out var recorded) && !string.IsNullOrWhiteSpace(recorded)
-                ? recorded
-                : _paths.ClientInstallDir(build));
+        var installRoot = WowLauncher.Services.Platform.ClientInstallTarget.For(cfgPre, build, _paths, isFreshInstall);
 
         // 🔴 Stolperfallen-Preflight (release 1.8.11): elevation, a system/synced/protected folder, and
         // an install path too long for this 32-bit legacy client — caught HERE, before the first byte

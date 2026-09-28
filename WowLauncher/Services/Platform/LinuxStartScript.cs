@@ -114,15 +114,29 @@ public sealed class LinuxStartScriptProvisioner : IGameRuntimeProvisioner
     private readonly Func<string, bool> _fileExists;
     private readonly Func<string, string, Action<string>?, CancellationToken, Task<(int, IReadOnlyList<string>)>> _run;
 
-    public LinuxStartScriptProvisioner(Serilog.ILogger log) : this(log, null, null) { }
+    private readonly Func<string?> _findGeProton;
+    private readonly PinnedGeProtonInstaller? _geProtonInstaller;
+    private readonly Func<bool> _pythonOk;
+
+    public LinuxStartScriptProvisioner(Serilog.ILogger log, IDownloadService? download = null)
+        : this(log, null, null, GeProtonLocator.FindLatestForCurrentUser,
+            download is null ? null : new PinnedGeProtonInstaller(
+                download, log, PinnedGeProton.RunnersDirForCurrentUser(),
+                PinnedGeProton.CacheDir(Environment.GetEnvironmentVariable, PinnedGeProton.HomeDir()),
+                GeProtonLocator.FindLatestForCurrentUser)) { }
 
     /// <summary>Test seam: file probe and script runner injectable, so the decision and the message
     /// handling are provable without bash, a network or 1.2 GB.</summary>
     internal LinuxStartScriptProvisioner(
         Serilog.ILogger log, Func<string, bool>? fileExists,
-        Func<string, string, Action<string>?, CancellationToken, Task<(int, IReadOnlyList<string>)>>? run)
+        Func<string, string, Action<string>?, CancellationToken, Task<(int, IReadOnlyList<string>)>>? run,
+        Func<string?>? findGeProton = null, PinnedGeProtonInstaller? geProtonInstaller = null,
+        Func<bool>? pythonOk = null)
     {
         _log = log;
+        _pythonOk = pythonOk ?? ProtonPython.IsEnoughOnThisMachine;
+        _findGeProton = findGeProton ?? (() => null);
+        _geProtonInstaller = geProtonInstaller;
         _fileExists = fileExists ?? File.Exists;
         _run = run ?? (async (script, arg, onOut, ct) =>
             await LinuxStartScript.RunAsync(script, arg, onOut, timeout: null, ct).ConfigureAwait(false));
@@ -135,14 +149,26 @@ public sealed class LinuxStartScriptProvisioner : IGameRuntimeProvisioner
         IProgress<DownloadProgress>? progress = null, IProgress<string>? step = null, CancellationToken ct = default)
         => Task.FromResult(RuntimeReadiness.Ready);
 
+    /// <summary>1.12.1: its START.sh prepares the runtime. Modern client (2026-09-23): the pinned
+    /// GE-Proton (<see cref="PinnedGeProton"/>), fetched when no GE-Proton is installed at all, so the
+    /// modern client runs under Proton like 1.12 instead of falling back to system Wine.</summary>
     public bool NeedsRuntimeForExe(string exePath) =>
-        !ClientVersion.ExeNameNeedsModernRuntime(Path.GetFileName(exePath))
-        && LinuxStartScript.Find(Path.GetDirectoryName(exePath), _fileExists) is not null;
+        ClientVersion.ExeNameNeedsModernRuntime(Path.GetFileName(exePath))
+            ? _geProtonInstaller is not null && _findGeProton() is null && _pythonOk()
+            : LinuxStartScript.Find(Path.GetDirectoryName(exePath), _fileExists) is not null;
 
     public async Task<RuntimeReadiness> EnsureForExeAsync(
         string exePath, IProgress<DownloadProgress>? progress = null, IProgress<string>? step = null,
         CancellationToken ct = default)
     {
+        if (ClientVersion.ExeNameNeedsModernRuntime(Path.GetFileName(exePath)))
+        {
+            // Python too old for GE-Proton: nothing to fetch, the Wine path starts the client.
+            return _geProtonInstaller is null || !_pythonOk()
+                ? RuntimeReadiness.Ready
+                : await _geProtonInstaller.EnsureAsync(progress, step, ct).ConfigureAwait(false);
+        }
+
         var script = LinuxStartScript.Find(Path.GetDirectoryName(exePath), _fileExists);
         if (script is null) return RuntimeReadiness.Ready;
 

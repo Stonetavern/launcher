@@ -144,7 +144,12 @@
                                Foreground="{StaticResource ParchmentFaint}"/>
                 </StackPanel>
 
+                <!-- Owner 2026-09-28 asked "what is this?" about the bare checkbox: it needs to say WHAT
+                     travels (the realms a player added) and WITH WHAT (the account). Key bindings and
+                     graphics settings join this section (TODO C9). -->
                 <StackPanel Spacing="6">
+                    <TextBlock Text="{loc:Tr Settings_SyncHeader}" FontSize="13"
+                               Foreground="{StaticResource ParchmentSecondary}"/>
                     <CheckBox Content="{loc:Tr Settings_ProfileSync}"
                               IsChecked="{Binding ProfileSyncEnabled}"/>
                     <TextBlock Text="{loc:Tr Settings_ProfileSync_Hint}" FontSize="12" TextWrapping="Wrap"
@@ -177,6 +182,31 @@
                                Foreground="{StaticResource ParchmentPrimary}"/>
                     <TextBlock Text="{Binding ReleaseCheckLine}" FontSize="12" TextWrapping="Wrap"
                                Foreground="{StaticResource ParchmentFaint}"/>
+                </StackPanel>
+
+                <!-- Troubleshooting (owner 2026-09-28, TODO C4): the problem report, the log folder, and
+                     one file with every log we have, the realm proxy logs included. The start report
+                     below belongs to the same job. -->
+                <StackPanel Spacing="8" IsVisible="{Binding ShowTroubleshooting}">
+                    <TextBlock Text="{loc:Tr Settings_Troubleshooting}" FontSize="15"
+                               FontFamily="{StaticResource FontDisplay}"
+                               Foreground="{StaticResource ParchmentPrimary}"/>
+                    <TextBlock Text="{loc:Tr Settings_Troubleshooting_Hint}" FontSize="12" TextWrapping="Wrap"
+                               Foreground="{StaticResource ParchmentFaint}"/>
+                    <WrapPanel Orientation="Horizontal">
+                        <Button Content="{loc:Tr Settings_SupportPackage}" Margin="0,0,10,8"
+                                Command="{Binding SaveSupportPackageCommand}"
+                                AutomationProperties.Name="{loc:Tr Settings_SupportPackage}"/>
+                        <Button Classes="ghost" Content="{loc:Tr Play_ReportProblem}" Margin="0,0,10,8"
+                                Command="{Binding ReportProblemCommand}"
+                                AutomationProperties.Name="{loc:Tr Play_ReportProblem_A11y}"/>
+                        <Button Classes="ghost" Content="{loc:Tr Settings_OpenLogFolder}" Margin="0,0,10,8"
+                                Command="{Binding OpenLogFolderCommand}"
+                                AutomationProperties.Name="{loc:Tr Settings_OpenLogFolder}"/>
+                    </WrapPanel>
+                    <TextBlock Text="{Binding SupportPackageNote}" IsVisible="{Binding HasSupportPackageNote}"
+                               FontSize="12" TextWrapping="Wrap"
+                               Foreground="{StaticResource ParchmentPrimary}"/>
                 </StackPanel>
 
                 <!-- Startbericht zum Kopieren. Steht bewusst UNTER der Laufzeit-Wahl: was dort

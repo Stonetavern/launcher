@@ -9,7 +9,7 @@
 # Output: WowLauncher/bin/Release/net10.0/linux-x64/publish/
 set -euo pipefail
 
-ROOT="(internal design notes, not published)"
+ROOT="${ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"  # the checkout this script lives in (worktrees too)
 PROJ="${ROOT}/WowLauncher/WowLauncher.csproj"
 RID="linux-x64"
 

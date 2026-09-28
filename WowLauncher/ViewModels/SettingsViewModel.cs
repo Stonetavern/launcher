@@ -37,8 +37,10 @@ public sealed partial class SettingsViewModel : ViewModelBase
         IDesktopIntegrationService? desktopIntegration = null,
         StartReport? startReport = null, IClipboardService? clipboard = null,
         IUpdateCheckLog? checkLog = null, Func<string>? runningVersion = null,
-        Func<DateTimeOffset>? now = null, IClientDisplayService? display = null)
+        Func<DateTimeOffset>? now = null, IClientDisplayService? display = null,
+        SupportPackage? supportPackage = null)
     {
+        _supportPackage = supportPackage;
         _display = display;
         _checkLog = checkLog;
         _now = now ?? (() => DateTimeOffset.UtcNow);
@@ -147,7 +149,9 @@ public sealed partial class SettingsViewModel : ViewModelBase
 
     /// <summary>Client builds a realm can be bound to. Grouped by era in the UI, but always labelled
     /// with the exact version and build: "Vanilla" alone is ambiguous now that it means 1.12.1 or 1.14.2.</summary>
-    public IReadOnlyList<ClientVersion> ClientVersions => ClientVersion.All;
+    /// <para>Only the builds we ship (owner 2026-09-28: "we only have 1.14.2 and 1.12 classic"): the
+    /// dialog listed Burning Crusade 2.4.3 and Wrath 3.3.5a as well, which no player can download.</para>
+    public IReadOnlyList<ClientVersion> ClientVersions => AddableClientVersions;
 
     /// <summary>Builds a NEW realm can actually be bound to. TBC/Wrath are real vocabulary
     /// (<see cref="ClientVersion.IsAvailable"/> exists so the rest of the app can already talk about
@@ -177,6 +181,7 @@ public sealed partial class SettingsViewModel : ViewModelBase
         {
             if (SelectedRealm is null || value is null || SelectedRealm.ClientKey == value.Key) return;
             SelectedRealm.ClientKey = value.Key;
+            SelectedRealm.UpdatedAt = Now();
             PersistRealms();
             OnPropertyChanged();
             OnPropertyChanged(nameof(SelectedRealmClientLine));
@@ -219,6 +224,7 @@ public sealed partial class SettingsViewModel : ViewModelBase
             SelectedRealm.ClientKeys = value
                 ? AddableClientVersions.Select(c => c.Key).ToList()
                 : null;
+            SelectedRealm.UpdatedAt = Now();
 
             // Der gebundene Client bleibt, was er war - er bestimmt weiterhin, womit gestartet wird.
             // Ihn hier mitzuaendern hiesse, dass ein Haken die Spielflaeche umstellt, ohne dass
@@ -230,9 +236,33 @@ public sealed partial class SettingsViewModel : ViewModelBase
         }
     }
 
+    private bool _refreshingRealms;
+
+    /// <summary>Rebuild <see cref="Realms"/> from the config. The list was built once, at start, and
+    /// never again: a realm that arrived later through the profile sync (which writes the config
+    /// directly) was on the rail but not here, so it could not be edited or removed. Keeps the
+    /// selection by id and raises nothing: re-reading is not a change.</summary>
+    public void RefreshRealmsFromConfig()
+    {
+        var c = _config.Load();
+        var keepId = SelectedRealm?.Id ?? c.SelectedRealmId;
+        _refreshingRealms = true;
+        try
+        {
+            Realms.Clear();
+            foreach (var r in RealmRegistry.All(c)) Realms.Add(r);
+            SelectedRealm = Realms.FirstOrDefault(r => string.Equals(r.Id, keepId, System.StringComparison.OrdinalIgnoreCase))
+                            ?? Realms[0];
+        }
+        finally
+        {
+            _refreshingRealms = false;
+        }
+    }
+
     partial void OnSelectedRealmChanged(RealmEntry value)
     {
-        if (value is null) return;
+        if (value is null || _refreshingRealms) return;
         var c = _config.Load();
         c.SelectedRealmId = value.Id;
         _config.Save(c);
@@ -317,6 +347,76 @@ public sealed partial class SettingsViewModel : ViewModelBase
         NewRealmClient = ClientVersion.Default;
 
         RealmsChanged?.Invoke();
+        RealmEditFinished?.Invoke();
+    }
+
+    // ─── Edit a realm (the gear beside the client toggle, TODO C5) ────────────────────────────
+    // The player could add and remove a realm, but not change one: a typo in an address meant
+    // removing the realm and adding it again (owner 2026-09-28: "no button to adjust the servers").
+    // Name, address and update source are text, so they apply on Save; the client and "both clients"
+    // are choices and apply at once, as they always did.
+
+    /// <summary>Raised after an add, a save or a remove went through: the dialog closes on this, and
+    /// only on this. It used to close on every <see cref="RealmsChanged"/>, which also fires when a
+    /// realm is merely picked, so the realm dropdown in the dialog closed the dialog under the player.</summary>
+    public event Action? RealmEditFinished;
+
+    [ObservableProperty] private bool _isEditingRealm;
+    [ObservableProperty] private string _editRealmName = "";
+    [ObservableProperty] private string _editRealmAddress = "";
+    [ObservableProperty] private string _editRealmManifestUrl = "";
+
+    /// <summary>Open the dialog for adding: an empty form.</summary>
+    public void BeginAdd()
+    {
+        IsEditingRealm = false;
+        AddRealmError = null;
+    }
+
+    /// <summary>Open the dialog for the realm with this id (the one open in the hero). Presets are not
+    /// editable here; their address and builds are shipped data.</summary>
+    public bool BeginEdit(string realmId)
+    {
+        RefreshRealmsFromConfig();
+        var realm = Realms.FirstOrDefault(r => string.Equals(r.Id, realmId, System.StringComparison.OrdinalIgnoreCase));
+        if (realm is null || realm.IsPreset) return false;
+        if (!ReferenceEquals(SelectedRealm, realm)) SelectedRealm = realm;
+        EditRealmName = realm.Name;
+        EditRealmAddress = realm.RealmlistAddress;
+        EditRealmManifestUrl = realm.ManifestUrl ?? "";
+        AddRealmError = null;
+        IsEditingRealm = true;
+        return true;
+    }
+
+    [RelayCommand]
+    private void SaveRealm()
+    {
+        AddRealmError = null;
+        var target = SelectedRealm;
+        if (target is null || target.IsPreset) return;
+        if (string.IsNullOrWhiteSpace(EditRealmName) || string.IsNullOrWhiteSpace(EditRealmAddress)) return;
+        if (!ClientService.IsValidRealmlistAddress(EditRealmAddress.Trim()))
+        {
+            AddRealmError = Loc.T("Settings_Error_BadAddress");
+            return;
+        }
+        if (!string.IsNullOrWhiteSpace(EditRealmManifestUrl) && !ManifestService.IsValidManifestUrl(EditRealmManifestUrl))
+        {
+            AddRealmError = Loc.T("Settings_Error_BadManifestUrl");
+            return;
+        }
+
+        // Same id: the rail tile, the addon set and the synced profile all hang off it.
+        target.Name = EditRealmName.Trim();
+        target.RealmlistAddress = EditRealmAddress.Trim();
+        target.ManifestUrl = string.IsNullOrWhiteSpace(EditRealmManifestUrl) ? null : EditRealmManifestUrl.Trim();
+        target.UpdatedAt = Now();
+        PersistRealms();
+        OnPropertyChanged(nameof(SelectedRealmAddress));
+        IsEditingRealm = false;
+        RealmsChanged?.Invoke();
+        RealmEditFinished?.Invoke();
     }
 
     [RelayCommand]
@@ -336,7 +436,9 @@ public sealed partial class SettingsViewModel : ViewModelBase
 
         Realms.Remove(target);
         SelectedRealm = Realms.FirstOrDefault(r => r.Id == c.SelectedRealmId) ?? Realms[0];
+        IsEditingRealm = false;
         RealmsChanged?.Invoke();
+        RealmEditFinished?.Invoke();
     }
 
     /// <summary>Write the in-memory realm list back. Presets are only persisted once edited, so a fresh
@@ -451,21 +553,39 @@ public sealed partial class SettingsViewModel : ViewModelBase
         {
             if (!ShowLinuxRuntime) return "";
             var stored = LinuxRuntimeSelection.ToConfigValue(LinuxRuntime);
-            var legacy = LinuxRuntimeSelection.ForCurrentUser(stored, LinuxRuntimeCustomPath,
-                autoPrefersWineGe: false);
-            var modern = LinuxRuntimeSelection.ForCurrentUser(stored, LinuxRuntimeCustomPath,
-                autoPrefersWineGe: true);
+            var installs = _config.Load().ClientInstalls;
+            var classicClient = ClientVersion.ByKey("1.12.1");
+            var modernClient = ClientVersion.ByKey("1.14.2");
 
-            // Beide Clients auf derselben Binärdatei: ein Satz genügt, zwei identische Zeilen wären
-            // Lärm.
-            if (legacy.Path == modern.Path && legacy.Reason == modern.Reason)
-                return Describe(legacy);
+            // 🔴 What really starts, not what the menu says (owner 2026-09-28: "we run on Proton now,
+            // is this window still right?"). It was not: the line read "In use: /usr/bin/wine" while
+            // both clients started on Proton. The menu below is the fallback and says so. The answer
+            // comes from the same resolver the start report uses (LinuxRuntimeInUseResolver).
+            string Line(ClientVersion c) => Text(LinuxRuntimeInUseResolver.For(
+                c, installs.GetValueOrDefault(c.Build), stored, LinuxRuntimeCustomPath,
+                FindGeProton, ProtonPythonOk, HasStartScript));
+            var classicLabel = classicClient.ShortLabel;
+            var modernLabel = modernClient.ShortLabel;
+            var classic = Line(classicClient);
+            var modernText = Line(modernClient);
 
-            return Loc.F("Settings_Runtime_PerClient",
-                ClientVersion.ByKey("1.12.1").ShortLabel, Describe(legacy),
-                ClientVersion.ByKey("1.14.2").ShortLabel, Describe(modern));
+            return Loc.F("Settings_Runtime_PerClient", classicLabel, classic, modernLabel, modernText);
         }
     }
+
+    /// <summary>Seams for the status line: what is installed differs per machine, the test sets these.</summary>
+    internal Func<string?> FindGeProton { get; set; } = GeProtonLocator.FindLatestForCurrentUser;
+    internal Func<bool> ProtonPythonOk { get; set; } = ProtonPython.IsEnoughOnThisMachine;
+    internal Func<string, bool> HasStartScript { get; set; } = dir => LinuxStartScript.Find(dir, File.Exists) is not null;
+
+    private static string Text(LinuxRuntimeInUse r) => r.Source switch
+    {
+        LinuxRuntimeSource.PackageProton => Loc.T("Settings_Runtime_PackageProton"),
+        LinuxRuntimeSource.GeProton => Loc.F("Settings_Runtime_GeProton", r.GeProtonName ?? ""),
+        LinuxRuntimeSource.GeProtonPinned => Loc.T("Settings_Runtime_GeProtonPinned"),
+        _ when r.PythonTooOld => Loc.F("Settings_Runtime_NoPython", Describe(r.Wine!)),
+        _ => Describe(r.Wine!),
+    };
 
     private static string Describe(LinuxRuntimeDecision d) => d.Reason switch
     {
@@ -592,6 +712,59 @@ public sealed partial class SettingsViewModel : ViewModelBase
     // ohnehin schon fragt.
 
     private readonly StartReport? _startReport;
+
+    // ─── Troubleshooting (owner 2026-09-28, TODO C4) ──────────────────────────────────────────
+
+    private readonly SupportPackage? _supportPackage;
+
+    public bool ShowTroubleshooting => _supportPackage is not null;
+
+    /// <summary>The view opens the problem report window (it owns windows, the view model does not).</summary>
+    public event Action? ReportProblemRequested;
+
+    [RelayCommand] private void ReportProblem() => ReportProblemRequested?.Invoke();
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasSupportPackageNote))]
+    private string _supportPackageNote = "";
+
+    public bool HasSupportPackageNote => SupportPackageNote.Length > 0;
+
+    [RelayCommand]
+    private async Task SaveSupportPackageAsync()
+    {
+        if (_supportPackage is null) return;
+        SupportPackageNote = Loc.T("Settings_SupportPackage_Working");
+        try
+        {
+            var path = await Task.Run(() => _supportPackage.CreateAsync(SupportPackage.DefaultDestination()));
+            SupportPackageNote = Loc.F("Settings_SupportPackage_Saved", path);
+            ShowInFileManager(Path.GetDirectoryName(path)!);
+        }
+        catch (Exception ex)
+        {
+            Serilog.Log.Warning(ex, "Support package could not be written");
+            SupportPackageNote = Loc.T("Settings_SupportPackage_Failed");
+        }
+    }
+
+    [RelayCommand]
+    private void OpenLogFolder()
+    {
+        if (_supportPackage is not null) ShowInFileManager(_supportPackage.LogDir);
+    }
+
+    private static void ShowInFileManager(string dir)
+    {
+        try
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(dir) { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            Serilog.Log.Warning(ex, "Could not open {Dir}", dir);
+        }
+    }
     private readonly IClipboardService? _clipboard;
 
     // ─── Welche Fassung, und wann das zuletzt jemand erfahren hat ──────────

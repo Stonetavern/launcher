@@ -137,6 +137,42 @@ public sealed class DesktopIntegrationServiceTests
         finally { TryDelete(dataHome); }
     }
 
+    /// <summary>An entry from an older build names the window "WowLauncher"; the window is
+    /// "stonetavern-launcher" (owner's menu, 2026-09-28). Same Exec, wrong class: not installed.</summary>
+    [Fact]
+    public async Task IsInstalled_FalseWhenTheWmClassIsStale()
+    {
+        var (svc, dataHome, _) = Build("/opt/WowLauncher", []);
+        try
+        {
+            await svc.InstallAsync();
+            var path = Path.Combine(dataHome, "applications", $"{AppId}.desktop");
+            var stale = File.ReadAllText(path).Replace(
+                $"StartupWMClass={DesktopIntegration.WmClass}", "StartupWMClass=WowLauncher", StringComparison.Ordinal);
+            File.WriteAllText(path, stale);
+
+            Assert.False(svc.IsInstalled());
+        }
+        finally { TryDelete(dataHome); }
+    }
+
+    [Fact]
+    public void WithCurrentWmClass_RepairsOnlyThatKey_AndLeavesACurrentEntryAlone()
+    {
+        string[] stale = ["[Desktop Entry]", "Name=Stonetavern", "Exec=/x/a.AppImage", "StartupWMClass=WowLauncher", "X-Own=kept"];
+        string[] missing = ["[Desktop Entry]", "Exec=/x/a.AppImage"];
+        string[] current = ["[Desktop Entry]", $"StartupWMClass={DesktopIntegration.WmClass}"];
+
+        var repaired = LinuxDesktopIntegrationService.WithCurrentWmClass(stale)!;
+        Assert.Contains($"StartupWMClass={DesktopIntegration.WmClass}\n", repaired, StringComparison.Ordinal);
+        Assert.DoesNotContain("WowLauncher", repaired, StringComparison.Ordinal);
+        Assert.Contains("X-Own=kept\n", repaired, StringComparison.Ordinal);
+        Assert.Contains("Exec=/x/a.AppImage\n", repaired, StringComparison.Ordinal);
+
+        Assert.Contains($"StartupWMClass={DesktopIntegration.WmClass}", LinuxDesktopIntegrationService.WithCurrentWmClass(missing)!, StringComparison.Ordinal);
+        Assert.Null(LinuxDesktopIntegrationService.WithCurrentWmClass(current));
+    }
+
     // ── icon source resolution ─────────────────────────────────────────────
 
     [Fact]

@@ -54,24 +54,214 @@ public partial class App : Application
 
     public override void Initialize() => AvaloniaXamlLoader.Load(this);
 
+    // ─── Boot frame (2026-09-28) ─────────────────────────────────────────────
+    // The window on screen before anything expensive exists. Null once it has handed over (or on a QA
+    // still, which never shows one). _bootHandedOver tells "closed because the next window stands"
+    // from "closed by the player before anything else appeared" (that one ends the app).
+    // The window on screen before the next one takes over: the boot frame, or the setup page when a
+    // setup continues in this process. Both draw the lantern at the login shell's spot.
+    private Window? _boot;
+    private bool _bootHandedOver;
+    private bool _frameworkCompleted;
+    private TimeSpan _tFramework;
+
     public override void OnFrameworkInitializationCompleted()
     {
-        var tFramework = Startup.StartupClock.Elapsed;
+        _tFramework = Startup.StartupClock.Elapsed;
+        Startup.StartupClock.Mark("framework");
+
+        // Interactive start: put the boot frame up NOW and build everything else after its first
+        // frame. Before this, the first picture waited for the DI host, the config, the tray, the
+        // start services and the whole login window (~690 ms warm, measured 2026-09-28; 12.5 s on a
+        // cold start that morning). QA stills (--screenshot) keep the old single-window path: they
+        // render one window and exit.
+        if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime bootDesktop
+            && !(bootDesktop.Args ?? []).Contains("--screenshot"))
+        {
+            _desktop = bootDesktop;
+            // Closing the boot frame on handover must not end the app; QuitApp drives shutdown.
+            bootDesktop.ShutdownMode = ShutdownMode.OnExplicitShutdown;
+            var boot = new Views.BootWindow();
+            _boot = boot;
+            boot.Closed += (_, _) =>
+            {
+                if (!_bootHandedOver) bootDesktop.Shutdown();
+            };
+            // Posted, not run inside the frame callback: the frame is presented first, then the work.
+            boot.FirstFrameRendered += () => Dispatcher.UIThread.Post(StartServices, DispatcherPriority.Background);
+            bootDesktop.MainWindow = boot;
+            CompleteFrameworkInit();
+            return;
+        }
+
+        StartServices();
+    }
+
+    /// <summary>The base call, exactly once, whichever path gets there first.</summary>
+    private void CompleteFrameworkInit()
+    {
+        if (_frameworkCompleted) return;
+        _frameworkCompleted = true;
+        base.OnFrameworkInitializationCompleted();
+    }
+
+    /// <summary>
+    /// Show the window that takes over from the boot frame. The login shell opens exactly where the
+    /// boot frame is and glides the lantern from the boot frame's spot to its own; the boot frame
+    /// closes once the new window's first frame is on screen, so there is never a gap. Without a boot
+    /// frame (QA) this only assigns the main window, as before.
+    /// </summary>
+    private void TakeOverFromBoot(IClassicDesktopStyleApplicationLifetime desktop, Window next)
+    {
+        desktop.MainWindow = next;
+        if (_boot is not { } boot) return;
+
+        next.WindowStartupLocation = WindowStartupLocation.Manual;
+        next.Position = boot.Position;
+        if (next is Views.LoginShellWindow login)
+        {
+            login.GlideFrom = (boot as Views.ISigilFrame)?.SigilCentre();
+            login.FirstFrameRendered += CloseBoot;
+            login.Show();
+        }
+        else if (next is Views.SetupWindow setup)
+        {
+            setup.FirstFrameRendered += CloseBoot;
+            setup.Show();
+        }
+        else
+        {
+            next.Show();
+            CloseBoot();
+        }
+    }
+
+    private void CloseBoot()
+    {
+        if (_boot is not { } boot) return;
+        _bootHandedOver = true;
+        _boot = null;
+        boot.Close();
+    }
+
+    private void StartServices()
+    {
+        var tFramework = _tFramework;
         _host = DependencyInjection.BuildHost([]);
         var tHost = Startup.StartupClock.Elapsed;
+        Startup.StartupClock.Mark("host");
 
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
             _desktop = desktop;
 
+            // 🔴 The Stonetavern folder (Services/Platform/StonetavernLibrary.cs), decided in Main BEFORE
+            // anything loads the config: loading it writes a default one, which would erase the only
+            // sign that this is an existing player. Existing players (Legacy) and QA stills fall
+            // straight through to the start below, unchanged.
+            // A later start of the launcher asks this one to come to the front (SingleInstance).
+            Services.Platform.SingleInstance.Current?.Listen(() => Dispatcher.UIThread.Post(ShowMainWindow));
+
+            var library = Program.Library;
+            // One line in every log: which of the start paths this was, and why. Without it an
+            // existing player's log (Legacy) says nothing about the folder at all, and support cannot
+            // tell "never set up" from "set up and then lost" (E2E 2026-09-28).
+            Serilog.Log.Information("Stonetavern folder: {Kind} ({Reason}) {Root}",
+                library.Kind, library.Reason, library.Root ?? "");
+            if (library.Kind == Services.Platform.LibraryDecisionKind.Handoff && _boot is not null)
+            {
+                if (!FinishLibraryHandoff(library))
+                {
+                    desktop.Shutdown();
+                    return;
+                }
+            }
+            else if (library.Kind == Services.Platform.LibraryDecisionKind.Setup && _boot is not null)
+            {
+                ShowLibrarySetup(desktop);
+                CompleteFrameworkInit();
+                return;
+            }
+
+            StartLauncher(desktop, tFramework, tHost);
+        }
+
+        CompleteFrameworkInit();
+    }
+
+    /// <summary>
+    /// This process is the copy a setup started inside the new Stonetavern folder, and its first frame
+    /// is on screen, which proves it runs here (a missing DLL, SmartScreen or noexec would have stopped
+    /// it before this line). Claim the handoff, write the config and the marker, say "done" so the
+    /// original quits, then start like any launcher. False: nothing to finish, quit.
+    /// </summary>
+    private bool FinishLibraryHandoff(Services.Platform.LibraryDecision library)
+    {
+        var log = _host!.Services.GetRequiredService<Serilog.ILogger>();
+        var config = _host.Services.GetRequiredService<Services.IConfigService>();
+        var ok = Services.Platform.LibrarySetup.CompleteHandoff(library.Root!, library.Nonce!,
+            (root, launcherDir) => Services.Platform.LibrarySetup.Commit(config, root, launcherDir), log);
+        if (ok)
+            _ = Task.Run(() => Services.Platform.LibraryShortcuts.CreateAsync(library.Root!, config, log));
+        return ok;
+    }
+
+    /// <summary>
+    /// A new player: the setup page instead of the login. It either hands over to the launcher it put
+    /// into the chosen folder (this one quits), or, where the launcher does not move (macOS, a build
+    /// without a payload list), writes the config here and carries on into the normal start.
+    /// </summary>
+    private void ShowLibrarySetup(IClassicDesktopStyleApplicationLifetime desktop)
+    {
+        var services = _host!.Services;
+        var log = services.GetRequiredService<Serilog.ILogger>();
+        // English, like the login that follows: a new config starts on enUS, and the page should not
+        // speak another language than the next one.
+        var config = services.GetRequiredService<Services.IConfigService>();
+        var setup = new Services.Platform.LibrarySetup(Services.Platform.LibrarySetupHost.ForCurrentProcess(), log,
+            (root, launcherDir) => Services.Platform.LibrarySetup.Commit(config, root, launcherDir));
+        var vm = new SetupViewModel(setup, services.GetRequiredService<Services.IFolderPickerService>(),
+            Services.Platform.LibraryNames.DefaultRoot(Services.Platform.LibraryProbe.HomeDir()));
+        var window = new Views.SetupWindow { DataContext = vm };
+        var handedOn = false;
+        window.Closed += (_, _) =>
+        {
+            if (!handedOn) desktop.Shutdown();
+        };
+        vm.Finished += result =>
+        {
+            handedOn = true;
+            log.Information("Library setup finished: {Outcome}", result.Outcome);
+            if (result.Outcome == Services.Platform.LibrarySetupOutcome.SetUpInPlace)
+            {
+                // Continue here: the setup page is the frame the login shell takes over from.
+                _boot = window;
+                _bootHandedOver = false;
+                StartLauncher(desktop, _tFramework, Startup.StartupClock.Elapsed);
+            }
+            else
+            {
+                desktop.Shutdown();
+            }
+        };
+        TakeOverFromBoot(desktop, window);
+        log.Information("Library setup shown: no earlier install found ({Reason})", Program.Library.Reason);
+    }
+
+    /// <summary>The launcher start as it was before the Stonetavern folder existed: config, language,
+    /// tray, then the login shell (or the splash). Every existing player takes exactly this path.</summary>
+    private void StartLauncher(IClassicDesktopStyleApplicationLifetime desktop, TimeSpan tFramework, TimeSpan tHost)
+    {
+        {
             // Before anything is built: the launcher speaks whatever the player picked for the GAME
             // (Loc.ForClientLocale). Doing it here rather than in a view model means the first frame
             // is already in the right language, instead of flickering from English one frame later.
-            var startCfg = _host.Services.GetRequiredService<Services.IConfigService>().Load();
+            var startCfg = _host!.Services.GetRequiredService<Services.IConfigService>().Load();
             // Eigene Launcher-Sprache gewinnt; leer heisst weiterhin "der Spielsprache folgen".
             Localization.Loc.Use(string.IsNullOrWhiteSpace(startCfg.LauncherLanguage)
                 ? Localization.Loc.ForClientLocale.GetValueOrDefault(startCfg.Locale, "en")
                 : startCfg.LauncherLanguage);
+            Startup.StartupClock.Mark("config");
 
             var args = desktop.Args ?? [];
 
@@ -110,7 +300,27 @@ public partial class App : Application
             // --e2e never reaches Avalonia at all (Program.cs).
             if (args.Contains("--screenshot"))
             {
-                if (SectionArg(args) == "splash")
+                if (SectionArg(args) == "setup")
+                {
+                    // The first-start page of the Stonetavern folder (TODO C7). Only a fresh machine
+                    // ever sees it, so without this branch nobody would look at it before a player
+                    // does. `--root <folder>` shows the checks for another place (a noexec mount, a
+                    // folder that is taken). The checks only read; nothing is created or copied.
+                    var log = _host.Services.GetRequiredService<Serilog.ILogger>();
+                    var rootIdx = Array.IndexOf(args, "--root");
+                    var root = rootIdx >= 0 && rootIdx + 1 < args.Length
+                        ? args[rootIdx + 1]
+                        : Services.Platform.LibraryNames.DefaultRoot(Services.Platform.LibraryProbe.HomeDir());
+                    var setup = new Services.Platform.LibrarySetup(Services.Platform.LibrarySetupHost.ForCurrentProcess(), log,
+                        (_, _) => { });
+                    var shot = new Views.SetupWindow
+                    {
+                        DataContext = new SetupViewModel(setup, _host.Services.GetRequiredService<Services.IFolderPickerService>(), root),
+                    };
+                    desktop.MainWindow = shot;
+                    HandleScreenshotMode(desktop, shot);
+                }
+                else if (SectionArg(args) == "splash")
                 {
                     var shot = new SplashWindow { DataContext = SplashShotViewModel(args) };
                     desktop.MainWindow = shot;
@@ -155,7 +365,7 @@ public partial class App : Application
                     HandleScreenshotMode(desktop, window);
                 }
 
-                base.OnFrameworkInitializationCompleted();
+                CompleteFrameworkInit();
                 return;
             }
 
@@ -166,6 +376,7 @@ public partial class App : Application
                 // moment the window disappears into the tray). We drive shutdown ourselves from QuitApp.
                 desktop.ShutdownMode = ShutdownMode.OnExplicitShutdown;
                 SetUpTrayIcon();
+                Startup.StartupClock.Mark("tray");
 
                 // Automatic one-time AppImage first-run setup (owner UX 2026-07-24): relocate into
                 // ~/Applications, drop a trusted desktop shortcut, register the menu entry. Runs off the
@@ -186,7 +397,7 @@ public partial class App : Application
                         WireShellWindow(built.Shell, built.Window, args);
                         return built;
                     });
-                    base.OnFrameworkInitializationCompleted();
+                    CompleteFrameworkInit();
                     return;
                 }
 
@@ -201,13 +412,13 @@ public partial class App : Application
                 var splashVm = new SplashViewModel(work);
                 var splash = new SplashWindow { DataContext = splashVm };
                 splash.Closing += OnSplashClosing;
-                desktop.MainWindow = splash;
+                TakeOverFromBoot(desktop, splash);
 
                 _ = Dispatcher.UIThread.InvokeAsync(() => RunStartupAsync(splash, splashVm, work, window));
             }
         }
 
-        base.OnFrameworkInitializationCompleted();
+        CompleteFrameworkInit();
     }
 
     /// <summary>Everything the interactive path hooks onto the shell window: close interception, the
@@ -343,10 +554,12 @@ public partial class App : Application
         // §12.1 A is decided: the player path signs in against the launcher service (the adapter is
         // registered in DI). The QA render harness (--screenshot) seeds the fake instead.
         var gateway = services.GetRequiredService<Startup.IAuthGateway>();
+        Startup.StartupClock.Mark("services");
         var vm = new LoginShellViewModel(pipeline, facts, gateway, cfg.LauncherShellAllowSkipSignIn,
                                          remembered: services.GetService<IUsernameMemory>());
         var tBeforeWindow = Startup.StartupClock.Elapsed;
         var login = new LoginShellWindow { DataContext = vm };
+        Startup.StartupClock.Mark("window");
         // 🔴 The self-update health contract is answered at the FIRST FRAME of the login window, the
         // same "a window really stands" moment the splash path uses. Answering only after sign-in
         // (as until 1.9.1) meant: a player who updated and closed the launcher at the login screen
@@ -397,7 +610,7 @@ public partial class App : Application
             await QuitAppAsync();
         };
 
-        desktop.MainWindow = login;
+        TakeOverFromBoot(desktop, login);
     }
 
     /// <summary>QA-only: a splash ViewModel for a still render. <c>--state update</c> shows the
@@ -506,7 +719,12 @@ public partial class App : Application
     /// re-arms its motion gate off the IsVisible/WindowState change, so animations resume here.</summary>
     private void ShowMainWindow()
     {
-        if (_desktop?.MainWindow is not { } window) return;
+        if (_desktop is null) return;
+        if (Startup.BringForward.Pick(_desktop.MainWindow, _desktop.Windows) is not { } window)
+        {
+            Serilog.Log.Information("Come to the front: no open window to show");
+            return;
+        }
         window.Show();
         if (window.WindowState == WindowState.Minimized) window.WindowState = WindowState.Normal;
         window.Activate();
@@ -731,6 +949,11 @@ public partial class App : Application
         // a way to force it open (mutation/screenshot-gate requirement, no other caller sets this).
         if (args.Contains("--open-add-realm") && window.DataContext is ShellViewModel avm)
             avm.IsAddRealmOpen = true;
+
+        // Same for the gear: the dialog in its edit mode, for the realm selected with --realm.
+        if (args.Contains("--open-edit-realm") && window.DataContext is ShellViewModel evm
+            && evm.OpenEditRealmCommand.CanExecute(null))
+            evm.OpenEditRealmCommand.Execute(null);
 
         // QA-only: einen angemeldeten Zustand zeichnen. Gebaut am 2026-08-05, als der Addon-Katalog
         // hinter den Login wanderte: alles, was nur Angemeldete sehen, war damit unsichtbar fuer den

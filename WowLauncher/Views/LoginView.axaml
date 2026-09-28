@@ -132,6 +132,10 @@
                           Content="{loc:Tr Register_AcceptRules}"
                           Foreground="{StaticResource ParchmentSecondary}"
                           AutomationProperties.Name="{loc:Tr Register_AcceptRules}"/>
+                <Button Classes="v3linkquiet" HorizontalAlignment="Left"
+                        Content="{loc:Tr Register_ReadTerms}"
+                        Command="{Binding Register.OpenTermsCommand}"
+                        AutomationProperties.Name="{loc:Tr Register_ReadTerms}"/>
                 <CheckBox IsChecked="{Binding Register.Newsletter, Mode=TwoWay}"
                           Content="{loc:Tr Register_Newsletter}"
                           Foreground="{StaticResource ParchmentSecondary}"

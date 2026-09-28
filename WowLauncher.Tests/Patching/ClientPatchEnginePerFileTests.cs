@@ -74,6 +74,52 @@ public sealed class ClientPatchEnginePerFileTests
         Assert.Equal("ccc", File.ReadAllText(Path.Combine(root, "Data", "c.MPQ")));
     }
 
+    /// <summary>E2E 2026-09-24 (Modern Linux 1.4.3 → 1.4.4): the replaced JimsProxy came back as 0644 and
+    /// Play failed with "Permission denied". An executable stays executable, a missing binary arrives
+    /// executable, a data file does not become executable.</summary>
+    [Fact]
+    public async Task PerFile_keeps_executables_executable()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        var root = PatchingFakes.NewTempDir();
+        byte[] newProxy = [0x7F, (byte)'E', (byte)'L', (byte)'F', 2, 1, 1, 0];
+        byte[] newScript = "#!/bin/sh\necho new\n"u8.ToArray();
+        byte[] newData = "new data"u8.ToArray();
+        var manifest = new ClientFileManifest
+        {
+            Build = 5875, Version = "1.5",
+            Files =
+            [
+                PatchingFakes.Entry("Hermes/linux/JimsProxy", newProxy),
+                PatchingFakes.Entry("Play.sh", newScript),
+                PatchingFakes.Entry("Data/a.MPQ", newData),
+                PatchingFakes.Entry("WoW.exe", "exe"u8.ToArray()),
+            ],
+        };
+        // Old proxy: executable, different bytes. Script: missing. Data: old bytes, 0644.
+        PatchingFakes.WriteFile(root, "Hermes/linux/JimsProxy", "old proxy"u8.ToArray());
+        File.SetUnixFileMode(Path.Combine(root, "Hermes", "linux", "JimsProxy"),
+            UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute
+            | UnixFileMode.GroupRead | UnixFileMode.GroupExecute | UnixFileMode.OtherRead | UnixFileMode.OtherExecute);
+        PatchingFakes.WriteFile(root, "Data/a.MPQ", "old data"u8.ToArray());
+        PatchingFakes.WriteFile(root, "WoW.exe", "exe"u8.ToArray());
+
+        var client = NewClient();
+        var download = new FakeDownloadService { ReplaceWithFreshFile = true };
+        download.Content[client.FilesBase + "Hermes/linux/JimsProxy"] = newProxy;
+        download.Content[client.FilesBase + "Play.sh"] = newScript;
+        download.Content[client.FilesBase + "Data/a.MPQ"] = newData;
+
+        var outcome = await NewEngine(new FakeManifestLoader(manifest), download)
+            .RunAsync(client, root, forcePerFile: true);
+
+        Assert.Equal(PatchState.Ready, outcome.State);
+        const UnixFileMode anyX = UnixFileMode.UserExecute | UnixFileMode.GroupExecute | UnixFileMode.OtherExecute;
+        Assert.NotEqual((UnixFileMode)0, File.GetUnixFileMode(Path.Combine(root, "Hermes", "linux", "JimsProxy")) & anyX);
+        Assert.NotEqual((UnixFileMode)0, File.GetUnixFileMode(Path.Combine(root, "Play.sh")) & anyX);
+        Assert.Equal((UnixFileMode)0, File.GetUnixFileMode(Path.Combine(root, "Data", "a.MPQ")) & anyX);
+    }
+
     [Fact]
     public async Task Protected_path_is_never_flagged_or_fetched_even_when_it_differs()
     {
@@ -184,6 +230,78 @@ public sealed class ClientPatchEnginePerFileTests
             f => f.Code == PatchFinding.ForeignFile && f.Message.Contains("left-behind.lua"));
         Assert.True(File.Exists(Path.Combine(root, "Interface", "AddOns", "SomeMod", "left-behind.lua")));
     }
+
+    /// <summary>Production run 2026-09-24 (serial 34): the GE-Proton prefix inside the install carries
+    /// Wine's <c>dosdevices/z:</c> symlink to <c>/</c>. The foreign-file walk followed it, hit a folder
+    /// it could not read and failed the whole patch ("unpacking failed", no Play).</summary>
+    [Fact]
+    public async Task A_wine_prefix_with_a_symlink_out_of_the_install_never_fails_the_patch()
+    {
+        if (OperatingSystem.IsWindows()) return; // symlink + chmod semantics are the Linux case
+        var root = PatchingFakes.NewTempDir();
+        var outside = PatchingFakes.NewTempDir();
+        var locked = Path.Combine(outside, "locked");
+        try
+        {
+            var wowExe = "exe"u8.ToArray();
+            var manifest = new ClientFileManifest { Build = 42597, Version = "1.4.4", Files = [PatchingFakes.Entry("WowClassic.exe", wowExe)] };
+            PatchingFakes.WriteFile(root, "WowClassic.exe", wowExe);
+            PatchingFakes.WriteFile(root, "proton-compat/GE-Proton11-7-x86_64/pfx/drive_c/windows/system32/dxgi.dll", "pe"u8.ToArray());
+            File.WriteAllText(Path.Combine(outside, "far-away.txt"), "not part of the client");
+            Directory.CreateDirectory(locked);
+            File.WriteAllText(Path.Combine(locked, "secret.txt"), "x");
+            File.SetUnixFileMode(locked, UnixFileMode.None);
+            var dosdevices = Path.Combine(root, "proton-compat", "GE-Proton11-7-x86_64", "pfx", "dosdevices");
+            Directory.CreateDirectory(dosdevices);
+            Directory.CreateSymbolicLink(Path.Combine(dosdevices, "z:"), outside);
+
+            var outcome = await NewEngine(new FakeManifestLoader(manifest), new FakeDownloadService())
+                .RunAsync(NewClient(), root, forcePerFile: true);
+
+            Assert.Equal(PatchState.Ready, outcome.State);
+            Assert.DoesNotContain(outcome.Findings, f => f.Code == PatchFinding.ForeignFile);
+        }
+        finally
+        {
+            File.SetUnixFileMode(locked, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            try { Directory.Delete(outside, true); } catch { /* temp dir */ }
+        }
+    }
+
+    [Fact]
+    public async Task An_unreadable_folder_inside_the_install_is_skipped_not_fatal()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        var root = PatchingFakes.NewTempDir();
+        var locked = Path.Combine(root, "SomePlayerFolder");
+        try
+        {
+            var wowExe = "exe"u8.ToArray();
+            var manifest = new ClientFileManifest { Build = 42597, Version = "1.4.4", Files = [PatchingFakes.Entry("WowClassic.exe", wowExe)] };
+            PatchingFakes.WriteFile(root, "WowClassic.exe", wowExe);
+            PatchingFakes.WriteFile(root, "SomePlayerFolder/inner/file.txt", "x"u8.ToArray());
+            PatchingFakes.WriteFile(root, "visible-leftover.txt", "x"u8.ToArray());
+            File.SetUnixFileMode(locked, UnixFileMode.None);
+
+            var outcome = await NewEngine(new FakeManifestLoader(manifest), new FakeDownloadService())
+                .RunAsync(NewClient(), root, forcePerFile: true);
+
+            Assert.Equal(PatchState.Ready, outcome.State);
+            Assert.Contains(outcome.Findings, f => f.Code == PatchFinding.ForeignFile && f.Message.Contains("visible-leftover.txt"));
+        }
+        finally
+        {
+            File.SetUnixFileMode(locked, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+    }
+
+    [Theory]
+    [InlineData(".stonetavern/client-state.json", true)]
+    [InlineData("proton-compat/GE-Proton11-7-x86_64/pfx/drive_c/windows/system32/dxgi.dll", true)]
+    [InlineData("World of Warcraft/_classic_era_/WowClassic.exe", false)]
+    [InlineData("proton-compat-notes.txt", false)]
+    public void Launcher_owned_folders_are_recognised(string rel, bool owned) =>
+        Assert.Equal(owned, ClientPatchEngine.IsLauncherOwned(rel));
 
     [Fact]
     public void WriteState_is_atomic_and_ReadState_round_trips()

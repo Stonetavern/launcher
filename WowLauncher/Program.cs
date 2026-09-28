@@ -58,6 +58,31 @@ sealed class Program
             return;
         }
 
+        // The Stonetavern folder: new player, existing player, the copy a setup started, or an old
+        // download of a player who set the folder up. Read-only, before anything loads the config
+        // (loading writes a default one and would erase the evidence). A stray old copy hands over to
+        // the launcher in the folder and quits, before a window exists. QA stills never get here.
+        if (!args.Contains("--screenshot"))
+        {
+            Library = LibraryClassifier.Decide(LibraryProbe.Read(Paths, args));
+            if (Library.Kind == LibraryDecisionKind.Forward && Library.Target is { } target && Forward(target, args))
+                return;
+
+            // One launcher per player (SingleInstance): a second start brings the running one to the
+            // front (out of the tray too) and quits, instead of a second window fighting the first over
+            // the config and the realm proxy. Fails open: no answer within 3 s, start as always.
+            var instance = SingleInstance.ForCurrentUser(Paths.StateDir);
+            if (!instance.TryAcquire())
+            {
+                if (instance.SignalFirst(TimeSpan.FromSeconds(3)))
+                {
+                    WriteForwardNote("the running launcher (brought to the front)");
+                    return;
+                }
+            }
+            SingleInstance.Current = instance;
+        }
+
         // Which skin: v1 (default) or v2 "Obsidian Instrument" (`--ui v2`). Decided before the
         // ViewModels are built, because the telemetry column asks Ui.Demo at construction time.
         Ui.Configure(args);
@@ -88,6 +113,54 @@ sealed class Program
             Console.Error.WriteLine(GraphicalSession.Refused(Env, ex.Message));
             WriteCrashLog(ex, "no usable display");
             Environment.Exit(3);
+        }
+    }
+
+    /// <summary>What the start found about the Stonetavern folder (see <see cref="LibraryClassifier"/>).
+    /// Legacy (the start as before) unless Main decided otherwise.</summary>
+    internal static LibraryDecision Library { get; private set; } =
+        new(LibraryDecisionKind.Legacy, Reason: "not decided (QA or test)");
+
+    /// <summary>Start the launcher in the Stonetavern folder with the same arguments and quit. False
+    /// when it cannot be started: then this copy runs as it would have, never nothing at all.</summary>
+    private static bool Forward(string target, string[] args)
+    {
+        try
+        {
+            var psi = new System.Diagnostics.ProcessStartInfo(target)
+            {
+                UseShellExecute = false,
+                WorkingDirectory = Path.GetDirectoryName(target) ?? "",
+            };
+            foreach (var a in args) psi.ArgumentList.Add(a);
+            // The launcher in the folder must not inherit this copy's open files: the AppImage runtime
+            // keeps a handle on its own mount, and passing it on keeps this copy mounted for the whole
+            // session (measured on the setup handoff, 2026-09-28).
+            WowLauncher.Services.Platform.InheritedFds.KeepFromChildren();
+            if (System.Diagnostics.Process.Start(psi) is null) return false;
+            WriteForwardNote(target);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            WriteCrashLog(ex, $"forward to {target}");
+            Library = new(LibraryDecisionKind.Legacy, Reason: "forward failed");
+            return false;
+        }
+    }
+
+    /// <summary>One line in the state dir, so a support look at the old copy shows where it went.</summary>
+    private static void WriteForwardNote(string target)
+    {
+        try
+        {
+            Directory.CreateDirectory(Paths.StateDir);
+            File.AppendAllText(Path.Combine(Paths.StateDir, "launcher-forward.log"),
+                $"{DateTimeOffset.Now:O} forwarded to {target}{Environment.NewLine}");
+        }
+        catch (Exception)
+        {
+            // A note, not a requirement.
         }
     }
 

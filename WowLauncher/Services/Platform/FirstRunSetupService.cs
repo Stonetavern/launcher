@@ -133,6 +133,12 @@ public sealed class LinuxFirstRunSetup : IFirstRunSetup
         try
         {
             var cfg = _config.Load();
+            // Every start, not only the first: entries written by an older build carry a WM class the
+            // window no longer has (owner's menu entry 2026-09-28: "WowLauncher" against the window's
+            // "stonetavern-launcher"). Only files that exist are touched; a removed entry stays removed.
+            if (!string.IsNullOrEmpty(_layout.AppImagePath))
+                RepairWmClass();
+
             if (!FirstRunSetup.ShouldRun(_layout.AppImagePath, cfg.DesktopIntegrationDone))
                 return;
 
@@ -175,7 +181,49 @@ public sealed class LinuxFirstRunSetup : IFirstRunSetup
         }
     }
 
+    /// <summary>Menu entry + trusted desktop shortcut for <paramref name="launchTarget"/>, the same two
+    /// steps the first run does, for a launcher the Stonetavern folder setup put in place
+    /// (<see cref="LibraryShortcuts"/>). Best effort; true when at least one entry landed.</summary>
+    public async Task<bool> WriteShortcutsAsync(string launchTarget, CancellationToken cancellationToken = default)
+    {
+        var execLine = LinuxDesktopIntegrationService.ResolveExecLine(launchTarget, null);
+        var menuOk = await TryInstallMenuAsync(execLine, cancellationToken).ConfigureAwait(false);
+        var desktopOk = await TryWriteDesktopShortcutAsync(execLine, cancellationToken).ConfigureAwait(false);
+        _log.Information("Shortcuts for {Target}: menu={Menu}, desktop={Desktop}", launchTarget, menuOk, desktopOk);
+        return menuOk || desktopOk;
+    }
+
     // ── steps ───────────────────────────────────────────────────────────────
+
+    /// <summary>Set <c>StartupWMClass</c> to the current class in the menu entry and the desktop
+    /// shortcut, where they exist and differ. Atomic write per file; failures are logged, never thrown.</summary>
+    private void RepairWmClass()
+    {
+        string[] paths =
+        [
+            Path.Combine(_layout.DataHome, "applications", $"{AppId}.desktop"),
+            Path.Combine(_layout.DesktopDir, $"{AppId}.desktop"),
+        ];
+        foreach (var path in paths)
+        {
+            try
+            {
+                if (!File.Exists(path)) continue;
+                var repaired = LinuxDesktopIntegrationService.WithCurrentWmClass(File.ReadAllLines(path));
+                if (repaired is null) continue;
+                var tmp = path + ".tmp";
+                File.WriteAllText(tmp, repaired, new System.Text.UTF8Encoding(false));
+                // Keep the mode bits: the desktop shortcut is only a launcher while it is executable.
+                if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(tmp, File.GetUnixFileMode(path));
+                File.Move(tmp, path, overwrite: true);
+                _log.Information("Repaired StartupWMClass in {Path}", path);
+            }
+            catch (Exception ex)
+            {
+                _log.Warning(ex, "Could not repair StartupWMClass in {Path}", path);
+            }
+        }
+    }
 
     /// <summary>
     /// Copy the running AppImage into <c>~/Applications</c> and make it executable; return the path the

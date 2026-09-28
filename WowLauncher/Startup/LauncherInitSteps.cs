@@ -37,7 +37,7 @@ public sealed class InitFacts
 }
 
 /// <summary>One realm entry and what the probe said about it.</summary>
-public sealed record RealmProbe(string Id, string Name, string Address, bool Online, int PlayerCount);
+public sealed record RealmProbe(string Id, string Name, string Address, bool Online, int? PlayerCount);
 
 /// <summary>
 /// Builds the five real steps of Spec §5.2 on top of the services the launcher already has. Nothing
@@ -102,9 +102,8 @@ public static class LauncherInitSteps
                 return facts.UpdateNotice is null ? null : facts.UpdateNotice.Version;
             }, NetworkBudget),
 
-            // 3. Realm-Status abfragen. One probe per shipped realm entry (today: one entry,
-            //    Stonetavern, with Elwynn and Barrens behind the same realmd). Per-game-realm rows
-            //    need an API that reports per realm; see BRIEF §12.6.
+            // 3. Realm-Status abfragen. One probe per realm entry. Stonetavern is one entry with Elwynn
+            //    and Barrens behind the same realmd; its row shows both counted together.
             new(RealmKey, Loc.T("Init_Status_Realm"), gatesLogin: true, async ct =>
             {
                 var cfg = facts.Config ?? config.Load();
@@ -115,7 +114,9 @@ public static class LauncherInitSteps
                     // but that manifest is step 4, after this; the v3 shell re-resolves in Phase 4.
                     var address = realm.RealmlistAddress?.Trim() ?? "";
                     if (address.Length == 0) continue;
-                    var result = await status.CheckAsync(address, ct: ct).ConfigureAwait(false);
+                    // Counted only across the game realms behind a shipped entry (Stonetavern: Elwynn +
+                    // Barrens, one number). A custom server has no ArmoryRealms: up/down, no count.
+                    var result = await status.CheckAsync(address, realm.ArmoryRealms ?? [], ct).ConfigureAwait(false);
                     probes.Add(new RealmProbe(realm.Id, realm.Name, address, result.Online, result.PlayerCount));
                 }
                 facts.Realms = probes;

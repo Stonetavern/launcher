@@ -1,0 +1,85 @@
+<!--
+  Stonetavern Launcher — the boot frame (2026-09-28).
+
+  The first thing on screen after a start, shown the moment the UI framework is up and BEFORE the
+  services, the config, the tray and the login window are built. Measured on the owner's machine that
+  work costs about 400 ms warm (first frame at ~690 ms without this window), and on a cold start it
+  was 12.5 s of nothing at all. This window is cheap on purpose: a gradient, the lantern, its light,
+  the empty ring. No text, no bindings, no view model.
+
+  It is the login shell's Phase 0, drawn early: the same frame (1000x640, same gradient brush, same
+  sigil composite and styles). When the login window has its first frame it opens at this window's
+  position, the lantern glides from here to its place above the card, and this window closes under
+  it. Nothing jumps, nothing flashes.
+-->
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:loc="using:WowLauncher.Localization"
+        xmlns:controls="using:WowLauncher.Controls"
+        x:Class="WowLauncher.Views.BootWindow"
+        Icon="avares://WowLauncher/Assets/stonetavern-logo.png"
+        Title="{loc:Tr App_WindowTitle}"
+        Width="1000" Height="640"
+        MinWidth="1000" MinHeight="640"
+        CanResize="False"
+        SizeToContent="Manual"
+        WindowStartupLocation="CenterScreen"
+        WindowDecorations="BorderOnly"
+        ExtendClientAreaToDecorationsHint="True"
+        Background="{StaticResource StoneBase}">
+
+    <Window.Styles>
+        <StyleInclude Source="avares://WowLauncher/Styles/LoginShell.axaml"/>
+    </Window.Styles>
+
+    <!-- "live" = the motion gate (code-behind), "warm" so the sigil is lit from the first frame. -->
+    <Border x:Name="Root" Classes="live warm" Background="{StaticResource StoneBase}" ClipToBounds="True">
+        <Grid>
+            <!-- The same placeholder the login shell starts on: stone, lit from where the lantern hangs. -->
+            <Border IsHitTestVisible="False">
+                <Border.Background>
+                    <RadialGradientBrush Center="50%,12%" GradientOrigin="50%,12%" RadiusX="60%" RadiusY="75%">
+                        <GradientStop Offset="0.0" Color="#3C8A5523"/>
+                        <GradientStop Offset="0.45" Color="#14221C17"/>
+                        <GradientStop Offset="1.0" Color="#00100D0A"/>
+                    </RadialGradientBrush>
+                </Border.Background>
+            </Border>
+
+            <!-- The sigil, exactly where the login shell's first layout puts its own: centre (500, 101),
+                 logged by LoginShellWindow as "sigil centre" (measured 2026-09-28 for every QA state,
+                 again after the "Remember username" row made the card taller: 120 became 101; measure
+                 with the screenshot switch, section login, state cold, and that log line). So the handover needs no movement;
+                 should the two ever differ, the login shell glides the lantern from here to there.
+                 Same parts and sizes as LoginShellWindow's Sigil; the ring is empty here. -->
+            <Panel x:Name="Sigil" Classes="ls-sigil" Width="108" Height="108"
+                   HorizontalAlignment="Center" VerticalAlignment="Top" Margin="0,47,0,0"
+                   IsHitTestVisible="False">
+                <Border Classes="ls-bloom" Width="108" Height="108" RenderTransformOrigin="50%,50%">
+                    <Border.RenderTransform>
+                        <ScaleTransform/>
+                    </Border.RenderTransform>
+                    <Border.Background>
+                        <RadialGradientBrush Center="50%,50%" GradientOrigin="50%,50%" RadiusX="50%" RadiusY="50%">
+                            <GradientStop Offset="0.0" Color="#5C8A5523"/>
+                            <GradientStop Offset="0.55" Color="#1E8A5523"/>
+                            <GradientStop Offset="1.0" Color="#008A5523"/>
+                        </RadialGradientBrush>
+                    </Border.Background>
+                </Border>
+                <controls:KindleRing Classes="ls-ring" Width="104" Height="104" Value="0"
+                                     Track="{StaticResource StoneBorder}" TrackOpacity="0.6"
+                                     Stroke="{StaticResource EmberBase}" StrokeThickness="1.5"
+                                     Spark="{StaticResource LsSpark}"/>
+                <Image Source="avares://WowLauncher/Assets/lantern.png"
+                       Width="44" Height="54"
+                       HorizontalAlignment="Center" VerticalAlignment="Center"
+                       RenderOptions.BitmapInterpolationMode="HighQuality"/>
+            </Panel>
+
+            <!-- Drag like every shell: the decoration is None on Linux/Windows. -->
+            <Border Height="40" VerticalAlignment="Top" Background="Transparent"
+                    PointerPressed="OnDragStripPressed"/>
+        </Grid>
+    </Border>
+</Window>

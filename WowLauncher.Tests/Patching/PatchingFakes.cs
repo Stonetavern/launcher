@@ -61,6 +61,9 @@ internal sealed class FakeDownloadService : IDownloadService
     public readonly Dictionary<string, byte[]> Content = new(StringComparer.Ordinal);
     public readonly HashSet<string> FailUrls = [];
     public readonly List<string> Requested = [];
+    /// <summary>Like the real DownloadService: the result is a NEW file with mode 0644 (temp + move),
+    /// not the old inode rewritten in place. That difference hid the lost execute bit (2026-09-24).</summary>
+    public bool ReplaceWithFreshFile;
     /// <summary>What <see cref="ExtractClientWithReasonAsync"/> should write into destDir, keyed by
     /// the zip path it was asked to extract.</summary>
     public readonly Dictionary<string, Dictionary<string, byte[]>> ZipContents = new(StringComparer.Ordinal);
@@ -75,7 +78,11 @@ internal sealed class FakeDownloadService : IDownloadService
             return Task.FromResult(DownloadResult.Fail(DownloadFailure.ServerError, "HTTP 404 (fake, unknown url)"));
 
         Directory.CreateDirectory(Path.GetDirectoryName(destPath)!);
+        if (ReplaceWithFreshFile && File.Exists(destPath)) File.Delete(destPath);
         File.WriteAllBytes(destPath, bytes);
+        if (ReplaceWithFreshFile && !OperatingSystem.IsWindows())
+            File.SetUnixFileMode(destPath, UnixFileMode.UserRead | UnixFileMode.UserWrite
+                                           | UnixFileMode.GroupRead | UnixFileMode.OtherRead);
         progress?.Report(new DownloadProgress { BytesDownloaded = bytes.Length, TotalBytes = bytes.Length });
         return Task.FromResult(DownloadResult.Success);
     }

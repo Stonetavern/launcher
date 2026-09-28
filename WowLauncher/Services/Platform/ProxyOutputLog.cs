@@ -46,18 +46,26 @@ public sealed class ProxyOutputLog : IDisposable
     /// full pipe. Draining is not optional — recording is. Returns the log when one was opened.
     /// </summary>
     public static ProxyOutputLog? AttachOrDrain(Process process, string? path, Serilog.ILogger logger,
-        long maxBytes = DefaultMaxBytes)
+        long maxBytes = DefaultMaxBytes, Action<string, string>? onLine = null)
     {
         ArgumentNullException.ThrowIfNull(process);
 
         if (!string.IsNullOrEmpty(path))
         {
-            var log = Attach(process, path, logger, maxBytes);
+            var log = Attach(process, path, logger, maxBytes, onLine);
             if (log is not null) return log;
         }
 
         // No path configured, or the file could not be opened: drain both streams into nothing, exactly as
         // before. A full pipe would stall the proxy mid-session, which is far worse than a missing log.
+        // With a line observer the streams are still drained, just line by line, so the caller can
+        // react to what the proxy says (HermesPortPlan.IsFatal) even when nothing is recorded.
+        if (onLine is not null)
+        {
+            _ = ObserveAsync(process.StandardOutput, "out", onLine);
+            _ = ObserveAsync(process.StandardError, "err", onLine);
+            return null;
+        }
         _ = process.StandardOutput.ReadToEndAsync();
         _ = process.StandardError.ReadToEndAsync();
         return null;
@@ -70,7 +78,7 @@ public sealed class ProxyOutputLog : IDisposable
     /// The caller MUST have started the process with both streams redirected.
     /// </summary>
     public static ProxyOutputLog? Attach(Process process, string path, Serilog.ILogger logger,
-        long maxBytes = DefaultMaxBytes)
+        long maxBytes = DefaultMaxBytes, Action<string, string>? onLine = null)
     {
         ArgumentNullException.ThrowIfNull(process);
 
@@ -82,8 +90,8 @@ public sealed class ProxyOutputLog : IDisposable
 
         // Fire-and-forget by design: the pumps must outlive this call and must never make the caller wait.
         // PumpAsync itself is total (it swallows its own I/O faults), so there is no unobserved exception.
-        _ = log.PumpAsync(process.StandardOutput, "out");
-        _ = log.PumpAsync(process.StandardError, "err");
+        _ = log.PumpAsync(process.StandardOutput, "out", onLine);
+        _ = log.PumpAsync(process.StandardError, "err", onLine);
         return log;
     }
 
@@ -117,12 +125,15 @@ public sealed class ProxyOutputLog : IDisposable
     /// write fault ends the pump quietly instead of surfacing as an unobserved task exception. Internal so
     /// the pumping/tagging/capping logic is provable against a <see cref="StringReader"/>, with no child
     /// process and no proxy binary.</summary>
-    internal async Task PumpAsync(TextReader reader, string tag)
+    internal async Task PumpAsync(TextReader reader, string tag, Action<string, string>? onLine = null)
     {
         try
         {
             while (await reader.ReadLineAsync().ConfigureAwait(false) is { } line)
+            {
                 WriteLine(tag, line);
+                Notify(onLine, tag, line);
+            }
         }
         catch
         {
@@ -133,6 +144,26 @@ public sealed class ProxyOutputLog : IDisposable
 
     /// <summary>Append one tagged line, honouring the size cap. Announces the cap once, in the file, so a
     /// truncated log cannot be misread as a proxy that fell silent.</summary>
+    /// <summary>Drain a stream line by line into an observer only (no file configured).</summary>
+    private static async Task ObserveAsync(TextReader reader, string tag, Action<string, string> onLine)
+    {
+        try
+        {
+            while (await reader.ReadLineAsync().ConfigureAwait(false) is { } line) Notify(onLine, tag, line);
+        }
+        catch
+        {
+            // same contract as PumpAsync: draining ends quietly
+        }
+    }
+
+    /// <summary>An observer that throws must not stop the drain — a full pipe would stall the proxy.</summary>
+    private static void Notify(Action<string, string>? onLine, string tag, string line)
+    {
+        if (onLine is null) return;
+        try { onLine(tag, line); } catch { /* observer fault is not the proxy's */ }
+    }
+
     internal void WriteLine(string tag, string line)
     {
         lock (_gate)

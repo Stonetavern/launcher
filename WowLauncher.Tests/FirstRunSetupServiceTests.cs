@@ -123,6 +123,52 @@ public sealed class FirstRunSetupServiceTests
         Assert.True(config.Current.DesktopIntegrationDone);              // still completed
     }
 
+    /// <summary>The repair runs on every AppImage start, also long after the one-time setup: the
+    /// owner's own menu entry was written by an older build (2026-09-28). Both entries get the current
+    /// class, and the desktop shortcut keeps its executable bit, or it stops being a launcher.</summary>
+    [Fact]
+    public async Task RunAsync_RepairsAStaleWmClass_EvenAfterTheSetupWasDone()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        using var t = new Temp();
+        var appImage = t.FakeAppImage("Stonetavern.AppImage");
+        var menu = Path.Combine(t.DataHome, "applications", $"{AppId}.desktop");
+        var desk = Path.Combine(t.DesktopDir, $"{AppId}.desktop");
+        Directory.CreateDirectory(Path.GetDirectoryName(menu)!);
+        const string old = "[Desktop Entry]\nExec=/home/p/Applications/Stonetavern.AppImage\nStartupWMClass=WowLauncher\n";
+        await File.WriteAllTextAsync(menu, old);
+        await File.WriteAllTextAsync(desk, old);
+        const UnixFileMode exec = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
+        File.SetUnixFileMode(desk, exec);
+        var config = new FakeConfig(new LauncherConfig { DesktopIntegrationDone = true });
+        var (setup, _) = t.Build(appImage, config);
+
+        await setup.RunAsync();
+
+        foreach (var path in new[] { menu, desk })
+        {
+            var body = await File.ReadAllTextAsync(path);
+            Assert.Contains($"StartupWMClass={DesktopIntegration.WmClass}", body, StringComparison.Ordinal);
+            Assert.DoesNotContain("WowLauncher", body, StringComparison.Ordinal);
+            Assert.Contains("Exec=/home/p/Applications/Stonetavern.AppImage", body, StringComparison.Ordinal);
+        }
+        Assert.Equal(exec, File.GetUnixFileMode(desk));
+    }
+
+    [Fact]
+    public async Task RunAsync_DoesNotCreateAnEntryThePlayerRemoved()
+    {
+        using var t = new Temp();
+        var appImage = t.FakeAppImage("Stonetavern.AppImage");
+        var config = new FakeConfig(new LauncherConfig { DesktopIntegrationDone = true });
+        var (setup, _) = t.Build(appImage, config);
+
+        await setup.RunAsync();
+
+        Assert.False(File.Exists(Path.Combine(t.DataHome, "applications", $"{AppId}.desktop")));
+        Assert.False(File.Exists(Path.Combine(t.DesktopDir, $"{AppId}.desktop")));
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────────
 
     private sealed class Temp : IDisposable

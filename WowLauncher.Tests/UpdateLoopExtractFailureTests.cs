@@ -309,6 +309,40 @@ public sealed class UpdateLoopExtractFailureTests : IDisposable
         Assert.Equal(Loc.T("Play_Error_ExtractFailed"), vm.DownloadErrorDetail);
     }
 
+    /// <summary>🔴 Produktionslauf 2026-09-24: warf die Patch-Engine (Fremddatei-Bericht, Wine-Symlink
+    /// nach /), las der Spieler „unpacking failed" - entpackt wurde gar nichts. Eine Ausnahme der Engine
+    /// bekommt einen eigenen Satz, in jeder Sprache vorhanden und verschieden vom Entpack-Satz.</summary>
+    [Theory]
+    [InlineData("en")]
+    [InlineData("de")]
+    [InlineData("es")]
+    [InlineData("fr")]
+    [InlineData("ru")]
+    public void EineAusnahmeDerPatchEngine_SagtNichtEntpacken(string lang)
+    {
+        var root = FindRepoLauncherDir();
+        var vm = File.ReadAllText(Path.Combine(root, "WowLauncher", "ViewModels", "PlayViewModel.cs"));
+        var at = vm.IndexOf("patch: engine threw for build", StringComparison.Ordinal);
+        Assert.True(at > 0, "catch-Block der Patch-Engine nicht gefunden");
+        var block = vm.Substring(at, 200);
+        Assert.Contains("Loc.T(\"Play_Error_PatchFailed\")", block);
+        Assert.DoesNotContain("Play_Error_ExtractFailed", block);
+
+        var file = Path.Combine(root, "WowLauncher", "Localization", "lang", lang + ".json");
+        var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(file)).RootElement;
+        var text = doc.GetProperty("Play_Error_PatchFailed").GetString();
+        Assert.False(string.IsNullOrWhiteSpace(text));
+        Assert.NotEqual(doc.GetProperty("Play_Error_ExtractFailed").GetString(), text);
+    }
+
+    private static string FindRepoLauncherDir()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null && !Directory.Exists(Path.Combine(dir.FullName, "WowLauncher", "Localization")))
+            dir = dir.Parent;
+        return dir?.FullName ?? throw new DirectoryNotFoundException("launcher repo root");
+    }
+
     /// <summary>Der zweite wortlose Ausgang: entpackt, aber im Ergebnis liegt kein Spielprogramm.</summary>
     [Fact]
     public async Task EntpacktOhneSpielprogramm_SagtEbenfallsWarum()

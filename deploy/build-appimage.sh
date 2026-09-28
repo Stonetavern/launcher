@@ -35,7 +35,7 @@ APPIMGTOOL_VER="1.9.1"
 APPIMGTOOL_SHA="ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0"
 APPIMGTOOL_URL="https://github.com/AppImage/appimagetool/releases/download/${APPIMGTOOL_VER}/appimagetool-x86_64.AppImage"
 
-ROOT="(internal design notes, not published)"
+ROOT="${ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"  # the checkout this script lives in (worktrees too)
 RID="linux-x64"
 PUBLISH_DEFAULT="${ROOT}/WowLauncher/bin/Release/net10.0/${RID}/publish"
 PUBLISH="${PUBLISH:-$PUBLISH_DEFAULT}"

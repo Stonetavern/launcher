@@ -1,0 +1,163 @@
+<!--
+  Stonetavern Launcher — the first-start setup (2026-09-28): where the one Stonetavern folder lives.
+
+  Shown instead of the login only to a player with no sign of an earlier install
+  (Services/Platform/StonetavernLibrary.cs, LibraryClassifier). Same frame as the boot frame and the
+  login shell: 1000x640, the same gradient, the lantern at the same spot (centre 500,101), so the boot
+  frame hands over to this page without a jump. The ring is full: nothing is loading here, the player
+  decides.
+
+  Player text is English from the catalogue (VOICE.md): no dashes, no apostrophes.
+-->
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:loc="using:WowLauncher.Localization"
+        xmlns:vm="using:WowLauncher.ViewModels"
+        xmlns:controls="using:WowLauncher.Controls"
+        x:Class="WowLauncher.Views.SetupWindow"
+        x:DataType="vm:SetupViewModel"
+        Icon="avares://WowLauncher/Assets/stonetavern-logo.png"
+        Title="{loc:Tr App_WindowTitle}"
+        Width="1000" Height="640"
+        MinWidth="1000" MinHeight="640"
+        CanResize="False"
+        SizeToContent="Manual"
+        WindowStartupLocation="CenterScreen"
+        WindowDecorations="BorderOnly"
+        ExtendClientAreaToDecorationsHint="True"
+        Background="{StaticResource StoneBase}">
+
+    <Window.Styles>
+        <StyleInclude Source="avares://WowLauncher/Styles/LoginShell.axaml"/>
+        <Style Selector="TextBlock.st-note">
+            <Setter Property="FontFamily" Value="{StaticResource FontBody}"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="LineHeight" Value="18"/>
+            <Setter Property="TextWrapping" Value="Wrap"/>
+            <Setter Property="Foreground" Value="{StaticResource StatusWarn}"/>
+        </Style>
+        <Style Selector="TextBlock.st-note.blocks">
+            <Setter Property="Foreground" Value="{StaticResource LsErrorText}"/>
+        </Style>
+        <!-- Blocked is not "warming up" like the sign-in button: this folder cannot be used, so the
+             button must read as off. The login style keeps a disabled button at full opacity on
+             purpose (its spinner explains the wait); here nothing will change until the player picks
+             another folder, and a lit button that does nothing reads as broken. -->
+        <Style Selector="Button.ls-action.blocked:disabled">
+            <Setter Property="Opacity" Value="0.35"/>
+        </Style>
+    </Window.Styles>
+
+    <Border x:Name="Root" Classes="live warm kindled" Background="{StaticResource StoneBase}" ClipToBounds="True">
+        <Grid>
+            <Border IsHitTestVisible="False">
+                <Border.Background>
+                    <RadialGradientBrush Center="50%,12%" GradientOrigin="50%,12%" RadiusX="60%" RadiusY="75%">
+                        <GradientStop Offset="0.0" Color="#3C8A5523"/>
+                        <GradientStop Offset="0.45" Color="#14221C17"/>
+                        <GradientStop Offset="1.0" Color="#00100D0A"/>
+                    </RadialGradientBrush>
+                </Border.Background>
+            </Border>
+
+            <!-- The lantern exactly where the boot frame drew it (BootWindow.axaml, same parts). -->
+            <Panel x:Name="Sigil" Classes="ls-sigil" Width="108" Height="108"
+                   HorizontalAlignment="Center" VerticalAlignment="Top" Margin="0,47,0,0"
+                   IsHitTestVisible="False">
+                <Border Classes="ls-bloom" Width="108" Height="108" RenderTransformOrigin="50%,50%">
+                    <Border.RenderTransform>
+                        <ScaleTransform/>
+                    </Border.RenderTransform>
+                    <Border.Background>
+                        <RadialGradientBrush Center="50%,50%" GradientOrigin="50%,50%" RadiusX="50%" RadiusY="50%">
+                            <GradientStop Offset="0.0" Color="#5C8A5523"/>
+                            <GradientStop Offset="0.55" Color="#1E8A5523"/>
+                            <GradientStop Offset="1.0" Color="#008A5523"/>
+                        </RadialGradientBrush>
+                    </Border.Background>
+                </Border>
+                <controls:KindleRing Classes="ls-ring" Width="104" Height="104" Value="1"
+                                     Track="{StaticResource StoneBorder}" TrackOpacity="0.6"
+                                     Stroke="{StaticResource EmberBase}" StrokeThickness="1.5"
+                                     Spark="{StaticResource LsSpark}"/>
+                <Image Source="avares://WowLauncher/Assets/lantern.png"
+                       Width="44" Height="54"
+                       HorizontalAlignment="Center" VerticalAlignment="Center"
+                       RenderOptions.BitmapInterpolationMode="HighQuality"/>
+            </Panel>
+
+            <Border x:Name="Card" Classes="ls-card" Width="480"
+                    HorizontalAlignment="Center" VerticalAlignment="Top" Margin="0,177,0,0"
+                    Background="{StaticResource LsCardFill}"
+                    BorderBrush="{StaticResource StoneBorder}" BorderThickness="1"
+                    CornerRadius="{StaticResource RadiusMd}"
+                    Padding="28,24,28,22">
+                <StackPanel Spacing="0">
+                    <TextBlock Text="{loc:Tr Setup_Title}"
+                               FontFamily="{StaticResource FontDisplay}" FontSize="22"
+                               Foreground="{StaticResource ParchmentPrimary}"
+                               HorizontalAlignment="Center" TextAlignment="Center"/>
+                    <TextBlock Text="{loc:Tr Setup_Lead}"
+                               FontFamily="{StaticResource FontBody}" FontSize="14" LineHeight="20"
+                               Foreground="{StaticResource ParchmentSecondary}"
+                               TextWrapping="Wrap" TextAlignment="Center" Margin="0,8,0,20"/>
+
+                    <TextBlock Classes="ls-fieldlabel" Text="{loc:Tr Setup_FolderLabel}"/>
+                    <Grid ColumnDefinitions="*,Auto">
+                        <TextBox x:Name="RootBox" Classes="ls-field" Grid.Column="0"
+                                 Text="{Binding Root}" IsReadOnly="{Binding IsBusy}"
+                                 FontFamily="{StaticResource FontMono}" FontSize="12.5"
+                                 AutomationProperties.Name="{loc:Tr Setup_FolderLabel}"
+                                 TabIndex="0"/>
+                        <Button Classes="ls-link" Grid.Column="1" Margin="12,0,0,0"
+                                Content="{loc:Tr Setup_Change}" Command="{Binding ChangeFolderCommand}"
+                                VerticalAlignment="Center" TabIndex="1"/>
+                    </Grid>
+
+                    <!-- What the check found. Reserved height: the card does not jump between folders. -->
+                    <StackPanel MinHeight="44" Margin="0,8,0,6" Spacing="4">
+                        <TextBlock Classes="ls-mono" Text="{Binding FreeText}"/>
+                        <TextBlock Classes="st-note" Text="{loc:Tr Setup_AlreadyHere}"
+                                   Foreground="{StaticResource ParchmentSecondary}"
+                                   IsVisible="{Binding IsExistingLibrary}"/>
+                        <ItemsControl ItemsSource="{Binding Notes}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="vm:SetupNote">
+                                    <TextBlock Classes="st-note" Classes.blocks="{Binding Blocks}" Text="{Binding Text}"/>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        <TextBlock Classes="ls-error" Text="{Binding Error}" IsVisible="{Binding HasError}"/>
+                    </StackPanel>
+
+                    <Button x:Name="SetUpButton" Classes="ls-action" Classes.busy="{Binding IsBusy}" Classes.blocked="{Binding IsBlocked}"
+                            Command="{Binding SetUpCommand}" IsDefault="True" TabIndex="2">
+                        <Panel>
+                            <TextBlock Classes="ls-label" Text="{loc:Tr Setup_Action}"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            <Panel Classes="ls-spinnerslot" HorizontalAlignment="Center" VerticalAlignment="Center">
+                                <StackPanel Orientation="Horizontal" Spacing="10">
+                                    <Path Classes="ls-spinner" VerticalAlignment="Center">
+                                        <Path.RenderTransform>
+                                            <RotateTransform Angle="0"/>
+                                        </Path.RenderTransform>
+                                    </Path>
+                                    <TextBlock Text="{Binding BusyText}" VerticalAlignment="Center"
+                                               Foreground="{StaticResource ParchmentPrimary}"/>
+                                </StackPanel>
+                            </Panel>
+                        </Panel>
+                    </Button>
+
+                    <TextBlock Classes="st-note" Text="{loc:Tr Setup_RunAnywayHint}"
+                               Foreground="{StaticResource ParchmentSecondary}"
+                               TextAlignment="Center" Margin="0,10,0,0"
+                               IsVisible="{Binding ShowsRunAnywayHint}"/>
+                </StackPanel>
+            </Border>
+
+            <Border Height="40" VerticalAlignment="Top" Background="Transparent"
+                    PointerPressed="OnDragStripPressed"/>
+        </Grid>
+    </Border>
+</Window>

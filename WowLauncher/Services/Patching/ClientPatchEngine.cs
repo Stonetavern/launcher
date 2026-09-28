@@ -734,10 +734,15 @@ public sealed class ClientPatchEngine
                     progress?.Report(new PatchProgress(PatchState.PerFile, PatchRoute.PerFile, wirePath,
                         p.BytesDownloaded, p.TotalBytes, p.Status)));
 
+                // The replacement is a fresh 0644 file; without this JimsProxy lost its execute bit and
+                // Play failed with "Permission denied" (E2E 2026-09-24, Modern Linux 1.4.4).
+                var previousMode = WowLauncher.Services.Platform.UnixExecBit.ModeOf(localPath);
                 var ok = await DownloadOneWithLockRetryAsync(url, localPath, entry.Sha256, fileProgress, ct)
                     .ConfigureAwait(false);
                 if (ok)
                 {
+                    if (WowLauncher.Services.Platform.UnixExecBit.Restore(localPath, previousMode))
+                        _log.Information("patch: {Path} is executable again", wirePath);
                     Interlocked.Add(ref totalBytes, entry.Size);
                     Interlocked.Increment(ref changed);
                 }
@@ -790,7 +795,17 @@ public sealed class ClientPatchEngine
     /// under a protected prefix is reported, never deleted (Enhanced leftovers, misplaced addons).
     /// Bounded to files actually under <paramref name="root"/> — walking the whole tree once per
     /// PER_FILE pass, same cost class as the hash-scan <see cref="IClientVerifyService"/> already
-    /// does over the same tree.</summary>
+    /// does over the same tree.
+    ///
+    /// <para>🔴 <b>Production run 2026-09-24 (serial 34).</b> The GE-Proton prefix lives INSIDE the
+    /// install (<c>proton-compat/&lt;GE&gt;/pfx</c>, <see cref="GeProtonEnvironment.Build"/>), and Wine
+    /// puts <c>dosdevices/z:</c> there as a symlink to <c>/</c>. The old walk followed it into the
+    /// whole file system, hit <c>/root</c> with "Permission denied", and the exception (thrown lazily
+    /// inside the loop, outside the old try) failed the entire patch: every Linux player who had
+    /// started the modern client through GE-Proton once got "unpacking failed" instead of the 1.4.4
+    /// patch and could not play. Now: symlinks are never followed, unreadable folders are skipped,
+    /// the launcher's own prefix folder is not part of the client, and a report can never fail a
+    /// patch - it is information, not a precondition.</para></summary>
     private void ReportForeignFiles(string root, ClientFileManifest manifest, List<PatchFinding> findings)
     {
         if (!Directory.Exists(root)) return;
@@ -798,19 +813,41 @@ public sealed class ClientPatchEngine
             manifest.Files.Select(f => ManifestPath.ToLocal(f.Path)),
             OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
 
-        IEnumerable<string> files;
-        try { files = Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories); }
-        catch (Exception ex) { _log.Debug(ex, "patch: could not walk {Root} for foreign files", root); return; }
-
-        foreach (var full in files)
+        try
         {
-            var rel = Path.GetRelativePath(root, full);
-            if (rel.StartsWith(".stonetavern", StringComparison.Ordinal)) continue;
-            if (known.Contains(rel)) continue;
-            if (IsProtectedPath(rel.Replace(Path.DirectorySeparatorChar, '/'), manifest.Protected)) continue;
+            foreach (var full in Directory.EnumerateFiles(root, "*", ForeignScanOptions))
+            {
+                var rel = Path.GetRelativePath(root, full);
+                if (IsLauncherOwned(rel)) continue;
+                if (known.Contains(rel)) continue;
+                if (IsProtectedPath(rel.Replace(Path.DirectorySeparatorChar, '/'), manifest.Protected)) continue;
 
-            findings.Add(new PatchFinding(PatchFinding.ForeignFile, rel));
+                findings.Add(new PatchFinding(PatchFinding.ForeignFile, rel));
+            }
         }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException)
+        {
+            _log.Warning(ex, "patch: could not finish the foreign file report under {Root} - the patch itself is not affected", root);
+        }
+    }
+
+    /// <summary>Never follow a symlink (Wine's <c>dosdevices/z:</c> points at <c>/</c>), skip what
+    /// cannot be read instead of throwing.</summary>
+    private static readonly EnumerationOptions ForeignScanOptions = new()
+    {
+        RecurseSubdirectories = true,
+        IgnoreInaccessible = true,
+        AttributesToSkip = FileAttributes.ReparsePoint,
+        ReturnSpecialDirectories = false,
+    };
+
+    /// <summary>Folders the launcher itself writes into the install: its patch state and the
+    /// GE-Proton prefix (<see cref="GeProtonEnvironment.Build"/>). Neither is part of the client.</summary>
+    internal static bool IsLauncherOwned(string relativePath)
+    {
+        var rel = relativePath.Replace(Path.DirectorySeparatorChar, '/');
+        return rel.StartsWith(".stonetavern", StringComparison.Ordinal)
+            || rel.StartsWith(GeProtonEnvironment.CompatFolderName + "/", StringComparison.Ordinal);
     }
 
     // ── PLAN helpers ────────────────────────────────────────────────────────────────────────────

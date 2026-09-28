@@ -85,8 +85,14 @@ public static class GeProtonLocator
             return null;
 
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        return string.IsNullOrEmpty(home) ? null : FindLatest(RunnersDirsFor(home));
+        return string.IsNullOrEmpty(home) ? null : FindLatest(AllRunnersDirsFor(Environment.GetEnvironmentVariable, home));
     }
+
+    /// <summary>Steam's two runner folders plus Stonetavern's own (<see cref="PinnedGeProton"/>,
+    /// shared with the 1.12 <c>START.sh</c>). Before 2026-09-23 only Steam's were searched, so a
+    /// player without Steam never got Proton for the modern client.</summary>
+    public static IReadOnlyList<string> AllRunnersDirsFor(Func<string, string?> env, string homeDir) =>
+        [.. RunnersDirsFor(homeDir), PinnedGeProton.RunnersDir(env, homeDir)];
 
     private static bool IsExecutable(string path)
     {
@@ -151,6 +157,10 @@ public static class GeProtonLocator
 /// </summary>
 public static class GeProtonEnvironment
 {
+    /// <summary>The folder inside the client install that holds the per-GE-Proton prefixes. The patch
+    /// engine skips it: it is the launcher's, not part of the client (ClientPatchEngine.IsLauncherOwned).</summary>
+    public const string CompatFolderName = "proton-compat";
+
     /// <summary>
     /// <paramref name="installRoot"/>: the bundle root (parallel to <see cref="UmuOptions.PrefixPath"/>'s
     /// use of the launcher's own data dir - GE-Proton's prefix instead lives NEXT TO the client, exactly
@@ -170,7 +180,7 @@ public static class GeProtonEnvironment
         ArgumentException.ThrowIfNullOrWhiteSpace(protonDirName);
         ArgumentException.ThrowIfNullOrWhiteSpace(steamCompatClientInstallPath);
 
-        var compatDataPath = Path.Combine(installRoot, "proton-compat", protonDirName);
+        var compatDataPath = Path.Combine(installRoot, CompatFolderName, protonDirName);
         return new Dictionary<string, string>
         {
             ["STEAM_COMPAT_CLIENT_INSTALL_PATH"] = steamCompatClientInstallPath,

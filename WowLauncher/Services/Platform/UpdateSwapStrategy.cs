@@ -574,6 +574,9 @@ public sealed class LinuxUpdateSwapStrategy : IUpdateSwapStrategy
     {
         var psi = new ProcessStartInfo(exe) { UseShellExecute = false };
         foreach (var a in args) psi.ArgumentList.Add(a);
+        // The swap script starts the new launcher; neither may inherit this process's open files
+        // (the old AppImage's mount handle, window buffers): see InheritedFds.
+        InheritedFds.KeepFromChildren();
         return Process.Start(psi) is not null;
     }
 }

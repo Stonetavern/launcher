@@ -82,29 +82,66 @@ public sealed class ProfileRealm
     [JsonPropertyName("manifestUrl")]
     public string ManifestUrl { get; set; } = "";
 
+    /// <summary>Every client this realm offers, when it offers more than the one it starts with (the
+    /// "Offer both clients" switch). Null = only <see cref="ClientKey"/>. Left out of the JSON when
+    /// null, so a profile without the switch looks exactly as before.
+    ///
+    /// <para>🔴 It has to travel: the config is rebuilt from the profile after every sync, so a field
+    /// the profile does not carry is not just missing on the other machine, it is wiped on THIS one
+    /// the next time the launcher syncs (found 2026-09-28: the switch undid itself after a restart).</para></summary>
+    [JsonPropertyName("clientKeys")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<string>? ClientKeys { get; set; }
+
     /// <summary>When the player added this realm, unix milliseconds. Zero for a realm written before
     /// this field existed; the merge then treats it as "older than anything", which is the safe
     /// reading for a realm nobody has touched since.</summary>
     [JsonPropertyName("addedAt")]
     public long AddedAt { get; set; }
 
+    /// <summary>When the realm was last changed, unix milliseconds; 0 = not since it was added. An older
+    /// launcher does not know the field and drops it, which reads as "not changed", the safe side.</summary>
+    [JsonPropertyName("updatedAt")]
+    public long UpdatedAt { get; set; }
+
+    /// <summary>The time of the last thing that happened to this realm: its change, else its creation.</summary>
+    [JsonIgnore]
+    public long LastTouched => System.Math.Max(UpdatedAt, AddedAt);
+
     public static ProfileRealm From(RealmEntry r) => new()
     {
         AddedAt = r.AddedAt,
+        UpdatedAt = r.UpdatedAt,
         Id = r.Id ?? "",
         Name = r.Name ?? "",
         RealmlistAddress = r.RealmlistAddress ?? "",
         ClientKey = r.ClientKey ?? "",
         ManifestUrl = r.ManifestUrl ?? "",
+        ClientKeys = CleanKeys(r.ClientKeys),
     };
 
+    /// <summary>Distinct, non-blank keys, or null when that leaves one or none: a single client is
+    /// what <see cref="ClientKey"/> already says.</summary>
+    internal static List<string>? CleanKeys(IEnumerable<string>? keys)
+    {
+        var list = (keys ?? []).Where(k => !string.IsNullOrWhiteSpace(k))
+                               .Distinct(System.StringComparer.Ordinal).ToList();
+        return list.Count > 1 ? list : null;
+    }
+
+    // 🔴 AddedAt and UpdatedAt travel back too. ToEntry used to drop AddedAt, so after one sync every
+    // realm read as "added at 0" and lost to any grave from the other machine: a realm deleted there,
+    // re-added here, and synced once, was buried again on the next sync (2026-09-28).
     public RealmEntry ToEntry() => new()
     {
+        AddedAt = AddedAt,
+        UpdatedAt = UpdatedAt,
         Id = Id,
         Name = Name,
         RealmlistAddress = RealmlistAddress,
         ClientKey = ClientKey,
         ManifestUrl = ManifestUrl,
+        ClientKeys = CleanKeys(ClientKeys),
         IsPreset = false,
     };
 
@@ -119,6 +156,7 @@ public sealed class ProfileRealm
             && !ManifestUrl.StartsWith("http://", System.StringComparison.OrdinalIgnoreCase)
             && !ManifestUrl.StartsWith("https://", System.StringComparison.OrdinalIgnoreCase))
             ManifestUrl = "";
+        ClientKeys = CleanKeys(ClientKeys);
         return true;
     }
 }
@@ -206,10 +244,15 @@ public static class ProfileMerge
         var byId = new Dictionary<string, ProfileRealm>(System.StringComparer.OrdinalIgnoreCase);
         foreach (var r in server?.Realms ?? [])
             if (r.IsUsable() && !Buried(r)) byId[r.Id] = r;
-        // Local wins on a collision: the player is sitting in front of THIS machine, and its copy is
-        // the one they can see and correct.
+        // On a collision the copy changed LAST wins; on a tie (neither side knows when, or both at the
+        // same moment) the local one, because the player is sitting in front of THIS machine. "Local
+        // always wins" undid every edit: the other machine still had the old copy and pushed it back.
         foreach (var r in local.Realms)
-            if (r.IsUsable() && !Buried(r)) byId[r.Id] = r;
+        {
+            if (!r.IsUsable() || Buried(r)) continue;
+            if (byId.TryGetValue(r.Id, out var server2) && server2.LastTouched > r.LastTouched) continue;
+            byId[r.Id] = r;
+        }
 
         // A grave whose realm is alive again has been answered and can go.
         foreach (var id in byId.Keys.ToList()) graves.Remove(id);
@@ -251,7 +294,9 @@ public static class ProfileMerge
         {
             if (!bs.TryGetValue(x.Id, out var y)) return false;
             if (x.Name != y.Name || x.RealmlistAddress != y.RealmlistAddress
-                || x.ClientKey != y.ClientKey || x.ManifestUrl != y.ManifestUrl) return false;
+                || x.ClientKey != y.ClientKey || x.ManifestUrl != y.ManifestUrl
+                || x.AddedAt != y.AddedAt || x.UpdatedAt != y.UpdatedAt
+                || !(x.ClientKeys ?? []).SequenceEqual(y.ClientKeys ?? [])) return false;
         }
         return true;
     }

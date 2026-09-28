@@ -22,6 +22,12 @@ public sealed class RealmEntry
     /// delete happened later.</summary>
     public long AddedAt { get; set; }
 
+    /// <summary>When the player last changed this realm (name, address, update source, client),
+    /// unix milliseconds. 0 = never changed since it was added. The profile sync keeps the newer copy
+    /// of a realm by this, instead of "this machine wins", which undid an edit on the next sync from
+    /// the other machine.</summary>
+    public long UpdatedAt { get; set; }
+
     /// <summary>Stable id, also the key for per-realm art (<c>hero-&lt;id&gt;.webp</c>).</summary>
     public string Id { get; set; } = "";
 
