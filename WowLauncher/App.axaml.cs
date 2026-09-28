@@ -343,7 +343,8 @@ public partial class App : Application
         // §12.1 A is decided: the player path signs in against the launcher service (the adapter is
         // registered in DI). The QA render harness (--screenshot) seeds the fake instead.
         var gateway = services.GetRequiredService<Startup.IAuthGateway>();
-        var vm = new LoginShellViewModel(pipeline, facts, gateway, cfg.LauncherShellAllowSkipSignIn);
+        var vm = new LoginShellViewModel(pipeline, facts, gateway, cfg.LauncherShellAllowSkipSignIn,
+                                         remembered: services.GetService<IUsernameMemory>());
         var tBeforeWindow = Startup.StartupClock.Elapsed;
         var login = new LoginShellWindow { DataContext = vm };
         // 🔴 The self-update health contract is answered at the FIRST FRAME of the login window, the

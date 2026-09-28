@@ -573,6 +573,7 @@ public sealed partial class ShellViewModel : ViewModelBase
         IsLoggedIn = false;
         IsFriendsOpen = false;  // do not leave the sign-in form standing open after a sign-out
         Armory.Clear(); // account scoped: signing out must not leave the previous roster on screen
+        Login.LoadRememberedUsername();
     }
 
     /// <summary>

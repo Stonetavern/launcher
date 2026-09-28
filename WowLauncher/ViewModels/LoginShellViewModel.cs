@@ -7,6 +7,7 @@ using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using WowLauncher.Localization;
+using WowLauncher.Services;
 using WowLauncher.Startup;
 
 namespace WowLauncher.ViewModels;
@@ -80,13 +81,18 @@ public sealed partial class LoginShellViewModel : ViewModelBase
     private CancellationTokenSource? _authCts;
 
     public LoginShellViewModel(InitPipeline pipeline, InitFacts facts, IAuthGateway auth,
-                               bool allowSkipSignIn = false, Action<Action>? post = null)
+                               bool allowSkipSignIn = false, Action<Action>? post = null,
+                               IUsernameMemory? remembered = null)
     {
         _pipeline = pipeline;
         _facts = facts;
         _auth = auth;
         _post = post ?? (a => Dispatcher.UIThread.Post(a));
         AllowSkipSignIn = allowSkipSignIn;
+        _remembered = remembered;
+        var rememberedName = remembered?.Load();
+        Username = rememberedName ?? "";
+        RememberUsername = rememberedName is not null;
 
         // Rows exist as skeletons from the first frame; step 3 fills them in place (no layout jump).
         foreach (var name in InitialRealmNames())
@@ -237,6 +243,12 @@ public sealed partial class LoginShellViewModel : ViewModelBase
 
     [ObservableProperty] private string _username = "";
 
+    /// <summary>The "Remember username" box. Unticked unless a name is already remembered. The QA
+    /// harness passes no memory, so screenshots never carry a real account name.</summary>
+    [ObservableProperty] private bool _rememberUsername;
+
+    private readonly IUsernameMemory? _remembered;
+
     [ObservableProperty] private string _password = "";
 
     /// <summary>Inline error under the password field. Null when there is none.</summary>
@@ -320,6 +332,9 @@ public sealed partial class LoginShellViewModel : ViewModelBase
         switch (result.Kind)
         {
             case AuthResultKind.Success:
+                // Only a name the server accepted is remembered, never a typo or a failed attempt.
+                if (RememberUsername) _remembered?.Save(user);
+                else _remembered?.Clear();
                 Error = null;
                 Phase = LoginPhase.Succeeded;   // the View plays the pulse, then calls BeginTransition
                 break;

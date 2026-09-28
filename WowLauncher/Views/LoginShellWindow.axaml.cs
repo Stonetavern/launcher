@@ -165,9 +165,11 @@ public partial class LoginShellWindow : Window
                 // First entry into Phase 1: the account field takes the focus so a player can type
                 // at once, before the pipeline is anywhere near done (§5.2: never blocks input).
                 // Only the first time: after a rejected attempt the focus goes to the password
-                // field (WantsPasswordFocus), and this must not steal it back.
+                // field (WantsPasswordFocus), and this must not steal it back. A remembered name is
+                // already filled in, so then the password is what is left to type.
                 _focusedOnce = true;
-                Dispatcher.UIThread.Post(() => this.FindControl<TextBox>("UsernameBox")?.Focus(),
+                var first = string.IsNullOrEmpty(_vm?.Username) ? "UsernameBox" : "PasswordBox";
+                Dispatcher.UIThread.Post(() => this.FindControl<TextBox>(first)?.Focus(),
                                          DispatcherPriority.Input);
                 break;
 

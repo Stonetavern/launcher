@@ -177,6 +177,13 @@
                                  IsReadOnly="{Binding FieldsReadOnly}"
                                  TabIndex="1"/>
 
+                        <CheckBox IsChecked="{Binding RememberUsername}"
+                                  IsEnabled="{Binding !FieldsReadOnly}"
+                                  Content="{loc:Tr Login_RememberUsername}"
+                                  AutomationProperties.Name="{loc:Tr Login_RememberUsername}"
+                                  Foreground="{StaticResource ParchmentSecondary}"
+                                  TabIndex="2" Margin="0,10,0,0"/>
+
                         <!-- Inline error under the affected field (§6). Reserved height so the card
                              never grows or shrinks when a message appears. -->
                         <Panel MinHeight="20" Margin="0,5,0,0">

@@ -252,6 +252,7 @@
   "Login_UseAccount": "Используй свою учётную запись Stonetavern",
   "Login_Username": "Имя пользователя",
   "Login_Password": "Пароль",
+  "Login_RememberUsername": "Запомнить имя пользователя",
   "Login_SignIn": "Войти",
   "Login_SigningIn": "Выполняется вход",
   "Login_Forgot": "Забыли пароль?",

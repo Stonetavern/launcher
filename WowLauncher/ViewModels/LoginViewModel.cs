@@ -36,10 +36,17 @@ public sealed partial class LoginViewModel : ViewModelBase
     /// ohne Konfiguration bauen; ohne sie führt der Link auf die ausgelieferte Standardadresse.</summary>
     private readonly IConfigService? _config;
 
-    public LoginViewModel(ILauncherAuthService auth, IConfigService? config = null)
+    /// <summary>Where "Remember username" keeps the name. Optional for the same reason as the config:
+    /// the test hosts build this view without it, and then nothing is remembered.</summary>
+    private readonly IUsernameMemory? _remembered;
+
+    public LoginViewModel(ILauncherAuthService auth, IConfigService? config = null,
+                          IUsernameMemory? remembered = null)
     {
         _auth = auth;
         _config = config;
+        _remembered = remembered;
+        LoadRememberedUsername();
         Register = new RegisterViewModel(auth);
         // Both VMs are process-lifetime singletons (the login VM is a DI singleton, Register lives as
         // long as it), so the subscription needs no teardown.
@@ -109,6 +116,19 @@ public sealed partial class LoginViewModel : ViewModelBase
 
     [ObservableProperty] private string _username = "";
 
+    /// <summary>The "Remember username" box. Unticked unless a name is already remembered.</summary>
+    [ObservableProperty] private bool _rememberUsername;
+
+    /// <summary>Pre-fill the remembered name, if any. Also called on sign-out: this view model is
+    /// built while the login shell may still be signing in, so a name that shell remembered can only
+    /// be picked up afterwards.</summary>
+    public void LoadRememberedUsername()
+    {
+        var name = _remembered?.Load();
+        Username = name ?? "";
+        RememberUsername = name is not null;
+    }
+
     // Bound to the password field. Transient-only: cleared after each attempt (below). Never logged.
     [ObservableProperty] private string _password = "";
 
@@ -138,7 +158,10 @@ public sealed partial class LoginViewModel : ViewModelBase
         Password = ""; // never keep the password around, whatever the result
         if (outcome.Ok)
         {
-            Username = "";
+            // Only a name the server accepted is remembered, never a typo or a failed attempt.
+            if (RememberUsername) _remembered?.Save(user);
+            else _remembered?.Clear();
+            Username = RememberUsername ? user : "";
             Error = null;
             SignedIn?.Invoke();
         }

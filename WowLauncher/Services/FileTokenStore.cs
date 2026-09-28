@@ -59,9 +59,7 @@ public sealed class FileTokenStore : ITokenStore
             var stored = File.ReadAllBytes(_path);
             if (stored.Length == 0) return null;
 
-            byte[] plain = OperatingSystem.IsWindows()
-                ? ProtectedData.Unprotect(stored, Entropy, DataProtectionScope.CurrentUser)
-                : Unseal(stored);
+            var plain = Unprotect(stored);
 
             var json = Encoding.UTF8.GetString(plain);
             return JsonSerializer.Deserialize(json, FriendsApiJsonContext.Default.LauncherSession);
@@ -87,9 +85,7 @@ public sealed class FileTokenStore : ITokenStore
             var json = JsonSerializer.Serialize(session, FriendsApiJsonContext.Default.LauncherSession);
             var plain = Encoding.UTF8.GetBytes(json);
 
-            byte[] toWrite = OperatingSystem.IsWindows()
-                ? ProtectedData.Protect(plain, Entropy, DataProtectionScope.CurrentUser)
-                : Seal(plain);
+            var toWrite = Protect(plain);
 
             File.WriteAllBytes(_path, toWrite);
             RestrictPermissions(_path);
@@ -108,9 +104,20 @@ public sealed class FileTokenStore : ITokenStore
         catch (Exception ex) { _log.Warning(ex, "Could not clear launcher session at {Path}", _path); }
     }
 
+    /// <summary>The at-rest sealing described above, shared with <see cref="FileUsernameMemory"/> so
+    /// the launcher has one policy for what it keeps about an account, not two.</summary>
+    internal static byte[] Protect(byte[] plain) => OperatingSystem.IsWindows()
+        ? ProtectedData.Protect(plain, Entropy, DataProtectionScope.CurrentUser)
+        : Seal(plain);
+
+    /// <summary>Throws when the blob is not ours, is from another machine or user, or was tampered with.</summary>
+    internal static byte[] Unprotect(byte[] stored) => OperatingSystem.IsWindows()
+        ? ProtectedData.Unprotect(stored, Entropy, DataProtectionScope.CurrentUser)
+        : Unseal(stored);
+
     /// <summary>Owner-only (read+write) on POSIX so the sealed blob is not world/group readable.
     /// No-op on Windows, where DPAPI already binds the ciphertext to the user.</summary>
-    private static void RestrictPermissions(string path)
+    internal static void RestrictPermissions(string path)
     {
         if (OperatingSystem.IsWindows()) return;
         try { File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite); }
